@@ -58,7 +58,9 @@
     .grid { grid-template-columns: 1fr; }
     .gallery { grid-template-columns: 1fr; }
     .support { grid-template-columns: 1fr; }
-    nav.links a.hide-sm { display: none; }
+    nav.links a:not(.btn) { display: none; }
+    nav.links .btn { padding: 9px 14px; font-size: 14px; }
+    .hero p.lead { font-size: 17px; }
   }
 </style>
 </head>
