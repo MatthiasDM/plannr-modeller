@@ -1,0 +1,29 @@
+[package]
+name = "plannr-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Plannr server: REST API, WebSocket viewport channel, MCP endpoint, SQLite persistence, static frontend"
+
+[[bin]]
+name = "plannr-server"
+path = "src/main.rs"
+
+[dependencies]
+plannr-core = { path = "../plannr-core" }
+plannr-plugin-construction = { path = "../../plugins/construction/engine" }
+plannr-plugin-electrical = { path = "../../plugins/electrical/engine" }
+plannr-plugin-framing = { path = "../../plugins/framing/engine" }
+axum = { version = "0.8", features = ["json", "query", "macros", "ws"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace", "compression-gzip"] }
+futures-util = "0.3"
+rusqlite = { version = "0.37", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true

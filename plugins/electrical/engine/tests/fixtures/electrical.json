@@ -1,0 +1,298 @@
+{
+ "address": "Example Street 1, 1000 Brussels",
+ "circuits": [
+  {
+   "breaker": 16,
+   "cableSection": 1.5,
+   "fixtureIDs": [
+    "2C49DE03-2D31-441A-A52F-6ADA6E0D4CAC",
+    "31066D6E-115D-4B0A-9BF2-CB450D8DD863",
+    "0C7EDD3E-9747-415F-897C-D3D9913D3A77",
+    "82FFCE7D-DD68-4512-AD4B-36884FE28FA1",
+    "9D3ED9B0-C40D-4DCB-ADC6-B7B573FC2E60",
+    "E6491667-392C-4039-9730-330E93350210",
+    "615BE547-8E54-480B-BB0A-F7ACB7D35ACA",
+    "11D76FDD-B872-4337-84B6-0D545413A35B",
+    "E347D29F-D09C-4ADA-BB13-AEE245F8CBF3",
+    "E9D40064-4444-4199-839A-F143ACD65CC7",
+    "3CE09727-B113-4C86-A849-38A27CE1DAA1"
+   ],
+   "id": "1307D0D7-A12E-4E1C-8D6F-42D94FD68AC2",
+   "name": "Lighting ground floor",
+   "note": "",
+   "rcd": "none",
+   "type": "lighting"
+  },
+  {
+   "breaker": 16,
+   "cableSection": 1.5,
+   "fixtureIDs": [
+    "824AD41D-AC67-4BA1-AA36-A96C74B75973",
+    "CCEEB992-1C38-45D2-954C-942510B5F648",
+    "C36BF8E8-C91B-4F60-86E8-BE61430BCB7D",
+    "874389F1-B39E-47DD-B64A-554B8CD2A41B",
+    "FE15E17D-E40F-4761-A685-7FFAE43ABA94",
+    "11517A3E-3A8E-4025-AC8D-09AB8D25BEA1",
+    "72BB2E68-C7F5-405C-AF19-26847BCFF83A",
+    "E346DCB1-56DA-471C-8CFC-D9772948BC57"
+   ],
+   "id": "7D19823E-A867-4FCE-9810-6D99D8596583",
+   "name": "Lighting living room",
+   "note": "",
+   "rcd": "none",
+   "type": "lighting"
+  },
+  {
+   "breaker": 16,
+   "cableSection": 1.5,
+   "fixtureIDs": [
+    "4F045F49-80ED-4A50-B8EB-2C49C31B9D37",
+    "CD215AF5-3D7E-497A-82B7-50093F347694",
+    "6F7721CD-AC33-4DA2-84F2-7D1C318AB392",
+    "E5763CFE-FFD8-4EF4-8EBB-19458D37E03D",
+    "3E9C4394-C391-4441-949E-FCC829809065",
+    "D1291C16-5C7A-4B84-BD72-F537D7AAECE9",
+    "A641CD74-0959-42CC-8639-53A8F920FF8B",
+    "04065061-0258-4D28-867D-AEC52D9200ED",
+    "0DE9E8EA-5B47-48AB-B65A-CD79A0EC4515",
+    "F08541F9-13AD-4F85-A96B-E700E8F24C35",
+    "41BA77B6-6070-4928-9467-ECD7859D5C4C",
+    "5103FEFB-81B7-41E9-9413-A5FA3BEAE6F5",
+    "44A7B43E-1294-4294-AEDC-13E62A0F81C5",
+    "931F2150-6623-49AD-B150-4ECFC09ECAF3",
+    "4E1D8DAB-8E15-41F8-9C63-5F1B52BC56BB",
+    "51C265E3-3EB1-459B-9182-073EC110D98E"
+   ],
+   "id": "D15B65DF-1D0A-48E5-A6B4-B2656E822708",
+   "name": "Lighting first floor",
+   "note": "",
+   "rcd": "none",
+   "type": "lighting"
+  },
+  {
+   "breaker": 16,
+   "cableSection": 1.5,
+   "fixtureIDs": [
+    "EE1AEB1A-B014-4EE7-BED1-490E79B8EA10",
+    "06431BB9-A1F5-4922-8521-774E088B71F9",
+    "78A8DC8B-9B86-4C90-9AE5-BA90A4EC7446",
+    "E4413379-3684-4BC5-9703-94885E547331",
+    "CB84A72F-BC36-4F81-BE2B-3C4604A8BAE7"
+   ],
+   "id": "2845A93E-CBE6-4FBB-8196-16BE3763ABBD",
+   "name": "Lighting garage and outside",
+   "note": "",
+   "rcd": "none",
+   "type": "lighting"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "B389973E-8D95-4FD5-A4FD-C25807CE5CA3",
+    "2A095760-253A-40DD-9423-47955C03FF8A",
+    "64E42055-82DD-4A1E-B6C8-6B5985CB952A",
+    "7BF1EAA0-6E1E-468B-B1EF-9E52110D8DA1",
+    "36750F42-4892-402D-BF91-256C4CBCC7AE"
+   ],
+   "id": "44692E5A-CBC8-451E-B64A-794CF3E60E81",
+   "name": "Kitchen sockets",
+   "note": "",
+   "rcd": "mA30",
+   "type": "kitchen"
+  },
+  {
+   "breaker": 16,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "E985C8B2-A0EB-4AC8-9213-F41F39263278"
+   ],
+   "id": "10A75103-351F-4585-ABA9-F3DB6B05E18F",
+   "name": "Dishwasher",
+   "note": "",
+   "rcd": "mA30",
+   "type": "dishwasher"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "175376D8-4B3D-4B98-BC1D-0B4E3F7C7117"
+   ],
+   "id": "6D07E56D-2D85-4658-9B24-D1F9204F8E58",
+   "name": "Oven",
+   "note": "",
+   "rcd": "mA30",
+   "type": "oven"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 4,
+   "fixtureIDs": [
+    "26C79D34-845E-43FF-B11A-35E1D9AE21CD"
+   ],
+   "id": "587068F0-B9E4-4851-AE95-E271ED4EC4B1",
+   "name": "Induction hob",
+   "note": "",
+   "poles": 4,
+   "rcd": "mA30",
+   "type": "hob"
+  },
+  {
+   "breaker": 16,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "23473201-BDAE-4BC0-B764-1C257E01F382"
+   ],
+   "id": "6F1EE60F-4DCD-4445-ACEE-B0BB3F9E2C06",
+   "name": "Washing machine",
+   "note": "",
+   "rcd": "mA30",
+   "type": "washingMachine"
+  },
+  {
+   "breaker": 16,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "94F95E38-ADD6-4DE6-A2BA-3CAF74D5F1D7"
+   ],
+   "id": "5BE17673-BF66-4361-BC76-7F74BD1E2572",
+   "name": "Tumble dryer",
+   "note": "",
+   "rcd": "mA30",
+   "type": "dryer"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "51124324-380A-4316-9FB8-9B0C02932091",
+    "933D8C6A-7FDC-4E32-B52A-4DDC5FB68013",
+    "723E1C70-CB9F-4C89-A188-E320B44A360C",
+    "7C281DD0-B0BD-405D-9FBA-A2969470CF29",
+    "E2836ADB-0909-4E84-9CA0-C9EF59093AD0"
+   ],
+   "id": "B34EBBF4-CB2B-4ED3-96A0-BEA6CBEB876E",
+   "name": "Sockets living room north",
+   "note": "",
+   "rcd": "mA30",
+   "type": "sockets"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "A3AACCEB-155B-4EC0-AA2E-8EC3DAF9989F",
+    "C0081011-A71D-4A09-B3AB-B1B2BDFAC29F",
+    "B91A8EDD-5164-466B-AC8D-EF717C65CFA2",
+    "FE22CF7F-F7BE-4486-9F4B-EA91438A9685",
+    "AE28E727-73F6-4139-A34E-849EC584C1EA",
+    "183D4EF3-2664-484D-B712-47FB64AE241E",
+    "2D164562-66D5-4B81-97CA-F590EF75313F",
+    "B58261F4-58BE-42AC-AACB-DF37F246FB47"
+   ],
+   "id": "73996E68-F1BD-431C-A9B6-D2711FBECB16",
+   "name": "Sockets living room south, hall, utility room",
+   "note": "",
+   "rcd": "mA30",
+   "type": "sockets"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "1917C7E2-F500-49D5-A8DD-46EDE9E55F99",
+    "ACBCB14B-2228-4949-B5F1-69D6DEABC88C",
+    "7E539247-4A7D-4D6A-B806-11AFA1FEE384",
+    "F40041E9-35A6-4B00-BB7C-3B1A38FF501B"
+   ],
+   "id": "AC252557-7367-45E9-AE0E-834D4ACE75CB",
+   "name": "Sockets garage and garden",
+   "note": "",
+   "rcd": "mA30",
+   "type": "sockets"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "D7484BE2-B8FA-4259-B878-D687B0759157",
+    "84D3E855-9859-4897-B8BE-5B0C34665446",
+    "5E4C0491-D205-42BD-93D4-D3D977AE5199"
+   ],
+   "id": "ED035EA5-7660-4930-BD1C-8A13FF2ACA20",
+   "name": "Bathroom and shower room",
+   "note": "",
+   "rcd": "mA30",
+   "type": "bathroom"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "9F6F5712-1581-45AE-9B44-48DD7E8C955C",
+    "275B87F3-1FAD-4E0E-8D14-6788345824CE",
+    "BED2E2D6-6EE8-499B-85C8-69FA14F4B1D7",
+    "861A0C49-F783-4A38-B494-2FEADF4A5C33",
+    "1122D6A6-4A2C-4B81-9A20-896DD5C1268A",
+    "CEC00A40-D92B-485B-8740-0DDECD84EF38"
+   ],
+   "id": "BE09B763-BF6B-4098-A3C6-4C49FD5916E4",
+   "name": "Sockets bedroom 1 and landing",
+   "note": "",
+   "rcd": "mA30",
+   "type": "sockets"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "FADD3F32-BC98-4CCC-8B1D-A361CFE17177",
+    "4239D3FF-F6D1-413B-A2C1-BAD21AF50E8D",
+    "EC92EBED-20F5-4E08-82DE-3A033292F92A",
+    "4F740B20-2E9B-482F-A628-AE30B23D2A7B",
+    "9220C1FB-0FE1-457E-8BE4-406CD518CF2D",
+    "CAE96B85-CC45-4E78-AABF-2723977B74EF"
+   ],
+   "id": "D523781B-8CF8-416F-8740-AD893C6BE3D8",
+   "name": "Sockets bedrooms 2 and 3",
+   "note": "",
+   "rcd": "mA30",
+   "type": "sockets"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 2.5,
+   "fixtureIDs": [
+    "2A77564E-959A-44DD-AFE3-939632CB2EE3",
+    "8A401514-7317-4205-A1A6-4A5E2FAE9172",
+    "E1ADC1E1-8C3D-4698-99C4-FA335E152E45",
+    "E279E64B-9228-4054-8AE3-E722A55F0A1B"
+   ],
+   "id": "B9BF6C00-61C3-49E0-A846-BE40456D85DE",
+   "name": "Sockets study",
+   "note": "",
+   "rcd": "mA30",
+   "type": "sockets"
+  },
+  {
+   "breaker": 20,
+   "cableSection": 4,
+   "curve": "C",
+   "fixtureIDs": [],
+   "id": "0FA04B9E-E04B-4711-B5FE-EE06A20A181E",
+   "name": "PV inverter",
+   "note": "Example installation: 10 panels of 400 Wp (4 kWp) on the south roof slope, three-phase inverter.",
+   "poles": 4,
+   "rcd": "mA300",
+   "type": "pv"
+  }
+ ],
+ "defaultCableType": "XVB",
+ "differentialType": "A",
+ "earthing": "TT",
+ "hasMainDifferential": true,
+ "mainBreaker": 40,
+ "phases": 3,
+ "shortCircuitKA": 6
+}

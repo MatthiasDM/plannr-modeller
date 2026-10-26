@@ -1,0 +1,912 @@
+{
+ "cavity": {
+  "cavity": 0.06,
+  "enabled": true,
+  "innerLeaf": 0.09,
+  "outerLeaf": 0.09
+ },
+ "electrical": {
+  "circuits": [
+   {
+    "breaker": 16,
+    "cableSection": 1.5,
+    "fixtureIDs": [
+     "5CF656D8-FA8C-41A3-8BD9-2892B7145AB9",
+     "14C22C87-90D6-4D82-9BCA-5FC649639216"
+    ],
+    "id": "63889F21-31DE-4D6B-9E00-A43DA3ADA3DD",
+    "name": "Lighting ground floor",
+    "note": "",
+    "rcd": "none",
+    "type": "lighting"
+   },
+   {
+    "breaker": 16,
+    "cableSection": 1.5,
+    "fixtureIDs": [],
+    "id": "0F6E03EA-BE71-427A-8A58-FA8056CF7BDC",
+    "name": "Lighting first floor",
+    "note": "",
+    "rcd": "none",
+    "type": "lighting"
+   },
+   {
+    "breaker": 20,
+    "cableSection": 2.5,
+    "fixtureIDs": [
+     "1617A6EA-E796-45AC-8B46-FC2A6BFA8304"
+    ],
+    "id": "D5949B69-4BC7-4ECD-8A49-D670F2139CAC",
+    "name": "Kitchen sockets",
+    "note": "",
+    "rcd": "mA30",
+    "type": "kitchen"
+   },
+   {
+    "breaker": 20,
+    "cableSection": 2.5,
+    "fixtureIDs": [],
+    "id": "50D11EFC-870A-4D7D-98F1-C81FE9E72B68",
+    "name": "Oven",
+    "note": "",
+    "rcd": "mA30",
+    "type": "oven"
+   },
+   {
+    "breaker": 20,
+    "cableSection": 2.5,
+    "fixtureIDs": [],
+    "id": "FEB63F3A-2354-44E5-93B5-3778862DA1E2",
+    "name": "Sockets living room",
+    "note": "",
+    "rcd": "mA30",
+    "type": "sockets"
+   }
+  ],
+  "defaultCableType": "XVB",
+  "differentialType": "A",
+  "earthing": "TT",
+  "hasMainDifferential": true,
+  "mainBreaker": 40,
+  "phases": 3
+ },
+ "fixtures": [
+  {
+   "id": "C9AD084B-589E-4D07-BA1B-753C65AE5714",
+   "kind": "tapCold",
+   "level": 0,
+   "note": "",
+   "position": [
+    4.05,
+    0.55,
+    7.25
+   ],
+   "rotation": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "CFC0314D-4D53-45CB-81C4-B4337C5EB784"
+    }
+   }
+  },
+  {
+   "id": "6ED6C52D-8354-4938-B0E7-AE1BFE1FE0CE",
+   "kind": "tapHot",
+   "level": 0,
+   "note": "",
+   "position": [
+    4.05,
+    0.55,
+    7.25
+   ],
+   "rotation": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "CFC0314D-4D53-45CB-81C4-B4337C5EB784"
+    }
+   }
+  },
+  {
+   "id": "B1BCC2CE-5DF5-4478-BEB3-F74B1AD224CB",
+   "kind": "panel",
+   "level": 0,
+   "note": "Distribution board",
+   "position": [
+    0.15,
+    1.3,
+    0.4
+   ],
+   "rotation": 1.5708,
+   "wall": {
+    "roomEdge": {
+     "edge": 3,
+     "room": "0B7C0778-F7F3-41E5-B48B-FA77583B04A3"
+    }
+   }
+  },
+  {
+   "id": "5CF656D8-FA8C-41A3-8BD9-2892B7145AB9",
+   "kind": "ceilingLight",
+   "level": 0,
+   "note": "",
+   "position": [
+    1.6,
+    2.75,
+    4.4
+   ],
+   "rotation": 0
+  },
+  {
+   "id": "14C22C87-90D6-4D82-9BCA-5FC649639216",
+   "kind": "switchPlate",
+   "level": 0,
+   "note": "",
+   "position": [
+    2.25,
+    1.1,
+    7.1
+   ],
+   "rotation": -1.5708,
+   "wall": {
+    "roomEdge": {
+     "edge": 1,
+     "room": "C02CE24C-4562-41FE-9930-F3150FCB8C4E"
+    }
+   }
+  },
+  {
+   "id": "1617A6EA-E796-45AC-8B46-FC2A6BFA8304",
+   "kind": "outlet",
+   "level": 0,
+   "note": "double",
+   "position": [
+    3.35,
+    1.1,
+    7.25
+   ],
+   "rotation": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "CFC0314D-4D53-45CB-81C4-B4337C5EB784"
+    }
+   }
+  }
+ ],
+ "floorThickness": 0.06,
+ "floors": [
+  {
+   "height": 2.75,
+   "id": "CCFC0B5E-9ECE-4624-B6D5-0AF6F9B393DB",
+   "name": "Ground floor"
+  },
+  {
+   "height": 2.6,
+   "id": "B3C3F641-257C-4AAB-8FB7-F6AF83901D50",
+   "name": "First floor"
+  }
+ ],
+ "lot": {
+  "driveway": true,
+  "drivewayOffset": 0,
+  "drivewayWidth": 3.0,
+  "enabled": true,
+  "hedge": true,
+  "lawn": true,
+  "max": [
+   16,
+   14
+  ],
+  "min": [
+   -8,
+   -10
+  ],
+  "trees": true
+ },
+ "openings": [
+  {
+   "along": 0.95,
+   "height": 2.1,
+   "id": "E5C328FB-B40C-4B32-BA37-7B92BE06BE98",
+   "kind": "door",
+   "level": 0,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 0,
+     "room": "0B7C0778-F7F3-41E5-B48B-FA77583B04A3"
+    }
+   },
+   "width": 0.9
+  },
+  {
+   "along": 2.8,
+   "height": 1.0,
+   "id": "79AAEDA7-0B52-4AF5-8935-D86F153A7CAE",
+   "kind": "window",
+   "level": 0,
+   "sill": 1.1,
+   "wall": {
+    "roomEdge": {
+     "edge": 0,
+     "room": "0B7C0778-F7F3-41E5-B48B-FA77583B04A3"
+    }
+   },
+   "width": 0.8
+  },
+  {
+   "along": 2.9,
+   "height": 2.05,
+   "id": "A5490F3A-477A-47A2-A105-4B7BF7DEA6A4",
+   "kind": "door",
+   "level": 0,
+   "sill": 0.0,
+   "wall": {
+    "polyEdge": {
+     "edge": 5,
+     "room": "89F61EFB-C203-4569-A97A-459781556369"
+    }
+   },
+   "width": 0.8
+  },
+  {
+   "along": 1.0,
+   "height": 2.1,
+   "id": "514070EC-C68A-4D6F-B8C7-8BCEF4254941",
+   "kind": "door",
+   "level": 0,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "C02CE24C-4562-41FE-9930-F3150FCB8C4E"
+    }
+   },
+   "width": 0.9
+  },
+  {
+   "along": 1.3,
+   "height": 2.05,
+   "id": "2A33099F-F7C2-4C7B-A42D-010AED1EA0BA",
+   "kind": "door",
+   "level": 0,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 1,
+     "room": "C02CE24C-4562-41FE-9930-F3150FCB8C4E"
+    }
+   },
+   "width": 0.73
+  },
+  {
+   "along": 3.2,
+   "height": 2.05,
+   "id": "FAFAD38D-064E-4F84-AB2D-F3155D422B21",
+   "kind": "door",
+   "level": 0,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 1,
+     "room": "C02CE24C-4562-41FE-9930-F3150FCB8C4E"
+    }
+   },
+   "width": 0.83
+  },
+  {
+   "along": 0.5,
+   "height": 1.2,
+   "id": "14362652-0F3E-44B0-81B3-68B24645F973",
+   "kind": "window",
+   "level": 0,
+   "sill": 1.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 3,
+     "room": "C02CE24C-4562-41FE-9930-F3150FCB8C4E"
+    }
+   },
+   "width": 0.6
+  },
+  {
+   "along": 2.55,
+   "height": 1.1,
+   "id": "EC5AAF94-D714-41CD-8F8D-8CA7800C2104",
+   "kind": "window",
+   "level": 0,
+   "sill": 1.05,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "CFC0314D-4D53-45CB-81C4-B4337C5EB784"
+    }
+   },
+   "width": 0.9
+  },
+  {
+   "along": 2.5,
+   "height": 2.2,
+   "id": "72356D59-7B62-4FA7-B09E-04D71DEC5C0C",
+   "kind": "passage",
+   "level": 0,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 0,
+     "room": "CFC0314D-4D53-45CB-81C4-B4337C5EB784"
+    }
+   },
+   "width": 1.4
+  },
+  {
+   "along": 2.6,
+   "height": 2.2,
+   "id": "E10B7A04-743A-49B9-A87B-ABA095BF7218",
+   "kind": "door",
+   "level": 0,
+   "sill": 0.0,
+   "wall": {
+    "polyEdge": {
+     "edge": 0,
+     "room": "89F61EFB-C203-4569-A97A-459781556369"
+    }
+   },
+   "width": 2.4
+  },
+  {
+   "along": 4.9,
+   "height": 1.5,
+   "id": "2A329101-A379-4F6E-AA19-57BBE6B209F6",
+   "kind": "window",
+   "level": 0,
+   "sill": 0.7,
+   "wall": {
+    "polyEdge": {
+     "edge": 0,
+     "room": "89F61EFB-C203-4569-A97A-459781556369"
+    }
+   },
+   "width": 1.6
+  },
+  {
+   "along": 2.0,
+   "height": 1.5,
+   "id": "5DFFDAB4-84BD-43ED-BEDA-BBADCDF33856",
+   "kind": "window",
+   "level": 0,
+   "sill": 0.8,
+   "wall": {
+    "polyEdge": {
+     "edge": 1,
+     "room": "89F61EFB-C203-4569-A97A-459781556369"
+    }
+   },
+   "width": 1.2
+  },
+  {
+   "along": 5.6,
+   "height": 1.4,
+   "id": "BA7D763E-3594-4FB9-8DCB-EAAA7157F5C0",
+   "kind": "window",
+   "level": 0,
+   "sill": 0.9,
+   "wall": {
+    "polyEdge": {
+     "edge": 1,
+     "room": "89F61EFB-C203-4569-A97A-459781556369"
+    }
+   },
+   "width": 1.2
+  },
+  {
+   "along": 1.5,
+   "height": 1.5,
+   "id": "84E5FC2D-EFBC-4350-AA2E-BCD000E7FCF5",
+   "kind": "window",
+   "level": 0,
+   "sill": 0.7,
+   "wall": {
+    "polyEdge": {
+     "edge": 2,
+     "room": "89F61EFB-C203-4569-A97A-459781556369"
+    }
+   },
+   "width": 1.8
+  },
+  {
+   "along": 0.8,
+   "height": 2.2,
+   "id": "F1FE60C0-732B-497E-A613-F7B83F95D689",
+   "kind": "door",
+   "level": 0,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "92A9B855-4FBC-40E6-A6B8-A7504A25DDF6"
+    }
+   },
+   "width": 1.0
+  },
+  {
+   "along": 0.6,
+   "height": 1.2,
+   "id": "96B39291-62E0-4FC6-8BAD-D20C9149DBEC",
+   "kind": "window",
+   "level": 0,
+   "sill": 0.9,
+   "wall": {
+    "roomEdge": {
+     "edge": 1,
+     "room": "92A9B855-4FBC-40E6-A6B8-A7504A25DDF6"
+    }
+   },
+   "width": 0.5
+  },
+  {
+   "along": 2.47,
+   "height": 2.05,
+   "id": "8E129433-2577-40B6-9203-1BE724D5ABBD",
+   "kind": "door",
+   "level": 1,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 0,
+     "room": "0EA771B3-9602-4EDE-9E1E-A72326DB39A0"
+    }
+   },
+   "width": 0.73
+  },
+  {
+   "along": 4.3,
+   "height": 2.05,
+   "id": "C2C3CE43-A651-4BB8-875D-6D1CAD7A0C9E",
+   "kind": "door",
+   "level": 1,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 0,
+     "room": "0EA771B3-9602-4EDE-9E1E-A72326DB39A0"
+    }
+   },
+   "width": 0.73
+  },
+  {
+   "along": 1.42,
+   "height": 2.05,
+   "id": "4E5FF984-D859-45D2-9B4D-5679C010066C",
+   "kind": "door",
+   "level": 1,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 1,
+     "room": "0EA771B3-9602-4EDE-9E1E-A72326DB39A0"
+    }
+   },
+   "width": 0.73
+  },
+  {
+   "along": 2.28,
+   "height": 2.05,
+   "id": "4A042231-62DF-4587-AC0B-AF829F376061",
+   "kind": "door",
+   "level": 1,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 1,
+     "room": "0EA771B3-9602-4EDE-9E1E-A72326DB39A0"
+    }
+   },
+   "width": 0.73
+  },
+  {
+   "along": 1.0,
+   "height": 2.05,
+   "id": "612568A2-9E56-4194-93A8-3E8BEBFCBE0B",
+   "kind": "door",
+   "level": 1,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "0EA771B3-9602-4EDE-9E1E-A72326DB39A0"
+    }
+   },
+   "width": 0.73
+  },
+  {
+   "along": 3.6,
+   "height": 2.05,
+   "id": "2DDAF720-2479-4D65-B8BD-4183D8C5C7E2",
+   "kind": "door",
+   "level": 1,
+   "sill": 0.0,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "0EA771B3-9602-4EDE-9E1E-A72326DB39A0"
+    }
+   },
+   "width": 0.73
+  },
+  {
+   "along": 1.5,
+   "height": 1.0,
+   "id": "BFD1DAC2-9AF4-487E-8867-82964DD61A3D",
+   "kind": "window",
+   "level": 1,
+   "sill": 1.3,
+   "wall": {
+    "roomEdge": {
+     "edge": 0,
+     "room": "0B915827-1EE8-47D3-A2C1-F0400B7E3A29"
+    }
+   },
+   "width": 0.8
+  },
+  {
+   "along": 1.3,
+   "height": 1.3,
+   "id": "405ECE1C-9952-4FA1-BE20-234E155C73EA",
+   "kind": "window",
+   "level": 1,
+   "sill": 0.9,
+   "wall": {
+    "roomEdge": {
+     "edge": 0,
+     "room": "E3272F21-E961-4711-A376-776CDA8D6BBB"
+    }
+   },
+   "width": 1.2
+  },
+  {
+   "along": 2.0,
+   "height": 1.3,
+   "id": "9E2B63F3-D7C2-4289-871E-BF9F640EBFB0",
+   "kind": "window",
+   "level": 1,
+   "sill": 0.9,
+   "wall": {
+    "roomEdge": {
+     "edge": 0,
+     "room": "3D9DDFA6-720E-4CE0-ACFD-ED4C1592596C"
+    }
+   },
+   "width": 1.6
+  },
+  {
+   "along": 2.0,
+   "height": 1.3,
+   "id": "72FBFA9E-0906-4BD7-BA2B-AC282F2877BD",
+   "kind": "window",
+   "level": 1,
+   "sill": 0.9,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "B8EDE636-457A-4B4D-823D-67B77E8347D6"
+    }
+   },
+   "width": 1.6
+  },
+  {
+   "along": 1.6,
+   "height": 1.3,
+   "id": "A7A8613B-9662-450F-9963-CBB21704F0BD",
+   "kind": "window",
+   "level": 1,
+   "sill": 0.9,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "7DB3D667-1FB9-4913-9E09-7AA128551EC2"
+    }
+   },
+   "width": 1.4
+  },
+  {
+   "along": 1.4,
+   "height": 0.9,
+   "id": "2373911C-A475-4E89-B66D-21328E5BC226",
+   "kind": "window",
+   "level": 1,
+   "sill": 1.4,
+   "wall": {
+    "roomEdge": {
+     "edge": 2,
+     "room": "2330B02D-871F-4EC7-B1BB-DCFBEF894DFF"
+    }
+   },
+   "width": 0.6
+  }
+ ],
+ "polyRooms": [
+  {
+   "hasFloor": true,
+   "id": "89F61EFB-C203-4569-A97A-459781556369",
+   "level": 0,
+   "name": "Living Room",
+   "points": [
+    [
+     3.6,
+     0
+    ],
+    [
+     9.6,
+     0
+    ],
+    [
+     9.6,
+     7.4
+    ],
+    [
+     6.6,
+     7.4
+    ],
+    [
+     6.6,
+     4.0
+    ],
+    [
+     3.6,
+     4.0
+    ]
+   ]
+  }
+ ],
+ "roof": {
+  "enabled": true,
+  "overhang": 0.3,
+  "pitchHeight": 2.7,
+  "ridgeAlongX": true,
+  "style": "gable",
+  "thickness": 0.15
+ },
+ "roofVolumes": [
+  {
+   "id": "6B063627-16C4-45EA-9C93-4AC0319852C9",
+   "levels": 2,
+   "max": [
+    9.719999999999999,
+    7.5200000000000005
+   ],
+   "min": [
+    -0.12,
+    -0.12
+   ],
+   "overhang": 0.3,
+   "pitchHeight": 2.7,
+   "ridgeAlongX": true,
+   "style": "gable"
+  },
+  {
+   "id": "7910B3EC-1FBC-4429-B41B-EF472A925E95",
+   "levels": 1,
+   "max": [
+    2.3200000000000003,
+    8.719999999999999
+   ],
+   "min": [
+    0.48,
+    7.4
+   ],
+   "overhang": 0.15,
+   "pitchHeight": 0.0,
+   "ridgeAlongX": true,
+   "style": "flat"
+  }
+ ],
+ "rooms": [
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "0B7C0778-F7F3-41E5-B48B-FA77583B04A3",
+   "level": 0,
+   "name": "Utility room",
+   "origin": [
+    0,
+    0
+   ],
+   "size": [
+    3.6,
+    2.2
+   ]
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "C02CE24C-4562-41FE-9930-F3150FCB8C4E",
+   "level": 0,
+   "name": "Hall",
+   "origin": [
+    0,
+    2.2
+   ],
+   "size": [
+    2.4,
+    5.2
+   ]
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "B313A323-1F92-438F-A811-25E3192362D4",
+   "level": 0,
+   "name": "WC",
+   "origin": [
+    2.4,
+    2.2
+   ],
+   "size": [
+    1.2,
+    1.8
+   ]
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "CFC0314D-4D53-45CB-81C4-B4337C5EB784",
+   "level": 0,
+   "name": "Kitchen",
+   "origin": [
+    2.4,
+    4.0
+   ],
+   "size": [
+    4.2,
+    3.4
+   ]
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "92A9B855-4FBC-40E6-A6B8-A7504A25DDF6",
+   "level": 0,
+   "name": "Porch",
+   "origin": [
+    0.6,
+    7.4
+   ],
+   "size": [
+    1.6,
+    1.2
+   ],
+   "wallHeight": 2.4
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "0B915827-1EE8-47D3-A2C1-F0400B7E3A29",
+   "level": 1,
+   "name": "Bathroom",
+   "origin": [
+    0,
+    0
+   ],
+   "size": [
+    3.0,
+    2.2
+   ]
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "E3272F21-E961-4711-A376-776CDA8D6BBB",
+   "level": 1,
+   "name": "Study",
+   "origin": [
+    3.0,
+    0
+   ],
+   "size": [
+    2.6,
+    2.2
+   ]
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "0EA771B3-9602-4EDE-9E1E-A72326DB39A0",
+   "level": 1,
+   "name": "Landing",
+   "origin": [
+    0,
+    2.2
+   ],
+   "size": [
+    5.6,
+    2.7
+   ]
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "3D9DDFA6-720E-4CE0-ACFD-ED4C1592596C",
+   "level": 1,
+   "name": "Bedroom 1",
+   "origin": [
+    5.6,
+    0
+   ],
+   "size": [
+    4.0,
+    4.05
+   ]
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "B8EDE636-457A-4B4D-823D-67B77E8347D6",
+   "level": 1,
+   "name": "Bedroom 2",
+   "origin": [
+    5.6,
+    4.05
+   ],
+   "size": [
+    4.0,
+    3.35
+   ]
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "7DB3D667-1FB9-4913-9E09-7AA128551EC2",
+   "level": 1,
+   "name": "Bedroom 3",
+   "origin": [
+    2.4,
+    4.9
+   ],
+   "size": [
+    3.2,
+    2.5
+   ]
+  },
+  {
+   "hasCeiling": false,
+   "hasFloor": true,
+   "id": "2330B02D-871F-4EC7-B1BB-DCFBEF894DFF",
+   "level": 1,
+   "name": "Shower room",
+   "origin": [
+    0,
+    4.9
+   ],
+   "size": [
+    2.4,
+    2.5
+   ]
+  }
+ ],
+ "runs": [],
+ "savedViews": [
+  {
+   "id": "23A5D406-A21A-47D7-B639-C5CEB8AF4F53",
+   "name": "House",
+   "sliceEnabled": false,
+   "sliceHeight": 1.3,
+   "viewpoint": "iso"
+  }
+ ],
+ "storeyHeight": 2.75,
+ "trim": {
+  "brickGables": true,
+  "chimney": false,
+  "doorHandles": true,
+  "downpipes": true,
+  "fasciaAndGutters": true,
+  "gutterSize": 0.12,
+  "lintels": true,
+  "sillDepth": 0.05,
+  "windowSills": true
+ },
+ "wallThickness": 0.1,
+ "walls": []
+}

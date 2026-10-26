@@ -1,0 +1,14 @@
+# Rust
+target/
+# Local database and exports
+data/*.db
+data/*.db-*
+data/exports/
+# Frontend
+web/node_modules/
+web/dist/
+# OS / editors
+.DS_Store
+*.log
+.idea/
+.vscode/

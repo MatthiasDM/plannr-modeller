@@ -1,0 +1,18 @@
+[package]
+name = "plannr-plugin-framing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Plannr framing plugin: Medeek-style parametric wood framing (stud walls with openings, floor joists, roof trusses and rafters, foundations) with a material takeoff"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+plannr-core = { path = "../../../crates/plannr-core" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+plannr-plugin-construction = { path = "../../construction/engine" }
