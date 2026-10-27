@@ -8,7 +8,7 @@ import { zoomWindow } from './tools/arc';
 import type { Tool, ToolContext, Snap, SnapOptions, AxisLock } from './tools/base';
 import { AXIS, AXIS_COLOR, snapColor, snapLabel } from './tools/base';
 import { Tray } from './ui/tray';
-import { renderMenubar, renderToolbar, renderHud, renderToolOptions, renderWelcome } from './ui/chrome';
+import { renderMenubar, renderToolbar, renderHud, renderToolOptions, renderWelcome, layoutToolbar } from './ui/chrome';
 import { registerPlugin, getPlugins, onPlugin, type PluginHost, type CameraController } from './plugins';
 import { promptText, confirmDialog, installTooltips } from './ui/dialog';
 
@@ -76,17 +76,99 @@ export class App {
     window.addEventListener('resize', () => { const v = parseFloat(app.style.getPropertyValue('--tray-w')); if (v) apply(v); });
   }
 
+  // ---- tool palette: docked left or on top, resizable; the groups re-flow to the space ----------------
+  paletteDock: 'left' | 'top' = 'left';
+  private paletteSize: { left: number | null; top: number | null } = { left: null, top: null };
+  private installPalette(root: HTMLElement) {
+    const app = document.getElementById('app') ?? root, bar = this.els.toolbar;
+    const handle = root.querySelector<HTMLElement>('.toolbar-resizer')!, preview = root.querySelector<HTMLElement>('.dock-preview')!;
+    let saved: { dock?: string; left?: number | null; top?: number | null } = {};
+    try { saved = JSON.parse(localStorage.getItem('plannr.palette') ?? '{}') ?? {}; } catch { /* storage blocked */ }
+    const phone = matchMedia('(pointer: coarse)').matches && window.innerWidth < 980;
+    this.paletteDock = saved.dock === 'top' || saved.dock === 'left' ? saved.dock : phone ? 'top' : 'left';
+    this.paletteSize = { left: saved.left ?? null, top: saved.top ?? null };
+    this.applyPalette();
+    handle.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return; e.preventDefault(); handle.setPointerCapture(e.pointerId);
+      const top = this.paletteDock === 'top', r = bar.getBoundingClientRect();
+      const start = top ? e.clientY : e.clientX, startSize = top ? r.height : r.width;
+      handle.classList.add('dragging'); app.classList.add('resizing-palette');
+      const move = (ev: PointerEvent) => { this.paletteSize[this.paletteDock] = startSize + ((top ? ev.clientY : ev.clientX) - start); this.applyPalette(); };
+      const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); handle.classList.remove('dragging'); app.classList.remove('resizing-palette'); this.savePalette(); };
+      handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
+    });
+    handle.addEventListener('dblclick', () => this.resetPaletteSize());
+    // the grip: drag it to the top or the left edge, or tap it to switch
+    bar.addEventListener('pointerdown', e => {
+      const grip = (e.target as HTMLElement).closest<HTMLElement>('.toolbar-grip'); if (!grip || e.button !== 0) return;
+      e.preventDefault(); grip.setPointerCapture(e.pointerId);
+      const x0 = e.clientX, y0 = e.clientY; let moved = false; let target: 'left' | 'top' | null = null;
+      const zone = (ev: PointerEvent): 'left' | 'top' | null => {
+        const r = app.getBoundingClientRect(), menu = this.els.menubar.getBoundingClientRect().bottom;
+        if (ev.clientY < menu + 90 && ev.clientX > r.left + 150) return 'top';
+        if (ev.clientX < r.left + 150 && ev.clientY > menu) return 'left';
+        return null;
+      };
+      const move = (ev: PointerEvent) => {
+        if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;
+        moved = true; target = zone(ev); preview.className = `dock-preview${target ? ` show ${target}` : ''}`; app.classList.add('moving-palette');
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
+        preview.className = 'dock-preview'; app.classList.remove('moving-palette');
+        if (!moved) this.dockPalette(this.paletteDock === 'left' ? 'top' : 'left'); else if (target) this.dockPalette(target);
+      };
+      grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+    });
+    new ResizeObserver(() => layoutToolbar(bar)).observe(bar);
+    window.addEventListener('resize', () => this.applyPalette());
+  }
+  private applyPalette() {
+    const app = document.getElementById('app')!;
+    app.classList.toggle('dock-top', this.paletteDock === 'top');
+    const w = this.paletteSize.left, h = this.paletteSize.top;
+    if (w == null) app.style.removeProperty('--tool-w'); else app.style.setProperty('--tool-w', `${Math.round(Math.max(52, Math.min(w, 560, window.innerWidth * 0.5)))}px`);
+    if (h == null) app.style.removeProperty('--tool-h'); else app.style.setProperty('--tool-h', `${Math.round(Math.max(46, Math.min(h, 240, window.innerHeight * 0.4)))}px`);
+    layoutToolbar(this.els.toolbar);
+  }
+  private savePalette() { try { localStorage.setItem('plannr.palette', JSON.stringify({ dock: this.paletteDock, ...this.paletteSize })); } catch { /* storage blocked */ } }
+  dockPalette(d: 'left' | 'top') { this.paletteDock = d; this.applyPalette(); this.savePalette(); renderToolbar(this, this.els.toolbar); }
+  resetPaletteSize() { this.paletteSize[this.paletteDock] = null; this.applyPalette(); this.savePalette(); }
+
+  // ---- touch: a bar to cancel / finish / type while a tool is in the middle of something --------------
+  private touchUsed = matchMedia('(pointer: coarse)').matches;
+  updateTouchBar() {
+    const el = this.els['touch-bar']; if (!el) return;
+    const busy = !!this.tool.busy?.();
+    if (!this.touchUsed || !busy) { el.innerHTML = ''; el.classList.remove('show'); return; }
+    if (el.classList.contains('show') && el.dataset.tool === this.tool.id) return;
+    el.dataset.tool = this.tool.id; el.classList.add('show');
+    // Finish ends a chain (line) or closes a shape (polygon); the other tools finish on their next tap
+    const finish = ['line', 'polygon'].includes(this.tool.id);
+    el.innerHTML = `<button data-k="Escape">✕ Cancel</button>${finish ? '<button data-k="Enter">✓ Finish</button>' : ''}<button data-k="vcb">⌨ Type size</button>`;
+    el.querySelectorAll<HTMLElement>('button').forEach(b => b.onpointerdown = e => {
+      e.preventDefault(); e.stopPropagation();
+      if (b.dataset.k === 'vcb') { const v = this.els.statusbar.querySelector<HTMLInputElement>('.vcb input')!; v.focus(); v.select(); return; }
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: b.dataset.k!, bubbles: true }));
+      // the line tool ends its chain on Escape (keeping what was drawn)
+      if (b.dataset.k === 'Enter' && this.tool.busy?.()) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      setTimeout(() => this.updateTouchBar(), 30);
+    });
+  }
+
   setCameraController(c: CameraController | null) { if (this.camCtl && this.camCtl !== c) this.camCtl.release(); this.camCtl = c; }
 
   constructor(root: HTMLElement) {
     root.innerHTML = `<div class="menubar"></div><div class="toolbar"></div>
-      <div class="viewport"><div class="labels"></div><div class="view-hud"></div><div class="tool-options"></div><div class="lock-badge"></div><div class="toast"></div></div>
+      <div class="toolbar-resizer" title="Drag to resize the tools · double-click to reset"></div><div class="dock-preview"></div>
+      <div class="viewport"><div class="labels"></div><div class="view-hud"></div><div class="tool-options"></div><div class="lock-badge"></div><div class="toast"></div><div class="touch-bar"></div></div>
       <div class="tray"></div><div class="tray-resizer" title="Drag to resize · double-click to reset"></div>
       <div class="statusbar"><span class="conn" title="Server connection"></span><span class="hint"></span><div class="vcb"><label>Measurements</label><input type="text" spellcheck="false"></div></div><div class="welcome-host"></div>`;
-    for (const k of ['menubar', 'toolbar', 'viewport', 'labels', 'view-hud', 'tool-options', 'lock-badge', 'toast', 'tray', 'statusbar', 'welcome-host']) this.els[k] = root.querySelector(`.${k}`)!;
+    for (const k of ['menubar', 'toolbar', 'viewport', 'labels', 'view-hud', 'tool-options', 'lock-badge', 'toast', 'touch-bar', 'tray', 'statusbar', 'welcome-host']) this.els[k] = root.querySelector(`.${k}`)!;
     this.scene = new Viewport(this.els.viewport, this.els.labels);
     this.tray = new Tray(this, this.els.tray);
     this.installTrayResizer(root);
+    this.installPalette(root);
     this.ctx = this.makeContext();
     this.bindInput(); installTooltips();
     this.scene.start();
@@ -255,7 +337,7 @@ export class App {
     this.tool.deactivate?.(this.ctx); this.scene.clearOverlay(); this.scene.setSnapMarker(null); this.setLock(null);
     this.tool = t; t.activate?.(this.ctx);
     this.scene.renderer.domElement.style.cursor = t.cursor;
-    renderToolbar(this, this.els.toolbar); renderToolOptions(this, this.els['tool-options']); this.emit('tool', t.id); this.sendState();
+    renderToolbar(this, this.els.toolbar); renderToolOptions(this, this.els['tool-options']); this.emit('tool', t.id); this.sendState(); this.updateTouchBar();
   }
   setModifierTool(key: ModKey, toolId: string) {
     this.modifierTools[key] = toolId;
@@ -319,14 +401,16 @@ export class App {
     // candidate from locked axis: closest point on the axis line to the ray; everything else projects onto it
     const onLock = (p: THREE.Vector3) => { if (!lock || !from) return p; const d = AXIS[lock]; return from.clone().addScaledVector(d, p.clone().sub(from).dot(d)); };
     let best: Snap | null = null;
+    // a fingertip is far less precise than a mouse: snap from further away
+    const k = (ev as { pointerType?: string }).pointerType === 'touch' ? 2.4 : 1;
     if (!lock) {
-      const v = sc.nearestVertex(cursor.x, cursor.y, 10);
+      const v = sc.nearestVertex(cursor.x, cursor.y, 10 * k);
       if (v) best = { point: v.point, kind: 'vertex' };
-      if (!best) { const m = sc.nearestMidpoint(cursor.x, cursor.y, 9, isIgnored); if (m) best = { point: m.point, kind: 'midpoint', id: m.id, dir: m.dir }; }
-      if (!best) { const e = sc.nearestEdge(ev, cursor.x, cursor.y, 7, isIgnored); if (e) best = { point: e.point, kind: 'edge', id: e.id, dir: e.dir }; }
+      if (!best) { const m = sc.nearestMidpoint(cursor.x, cursor.y, 9 * k, isIgnored); if (m) best = { point: m.point, kind: 'midpoint', id: m.id, dir: m.dir }; }
+      if (!best) { const e = sc.nearestEdge(ev, cursor.x, cursor.y, 7 * k, isIgnored); if (e) best = { point: e.point, kind: 'edge', id: e.id, dir: e.dir }; }
     } else if (from) {
       // snap to vertices projected onto the locked axis
-      for (const v of sc.vertices) { const p = onLock(v); if (px(p) < 8 && Math.abs(v.clone().sub(p).length()) < sc.pixelSize(p) * 8) { best = { point: p, kind: 'axis', axis: lock }; break; } }
+      for (const v of sc.vertices) { const p = onLock(v); if (px(p) < 8 * k && Math.abs(v.clone().sub(p).length()) < sc.pixelSize(p) * 8 * k) { best = { point: p, kind: 'axis', axis: lock }; break; } }
     }
     if (!best && opts.faces !== false && !lock) {
       const pk = sc.pick(ev, { facesOnly: true });
@@ -341,7 +425,7 @@ export class App {
     let kind: Snap['kind'] = lock ? 'axis' : 'plane'; let axis: Snap['axis'] = lock ?? undefined;
     if (from && !lock) {
       // axis inference: near an axis line through `from`
-      for (const ax of ['x', 'y', 'z'] as const) { const q = from.clone().addScaledVector(AXIS[ax], p.clone().sub(from).dot(AXIS[ax])); if (px(q) < 6 && q.distanceTo(from) > 1e-3) { p = q; kind = 'axis'; axis = ax; break; } }
+      for (const ax of ['x', 'y', 'z'] as const) { const q = from.clone().addScaledVector(AXIS[ax], p.clone().sub(from).dot(AXIS[ax])); if (px(q) < 6 * k && q.distanceTo(from) > 1e-3) { p = q; kind = 'axis'; axis = ax; break; } }
     }
     if (kind === 'plane' && this.options.gridSnap) {
       const g = sc.cam.distance > 60 ? 0.1 : 0.01; p.set(Math.round(p.x / g) * g, Math.round(p.y / g) * g, Math.round(p.z / g) * g);
@@ -388,18 +472,40 @@ export class App {
     const canvas = this.scene.renderer.domElement; canvas.tabIndex = 0;
     let mid: { x: number; y: number; pan: boolean } | null = null;
     canvas.addEventListener('contextmenu', e => e.preventDefault());
-    // touch: one finger drives the tool; two fingers orbit (drag) and zoom (pinch); three fingers pan
+    // touch: one finger drives the tool, and a press-drag-release completes a two-click tool (rectangle,
+    // circle, line, push/pull, move…); two fingers orbit (drag) and zoom (pinch), three pan — and a gesture
+    // never cancels what the tool is in the middle of. The first finger is held back for a moment so the
+    // start of a two-finger gesture doesn't place a point.
     const touches = new Map<number, { x: number; y: number }>(); let gesture: { n: number; cx: number; cy: number; dist: number } | null = null;
+    let pending: { ev: PointerEvent; timer: ReturnType<typeof setTimeout> } | null = null;
+    let stroke: { x: number; y: number; started: boolean; moved: boolean } | null = null;
+    let ignoring = false; // fingers left over from a gesture
     canvas.style.touchAction = 'none';
     const centroid = () => { let cx = 0, cy = 0, n = 0; for (const t of touches.values()) { cx += t.x; cy += t.y; n++; } const pts = [...touches.values()]; const dist = pts.length >= 2 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : 0; return { n, cx: cx / n, cy: cy / n, dist }; };
+    const deliverDown = (ev: PointerEvent) => {
+      const before = !!this.tool.busy?.();
+      if (this.camCtl?.onPointerDown?.(ev)) { stroke = null; return; }
+      this.tool.onMove?.(ev, this.ctx); this.tool.onDown?.(ev, this.ctx);
+      stroke = { x: ev.clientX, y: ev.clientY, started: !before && !!this.tool.busy?.(), moved: false };
+      this.updateTouchBar();
+    };
+    const flush = () => { if (!pending) return; clearTimeout(pending.timer); const ev = pending.ev; pending = null; deliverDown(ev); };
     canvas.addEventListener('pointerdown', e => {
       canvas.focus(); this.pointerDown = true;
       if (e.pointerType === 'touch') {
+        this.touchUsed = true;
         touches.set(e.pointerId, { x: e.clientX, y: e.clientY }); try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
-        if (touches.size >= 2) { gesture = centroid(); if (touches.size === 2) this.tool.onKey?.(new KeyboardEvent('keydown', { key: 'Escape' }), this.ctx); return; }
+        if (touches.size >= 2) {
+          // navigation: a first finger still held back never reaches the tool; a point it placed a moment ago is taken back
+          if (pending) { clearTimeout(pending.timer); pending = null; }
+          else if (stroke?.started && !stroke.moved) this.tool.onKey?.(new KeyboardEvent('keydown', { key: 'Escape' }), this.ctx);
+          stroke = null; gesture = centroid(); this.scene.setSnapMarker(null); this.updateTouchBar(); return;
+        }
+        if (ignoring) return;
+        pending = { ev: e, timer: setTimeout(flush, 110) };
+        return;
       }
       if (this.camCtl?.onPointerDown?.(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic */ } e.preventDefault(); return; }
-      if (e.pointerType === 'touch') { this.tool.onMove?.(e, this.ctx); }
       if (e.button === 1 || e.button === 2) { mid = { x: e.clientX, y: e.clientY, pan: e.shiftKey }; canvas.setPointerCapture(e.pointerId); e.preventDefault(); return; }
       this.tool.onDown?.(e, this.ctx);
     });
@@ -412,6 +518,9 @@ export class App {
           else { this.scene.cam.orbit(g.cx - gesture.cx, g.cy - gesture.cy); if (gesture.dist > 0 && g.dist > 0) this.scene.cam.dolly(gesture.dist / g.dist); }
           gesture = g; return;
         }
+        if (ignoring) return;
+        if (pending) { if (Math.hypot(e.clientX - pending.ev.clientX, e.clientY - pending.ev.clientY) > 8) flush(); else return; }
+        if (stroke && Math.hypot(e.clientX - stroke.x, e.clientY - stroke.y) > 12) stroke.moved = true;
       }
       if (this.camCtl?.onPointerMove?.(e)) return;
       if (mid) { mid.pan || e.shiftKey ? this.scene.cam.pan(e.clientX - mid.x, e.clientY - mid.y, this.scene.height) : this.scene.cam.orbit(e.clientX - mid.x, e.clientY - mid.y); mid.x = e.clientX; mid.y = e.clientY; return; }
@@ -420,11 +529,28 @@ export class App {
       // every tool that asked for a snap gets a visible marker, also before its first click
       if (this.snapAsked && this.lastSnap) { const sn = this.lastSnap; this.scene.setSnapMarker(sn, snapColor(sn), snapLabel(sn)); } else this.scene.setSnapMarker(null);
     });
-    canvas.addEventListener('pointerleave', () => this.scene.setSnapMarker(null));
-    canvas.addEventListener('pointerup', e => { this.pointerDown = false;
-      if (e.pointerType === 'touch') { touches.delete(e.pointerId); if (gesture) { if (touches.size < 2) { gesture = null; this.sendState(); } return; } }
+    canvas.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch') this.scene.setSnapMarker(null); });
+    canvas.addEventListener('pointerup', e => {
+      if (e.pointerType === 'touch') {
+        touches.delete(e.pointerId);
+        if (gesture) { if (touches.size < 2) { gesture = null; this.sendState(); this.rememberViewSoon(); } if (touches.size > 0) ignoring = true; this.pointerDown = touches.size > 0; return; }
+        if (ignoring) { if (touches.size === 0) { ignoring = false; this.pointerDown = false; } return; }
+        flush(); // a quick tap
+        this.pointerDown = false;
+        if (this.camCtl?.onPointerUp?.(e)) { stroke = null; return; }
+        this.tool.onUp?.(e, this.ctx);
+        // press-drag-release finishes what the press started: the second click
+        if (stroke?.started && stroke.moved && this.tool.busy?.()) { this.tool.onMove?.(e, this.ctx); this.tool.onDown?.(e, this.ctx); this.tool.onUp?.(e, this.ctx); }
+        stroke = null; this.scene.setSnapMarker(null); this.updateTouchBar();
+        return;
+      }
+      this.pointerDown = false;
       if (this.camCtl?.onPointerUp?.(e)) return; if (mid && (e.button === 1 || e.button === 2)) { mid = null; this.sendState(); this.rememberViewSoon(); return; } this.tool.onUp?.(e, this.ctx); });
-    canvas.addEventListener('pointercancel', e => { this.pointerDown = false; touches.delete(e.pointerId); if (touches.size < 2) gesture = null; });
+    canvas.addEventListener('pointercancel', e => {
+      this.pointerDown = false; touches.delete(e.pointerId);
+      if (pending) { clearTimeout(pending.timer); pending = null; }
+      if (touches.size < 2) gesture = null; if (touches.size === 0) { ignoring = false; stroke = null; }
+    });
     // narrow screens: the tray becomes an overlay toggled from the menu bar
     const narrow = () => document.getElementById('app')!.classList.toggle('narrow', window.innerWidth < 980);
     window.addEventListener('resize', narrow); narrow();

@@ -29,6 +29,8 @@ export function renderMenubar(app: App, el: HTMLElement) {
     ['View', () => [
       ...(['grid', 'axes', 'edges', 'figure', 'shadows'] as const).map(k => ({ label: `${app.display[k] ? '✓ ' : '   '}${({ grid: 'Grid', axes: 'Axes', edges: 'Edges', figure: 'Scale figure', shadows: 'Shadows' })[k]}`, act: () => app.toggleDisplay(k) })),
       'sep', ...app.doc.layers.map(l => ({ label: `${l.visible ? '✓ ' : '   '}Tag: ${l.name}`, act: () => app.commitOps([{ op: 'update_layer', id: l.id, visible: !l.visible }], 'Tag visibility') })),
+      'sep', ...(['left', 'top'] as const).map(d => ({ label: `${app.paletteDock === d ? '✓ ' : '   '}Tools on the ${d}`, act: () => app.dockPalette(d) })),
+      { label: '   Reset tool palette size', act: () => app.resetPaletteSize() },
     ]],
     ['Camera', () => [
       { label: 'Zoom Extents', key: '⇧Z', act: () => app.zoomExtents() }, { label: 'Zoom Selection', act: () => app.zoomSelection(), disabled: !app.selection.size }, { label: 'Zoom Window', act: () => app.setTool('zoomwin') }, 'sep',
@@ -76,15 +78,35 @@ const holdName: Record<string, string> = { Control: 'Ctrl', Alt: '⌥', Shift: '
 
 export function renderToolbar(app: App, el: HTMLElement) {
   const groups: { ids: string[]; plugin?: { name: string; accent: string } }[] = [...TOOLBAR.map(ids => ({ ids })), ...getPlugins().flatMap(p => (p.toolbar ?? (p.tools?.length ? [p.tools.map(t => t.id)] : [])).map(ids => ({ ids, plugin: { name: p.name, accent: p.accent ?? '#8e44ad' } })))];
-  el.innerHTML = groups.map(g => `<div class="group ${g.plugin ? 'plugin' : ''}" ${g.plugin ? `style="--plugin-accent:${g.plugin.accent}" title="${esc(g.plugin.name)} plugin"` : ''}>${g.ids.map(id => {
+  const top = document.getElementById('app')?.classList.contains('dock-top');
+  el.innerHTML = `<button class="toolbar-grip" title="Drag to move the tools to the ${top ? 'left' : 'top'} · tap to switch">${top ? '⋮' : '⋯'}</button><div class="groups">` + groups.map(g => `<div class="group ${g.plugin ? 'plugin' : ''}" style="--n:${g.ids.length};${g.plugin ? `--plugin-accent:${g.plugin.accent}` : ''}" ${g.plugin ? `title="${esc(g.plugin.name)} plugin"` : ''}>${g.ids.map(id => {
     const t = app.tools.find(t => t.id === id);
     const hold = (Object.entries(app.modifierTools) as [string, string][]).filter(([, tid]) => tid === id).map(([k]) => holdName[k] ?? k);
     const key = t ? (t.shortcut ? (t.shortcut.trim() ? t.shortcut.toUpperCase() : 'Space') : '') : 'Shift+Z';
     const badge = t ? (t.shortcut ? (t.shortcut.trim() ? t.shortcut.toUpperCase() : '␣') : '') : '⇧Z';
     const title = `${g.plugin ? `${g.plugin.name} · ` : ''}${t ? t.label : 'Zoom Extents'}${key ? ` (${key})` : ''}${hold.length ? ` · hold ${hold.join(' or ')}` : ''}`;
     return `<button class="tool-btn ${app.tool.id === id ? 'active' : ''}" data-tool="${id}" title="${esc(title)}">${t?.icon ? `<span class="icon">${t.icon}</span>` : icon(id)}${badge ? `<kbd class="key">${esc(badge)}</kbd>` : ''}</button>`;
-  }).join('')}</div>`).join('');
+  }).join('')}</div>`).join('') + '</div>';
   el.querySelectorAll<HTMLElement>('[data-tool]').forEach(b => b.onclick = () => b.dataset.tool === 'zoomext' ? app.zoomExtents() : app.setTool(b.dataset.tool!));
+  layoutToolbar(el);
+}
+
+/** Fit every tool group to the palette: as many columns as the width allows (on the left), as many
+ *  rows as the height allows (on top); a group never mixes with another. */
+export function layoutToolbar(el: HTMLElement) {
+  const top = document.getElementById('app')?.classList.contains('dock-top');
+  const cs = getComputedStyle(el);
+  const btn = parseFloat(cs.getPropertyValue('--btn')) || 32, gap = 4;
+  const fit = (avail: number) => Math.max(1, Math.floor((avail + gap) / (btn + gap)));
+  if (top) {
+    const avail = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const rows = fit(avail);
+    el.querySelectorAll<HTMLElement>('.group').forEach(g => g.style.setProperty('--rows', String(Math.min(rows, parseInt(g.style.getPropertyValue('--n')) || 1))));
+  } else {
+    const avail = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const cols = fit(avail);
+    el.querySelectorAll<HTMLElement>('.group').forEach(g => g.style.setProperty('--cols', String(Math.min(cols, parseInt(g.style.getPropertyValue('--n')) || 1))));
+  }
 }
 
 export function renderHud(app: App, el: HTMLElement) {

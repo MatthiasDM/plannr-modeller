@@ -300,3 +300,46 @@ table.data tr:hover td { background: var(--surface-2); }
 #app.narrow .tray-resizer { display: none; }
 .check-row { display: flex; align-items: center; gap: 7px; margin: 10px 2px 0; font-size: 12px; color: var(--ink-2); cursor: default; }
 .check-row input { margin: 0; }
+
+/* ---- adjustable tool palette: left or top, resizable; groups re-flow ---------------- */
+:root { --tool-w: 88px; --tool-h: 48px; }
+.toolbar { --btn: 32px; position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 0; }
+.tool-btn { width: var(--btn); height: var(--btn); }
+.toolbar .groups { display: flex; flex-direction: column; min-width: 0; }
+.toolbar .group { display: grid; grid-template-columns: repeat(var(--cols, 2), var(--btn)); grid-auto-rows: var(--btn); justify-content: center; justify-items: center; gap: 4px; }
+.toolbar-grip { flex: none; align-self: center; border: 0; background: none; color: var(--ink-3); font-size: 15px; line-height: 1; letter-spacing: 1px; padding: 0 10px 6px; cursor: grab; touch-action: none; border-radius: 6px; }
+.toolbar-grip:hover { color: var(--ink); background: var(--surface-3); }
+#app.moving-palette, #app.moving-palette * { cursor: grabbing !important; user-select: none; }
+.toolbar-resizer { grid-area: tools; justify-self: end; align-self: stretch; width: 8px; margin-right: -4px; z-index: 6; cursor: col-resize; touch-action: none; position: relative; }
+.toolbar-resizer::after { content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background .12s; }
+.toolbar-resizer:hover::after, .toolbar-resizer.dragging::after { background: var(--accent); }
+#app.resizing-palette, #app.resizing-palette * { cursor: col-resize !important; user-select: none; }
+.dock-preview { display: none; position: fixed; z-index: 60; pointer-events: none; background: var(--accent-soft); border: 2px dashed var(--accent); border-radius: 8px; }
+.dock-preview.show.left { display: block; left: 4px; top: calc(var(--menu-h) + 4px); bottom: calc(var(--status-h) + 4px); width: 96px; }
+.dock-preview.show.top { display: block; left: 4px; right: 4px; top: calc(var(--menu-h) + 4px); height: 52px; }
+
+/* docked on top: one row of groups, each group as many rows high as fit */
+#app.dock-top { grid-template-rows: var(--menu-h) var(--tool-h) 1fr var(--status-h); grid-template-columns: 1fr var(--tray-w); grid-template-areas: "menu menu" "tools tools" "view tray" "status status"; }
+#app.dock-top.narrow { grid-template-columns: 1fr 0; }
+#app.dock-top .toolbar { flex-direction: row; align-items: center; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); padding: 4px 8px; scrollbar-gutter: auto; }
+#app.dock-top .toolbar .groups { flex-direction: row; align-items: center; }
+#app.dock-top .toolbar .group { grid-template-columns: none; grid-auto-flow: column; grid-template-rows: repeat(var(--rows, 1), var(--btn)); grid-auto-columns: var(--btn); padding: 0 8px 0 0; margin: 0 8px 0 0; border-bottom: 0; border-right: 1px solid var(--line); }
+#app.dock-top .toolbar .group:last-child { border-right: 0; }
+#app.dock-top .toolbar .group.plugin { border-left: 3px solid var(--plugin-accent); padding-left: 6px; margin-left: 0; }
+#app.dock-top .toolbar-grip { padding: 6px 8px 6px 2px; font-size: 17px; }
+#app.dock-top .toolbar-resizer { justify-self: stretch; align-self: end; width: auto; height: 8px; margin: 0 0 -4px; }
+#app.dock-top .toolbar-resizer::after { left: 0; right: 0; top: 3px; bottom: auto; width: auto; height: 2px; }
+#app.dock-top.resizing-palette, #app.dock-top.resizing-palette * { cursor: row-resize !important; }
+
+/* touch: bigger buttons, and a bar to cancel / finish / type while a tool is busy */
+@media (pointer: coarse) {
+  :root { --tool-w: 112px; --tool-h: 56px; }
+  .toolbar { --btn: 40px; }
+  .tool-btn .icon svg { width: 24px; height: 24px; }
+  .toolbar-resizer { width: 16px; margin-right: -8px; }
+  #app.dock-top .toolbar-resizer { height: 16px; margin-bottom: -8px; }
+}
+.touch-bar { position: absolute; left: 50%; bottom: 62px; transform: translateX(-50%); display: none; gap: 8px; z-index: 8; }
+.touch-bar.show { display: flex; }
+.touch-bar button { border: 1px solid var(--glass-border); background: var(--glass); backdrop-filter: blur(10px) saturate(1.4); border-radius: 999px; padding: 10px 16px; font-size: 14px; font-weight: 600; box-shadow: var(--shadow-md); touch-action: manipulation; color: var(--ink); white-space: nowrap; }
+.touch-bar button[data-k="Enter"] { background: var(--accent); color: #fff; border-color: transparent; }
