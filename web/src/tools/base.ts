@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Viewport } from '../scene';
 import type { Document, Op, OpResult } from '../model';
 
-export type SnapKind = 'vertex' | 'midpoint' | 'intersection' | 'edge' | 'face' | 'guide' | 'origin' | 'axis' | 'from' | 'parallel' | 'perpendicular' | 'square' | 'grid' | 'plane' | 'free';
+export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'intersection' | 'edge' | 'face' | 'guide' | 'origin' | 'axis' | 'from' | 'parallel' | 'perpendicular' | 'square' | 'grid' | 'plane' | 'free';
 export interface Snap {
   point: THREE.Vector3; kind: SnapKind; id?: string; normal?: THREE.Vector3; axis?: 'x' | 'y' | 'z';
   /** Direction of the edge, axis or inference line the point lies on. */
@@ -89,12 +89,12 @@ export function lineColor(a: THREE.Vector3, b: THREE.Vector3, snap?: Snap): numb
   return INK;
 }
 export const snapColor = (s: Snap): number => ({
-  vertex: 0x1e8e3e, midpoint: 0x18a0b8, intersection: INK, edge: 0xd93025, face: 0x1a73e8, guide: 0x18a0b8, origin: INK,
+  vertex: 0x1e8e3e, midpoint: 0x18a0b8, center: 0x18a0b8, intersection: INK, edge: 0xd93025, face: 0x1a73e8, guide: 0x18a0b8, origin: INK,
   axis: s.axis ? AXIS_COLOR[s.axis] : 0x888888, from: s.axis ? AXIS_COLOR[s.axis] : 0x888888, parallel: MAGENTA, perpendicular: MAGENTA, square: MAGENTA, grid: 0x6b7280, plane: 0x888888, free: 0x888888,
 })[s.kind];
 export const AXIS_NAME = { x: 'Red', y: 'Blue', z: 'Green' };
 export const snapLabel = (s: Snap): string => ({
-  vertex: 'Endpoint', midpoint: 'Midpoint', intersection: 'Intersection', edge: 'On Edge', face: 'On Face', guide: s.dir ? 'On Guide' : 'Guide Point', origin: 'Origin',
+  vertex: 'Endpoint', midpoint: 'Midpoint', center: 'Center', intersection: 'Intersection', edge: 'On Edge', face: 'On Face', guide: s.dir ? 'On Guide' : 'Guide Point', origin: 'Origin',
   axis: s.axis ? `On ${AXIS_NAME[s.axis]} Axis` : 'On Line', from: s.axis ? `From Point (${AXIS_NAME[s.axis].toLowerCase()})` : 'From Point', parallel: 'Parallel to Edge', perpendicular: 'Perpendicular to Edge', square: 'Square', grid: 'On Grid', plane: '', free: '',
 })[s.kind];
 

@@ -183,7 +183,19 @@ impl Entity {
                 for p in f.outer.iter_mut() { *p = mat_apply(m, *p); }
                 for h in f.holes.iter_mut() { for p in h.iter_mut() { *p = mat_apply(m, *p); } }
             }
-            Entity::Edge(e) => { e.a = mat_apply(m, e.a); e.b = mat_apply(m, e.b); }
+            Entity::Edge(e) => {
+                let before = crate::geom::dist(e.a, e.b);
+                e.a = mat_apply(m, e.a); e.b = mat_apply(m, e.b);
+                // an arc segment carries its circle: move the centre with it (the radius follows a uniform scale)
+                if let Some(arc) = e.extra.get_mut("arc") {
+                    let p3 = |v: &serde_json::Value| -> Option<[f64; 3]> { let a = v.as_array()?; Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?]) };
+                    let (c, n, r) = (arc.get("center").and_then(p3), arc.get("normal").and_then(p3), arc.get("radius").and_then(|r| r.as_f64()));
+                    if let (Some(c), Some(n), Some(r)) = (c, n, r) {
+                        let k = if before > 1e-12 { crate::geom::dist(e.a, e.b) / before } else { 1.0 };
+                        *arc = serde_json::json!({ "center": mat_apply(m, c), "normal": crate::geom::normalize(crate::geom::mat_apply_dir(m, n)), "radius": r * k });
+                    }
+                }
+            }
             Entity::Group(g) => g.transform = mat_mul(m, &g.transform),
             Entity::Guide(g) => { g.point = mat_apply(m, g.point); if let Some(d) = g.direction { g.direction = Some(crate::geom::mat_apply_dir(m, d)); } }
             Entity::Dimension(d) => { d.a = mat_apply(m, d.a); d.b = mat_apply(m, d.b); d.offset = crate::geom::mat_apply_dir(m, d.offset); }

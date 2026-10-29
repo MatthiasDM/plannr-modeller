@@ -1,6 +1,6 @@
 //! Turn a document into render-ready triangles, edge segments and annotations.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +42,10 @@ pub struct CompiledText { pub id: String, pub position: P3, pub text: String, #[
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledSection { pub id: String, pub origin: P3, pub normal: P3, pub active: bool }
+/// The centre of a circle, arc or regular polygon: the "Center" inference.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledCenter { pub id: String, pub point: P3, pub normal: P3, pub radius: f64 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +80,8 @@ pub struct CompiledScene {
     pub dimensions: Vec<CompiledDimension>,
     pub texts: Vec<CompiledText>,
     pub sections: Vec<CompiledSection>,
+    #[serde(default)]
+    pub centers: Vec<CompiledCenter>,
     pub bounds: Bounds,
     pub metrics: Metrics,
 }
@@ -100,6 +106,8 @@ struct Builder<'a> {
     /// `<instanceId>#` while expanding an instance, so its faces resolve to the instance.
     prefix: String,
     depth: usize,
+    /// Centres already emitted (quantised point + radius): an arc's segments share one.
+    centers: HashSet<[i64; 4]>,
 }
 
 impl<'a> Builder<'a> {
@@ -149,6 +157,24 @@ impl<'a> Builder<'a> {
         }
     }
 
+    fn center(&mut self, id: &str, point: P3, normal: P3, radius: f64) {
+        let q = |x: f64| (x * 1e5).round() as i64;
+        if !self.centers.insert([q(point[0]), q(point[1]), q(point[2]), q(radius)]) { return; }
+        let id = if self.prefix.is_empty() { id.to_string() } else { format!("{}{}", self.prefix, id) };
+        self.out.centers.push(CompiledCenter { id, point, normal, radius });
+    }
+
+    /// A face whose outer loop is a circle or regular polygon (5+ corners equidistant from their centroid) has a centre.
+    fn face_center(&mut self, id: &str, outer: &[P3], n: P3) {
+        if outer.len() < 5 { return; }
+        let mut c = [0.0; 3];
+        for p in outer { c = add(c, *p); }
+        let c = scale(c, 1.0 / outer.len() as f64);
+        let r = dist(outer[0], c);
+        if r < 1e-6 || outer.iter().any(|p| (dist(*p, c) - r).abs() > 1e-5 + r * 1e-6) { return; }
+        self.center(id, c, n, r);
+    }
+
     fn face(&mut self, f: &Face, m: &Mat4) {
         let mut outer: Vec<P3> = f.outer.iter().map(|p| mat_apply(m, *p)).collect();
         let mut holes: Vec<Vec<P3>> = f.holes.iter().map(|h| h.iter().map(|p| mat_apply(m, *p)).collect()).collect();
@@ -156,6 +182,7 @@ impl<'a> Builder<'a> {
         // a mirroring transform (negative determinant) flips the winding: undo it so the normal stays outward
         if mat_det3(m) < 0.0 { outer.reverse(); for h in holes.iter_mut() { h.reverse(); } }
         let n = normal(&outer);
+        self.face_center(&f.id, &outer, n);
         let pts: Vec<P3> = outer.iter().chain(holes.iter().flatten()).copied().collect();
         let idx = tessellate(&outer, &holes);
         let mut tris: Vec<[P3; 3]> = idx.chunks(3).filter(|c| c.len() == 3).map(|c| [pts[c[0] as usize], pts[c[1] as usize], pts[c[2] as usize]]).collect();
@@ -195,6 +222,15 @@ impl<'a> Builder<'a> {
                 self.out.metrics.edges += 1;
                 self.out.metrics.edge_length += dist(a, b);
                 self.push_segment(&ed.id, a, b);
+                // an arc segment (tagged by draw_arc) whose ends still lie on its circle gives the circle's centre
+                if let Some(arc) = ed.extra.get("arc") {
+                    let p3 = |v: &serde_json::Value| -> Option<P3> { let a = v.as_array()?; Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?]) };
+                    if let (Some(c), Some(n), Some(r)) = (arc.get("center").and_then(p3), arc.get("normal").and_then(p3), arc.get("radius").and_then(|r| r.as_f64())) {
+                        let (c, n) = (mat_apply(m, c), normalize(mat_apply_dir(m, n)));
+                        let (ra, rb) = (dist(a, c), dist(b, c));
+                        if r > 1e-6 && (ra - r).abs() < 1e-5 + r * 1e-6 && (rb - r).abs() < 1e-5 + r * 1e-6 { self.center(&ed.id, c, n, r); }
+                    }
+                }
             }
             Entity::Group(g) => {
                 self.out.metrics.groups += 1;
@@ -238,7 +274,7 @@ pub fn compile(doc: &Document, reg: &Registry, opts: &CompileOptions) -> Compile
             }
         });
     }
-    let mut b = Builder { doc, groups: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cut, bb: None, hidden, prefix: String::new(), depth: 0 };
+    let mut b = Builder { doc, groups: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cut, bb: None, hidden, prefix: String::new(), depth: 0, centers: HashSet::new() };
     b.out.metrics.definitions = doc.components.len();
     let m = mat_identity();
     for e in &doc.entities { b.entity(e, &m); }

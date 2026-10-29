@@ -424,7 +424,7 @@ export class App {
   snap(ev: { clientX: number; clientY: number }, opts: SnapOptions = {}): Snap { const r = this.snapInner(ev, opts); this.lastSnap = r; this.snapAsked = true; this.encourage(r); return r; }
   /** A point or edge the cursor rests on for a moment becomes an inference reference (SketchUp's "encouraging" an inference). */
   private encourage(s: Snap) {
-    const pointy = ['vertex', 'midpoint', 'intersection', 'origin'].includes(s.kind) || (s.kind === 'guide' && !s.dir);
+    const pointy = ['vertex', 'midpoint', 'center', 'intersection', 'origin'].includes(s.kind) || (s.kind === 'guide' && !s.dir);
     const edgy = (s.kind === 'edge' || s.kind === 'midpoint') && !!s.dir && !!s.id;
     if (!pointy && !edgy) { this.dwell = null; return; }
     const now = performance.now();
@@ -478,6 +478,7 @@ export class App {
     const v = sc.nearestVertex(cursor.x, cursor.y, 10 * k); if (v) best = { point: v.point, kind: 'vertex' };
     if (!best) for (const g of guides) { if (g.direction || isIgnored(g.id)) continue; const p = V(g.point); if (px(p) < 9 * k) { best = { point: p, kind: 'guide', id: g.id }; break; } }
     if (!best) { const m = sc.nearestMidpoint(cursor.x, cursor.y, 9 * k, isIgnored); if (m) best = { point: m.point, kind: 'midpoint', id: m.id, dir: m.dir, origin: m.point }; }
+    if (!best) for (const c of sc.compiled?.centers ?? []) { if (isIgnored(c.id)) continue; const p = V(c.point); if (px(p) < 9 * k) { best = { point: p, kind: 'center', id: c.id, normal: V(c.normal) }; break; } }
     if (!best && px(new THREE.Vector3()) < 8 * k) best = { point: new THREE.Vector3(), kind: 'origin' };
     if (held) {
       // held on a line: its crossings with inference lines and edges, else what the cursor rests on projected onto it

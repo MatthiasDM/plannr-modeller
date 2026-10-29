@@ -15,6 +15,8 @@ export interface CompiledScene {
   dimensions: { id: string; a: Vec3; b: Vec3; offset: Vec3; value: number }[];
   texts: { id: string; position: Vec3; text: string; anchor?: Vec3 | null }[];
   sections: { id: string; origin: Vec3; normal: Vec3; active: boolean }[];
+  /** Centres of circles, arcs and regular polygons (the "Center" inference). */
+  centers?: { id: string; point: Vec3; normal: Vec3; radius: number }[];
   bounds: { min: Vec3; max: Vec3 };
   metrics: { faces: number; edges: number; groups: number; area: number; areaByMaterial: Record<string, number>; edgeLength: number };
 }
