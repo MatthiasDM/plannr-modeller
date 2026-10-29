@@ -438,7 +438,7 @@ export class App {
   }
   private snapInner(ev: { clientX: number; clientY: number }, opts: SnapOptions = {}): Snap {
     const sc = this.scene; const rect = sc.container.getBoundingClientRect(); const cursor = new THREE.Vector2(ev.clientX - rect.left, ev.clientY - rect.top);
-    const ignore = opts.ignore ?? new Set<string>(); const isIgnored = (id: string) => ignore.has(id) || ignore.has(this.resolve(id));
+    const ignore = opts.ignore ?? new Set<string>(); const isIgnored = (id: string) => ignore.has(id) || ignore.has(this.resolve(id)) || !!opts.ignoreIf?.(id);
     const px = (p: THREE.Vector3) => sc.screenPoint(p).distanceTo(cursor);
     const from = opts.from; const sl = this.shiftLock;
     const plane = sl?.plane ?? opts.plane ?? GROUND; this.lastPlane = plane;
@@ -500,7 +500,8 @@ export class App {
     if (!best) {
       let bd = 8 * k;
       for (let i = 0; i < rays.length; i++) for (let j = i + 1; j < rays.length; j++) {
-        const X = lineLine(rays[i], rays[j]); if (!X || !notFrom(X)) continue; const d = px(X); if (d >= bd) continue;
+        const X = lineLine(rays[i], rays[j]); if (!X || !notFrom(X) || X.distanceTo(rays[i].p) < 1e-6 || X.distanceTo(rays[j].p) < 1e-6) continue; // a reference point itself is no intersection
+        const d = px(X); if (d >= bd) continue;
         const ax = rays[i].kind === 'axis' ? rays[i].axis : rays[j].kind === 'axis' ? rays[j].axis : undefined;
         bd = d; best = { point: X, kind: 'intersection', axis: ax, refs: [...refOf(rays[i]), ...refOf(rays[j])] };
       }
@@ -515,7 +516,7 @@ export class App {
     if (best) return sl?.plane ? { ...best, point: onPlane(best.point) } : best;
     // 4. inference lines
     let bd = 6 * k; let ray: { r: Ray; q: THREE.Vector3 } | null = null;
-    for (const r of rays) { const q = sc.linePoint(ev, r.p, r.d); if (r.kind !== 'guide' && !notFrom(q)) continue; const d = px(q); if (d < bd) { bd = d; ray = { r, q }; } }
+    for (const r of rays) { const q = sc.linePoint(ev, r.p, r.d); if (r.kind !== 'guide' && (!notFrom(q) || q.distanceTo(r.p) < 1e-6)) continue; const d = px(q); if (d < bd) { bd = d; ray = { r, q }; } } // the reference point itself is no inference
     if (ray) {
       const { r } = ray; let q = ray.q;
       if (from && this.options.gridSnap && (r.kind === 'axis' || r.kind === 'parallel' || r.kind === 'perpendicular')) { const g = step(); const L = Math.round(q.clone().sub(from).dot(r.d) / g) * g; if (Math.abs(L) > 1e-9) q = from.clone().addScaledVector(r.d, L); }

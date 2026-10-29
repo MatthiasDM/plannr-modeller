@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import type { Tool, ToolContext, Plane, Snap } from './base';
-import { parseNumbers, drawSnap, lineColor, planeFromSnap, GROUND, arr, INK, MAGENTA, SELECT, AXIS, AXIS_COLOR } from './base';
+import { parseNumbers, drawSnap, lineColor, planeFromSnap, isPointSnap, GROUND, arr, INK, MAGENTA, SELECT, AXIS, AXIS_COLOR } from './base';
 import { planeBasis } from './draw';
-import { fmtM, fmtDeg, findEntity, materialOf, type Vec3 } from '../model';
+import { fmtM, fmtDeg, findEntity, materialOf, walk, type Vec3 } from '../model';
 import { V, COLOR } from '../scene';
 import { getPlugins } from '../plugins';
 import type { Op } from '../model';
@@ -14,6 +14,9 @@ function moveOps(ctx: ToolContext, ids: string[], delta: THREE.Vector3, copy: bo
   return [copy ? { op: 'copy', ids, delta: d } : { op: 'move', ids, delta: d }];
 }
 const hoverPick = (ev: PointerEvent, ctx: ToolContext, facesOnly = false) => { const p = ctx.scene.pick(ev, { facesOnly }); ctx.scene.highlight(p ? new Set([ctx.resolve(p.id)]) : new Set(), true); return p; };
+/** Ignore geometry that exists only in the current preview (ids the document doesn't have): a tool's own
+ *  pulled face must not become its inference. */
+function previewOnly(ctx: ToolContext) { const ids = new Set<string>(); for (const { entity } of walk(ctx.doc().entities)) ids.add(entity.id); return (id: string) => !ids.has(id.split('#')[0]); }
 
 /** Select: click, Shift adds, Ctrl toggles, drag a box, double-click enters a group. */
 export class SelectTool implements Tool {
@@ -84,7 +87,7 @@ export class MoveTool implements Tool {
   deactivate(ctx: ToolContext) { this.ids = []; this.start = null; ctx.preview([]); ctx.scene.clearOverlay(); ctx.scene.highlight(new Set(), true); }
   private snapOpts(ctx: ToolContext) { return { plane: this.plane, from: this.start ?? undefined, lock: ctx.lock, ignore: new Set(this.ids), faces: true }; }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    if (!this.start) { hoverPick(ev, ctx); return; }
+    if (!this.start) { hoverPick(ev, ctx); ctx.snap(ev, { faces: true }); return; } // the grab point infers like any other
     const s = ctx.snap(ev, this.snapOpts(ctx)); this.cur = s.point;
     ctx.scene.clearOverlay(); drawSnap(ctx, s);
     const d = s.point.clone().sub(this.start);
@@ -223,18 +226,17 @@ class LegacyScaleTool implements Tool {
 /** Push/Pull: extrude a face along its normal. */
 export class PushPullTool implements Tool {
   id = 'pushpull'; label = 'Push/Pull'; hint = 'Click a face and move to extrude it; click again (or release after dragging) to finish. Type a distance.'; cursor = 'ns-resize'; shortcut = 'p';
-  private face: { id: string; point: THREE.Vector3; normal: THREE.Vector3 } | null = null; private dist = 0; private dragging = false; private lastFace: string | null = null;
+  private face: { id: string; point: THREE.Vector3; normal: THREE.Vector3 } | null = null; private dist = 0; private dragging = false; private lastFace: string | null = null; private ignore: (id: string) => boolean = () => false;
   busy() { return !!this.face; }
   activate(ctx: ToolContext) { this.face = null; ctx.setHint(this.hint); ctx.setVCB('', 'Distance'); }
   deactivate(ctx: ToolContext) { this.face = null; ctx.preview([]); ctx.scene.clearOverlay(); ctx.scene.highlight(new Set(), true); }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    if (!this.face) { const p = ctx.scene.pick(ev, { facesOnly: true }); ctx.scene.highlight(p ? new Set([p.id]) : new Set(), true); return; }
-    const p = ctx.scene.linePoint(ev, this.face.point, this.face.normal);
-    let d = p.clone().sub(this.face.point).dot(this.face.normal);
-    // snap the distance to vertices along the way (SketchUp infers heights from other geometry)
-    const px = ctx.scene.pixelSize(p) * 8;
-    for (const v of ctx.scene.vertices) { const dv = v.clone().sub(this.face.point).dot(this.face.normal); if (Math.abs(dv - d) < px && Math.abs(dv) > 1e-6) { d = dv; break; } }
-    if (ctx.options.gridSnap) d = Math.round(d * 100) / 100;
+    if (!this.face) { const p = ctx.scene.pick(ev, { facesOnly: true }); ctx.scene.highlight(p ? new Set([p.id]) : new Set(), true); ctx.snap(ev, { faces: true }); return; }
+    // a point under the cursor sets the distance (SketchUp takes heights from other geometry); else the cursor along the normal
+    const s = ctx.snap(ev, { faces: false, ignoreIf: this.ignore });
+    let d: number;
+    if (isPointSnap(s)) d = s.point.clone().sub(this.face.point).dot(this.face.normal);
+    else { d = ctx.scene.linePoint(ev, this.face.point, this.face.normal).clone().sub(this.face.point).dot(this.face.normal); if (ctx.options.gridSnap) d = Math.round(d * 100) / 100; }
     this.dist = d;
     ctx.scene.clearOverlay(); const tip = this.face.point.clone().addScaledVector(this.face.normal, d);
     ctx.scene.addLine([this.face.point, tip], MAGENTA, true); ctx.scene.addLabel(tip, fmtM(Math.abs(d))); ctx.setVCB(d.toFixed(3), 'Distance');
@@ -245,7 +247,7 @@ export class PushPullTool implements Tool {
     if (this.face) return this.finish(ctx, this.dist);
     const p = ctx.scene.pick(ev, { facesOnly: true }); if (!p) return;
     const n = p.back ? p.normal.clone().negate() : p.normal.clone();
-    this.face = { id: p.id, point: p.point.clone(), normal: n.normalize() }; this.dragging = true; this.dist = 0;
+    this.face = { id: p.id, point: p.point.clone(), normal: n.normalize() }; this.dragging = true; this.dist = 0; this.ignore = previewOnly(ctx);
     ctx.setHint('Move to set the distance; click or release to finish; type a distance for precision.');
   }
   onUp(ev: PointerEvent, ctx: ToolContext) { if (ev.button !== 0 || !this.dragging) return; this.dragging = false; if (this.face && Math.abs(this.dist) > 0.02) this.finish(ctx, this.dist); }
@@ -265,15 +267,17 @@ export class PushPullTool implements Tool {
 /** Offset: copy a face's outline inward or outward. */
 export class OffsetTool implements Tool {
   id = 'offset'; label = 'Offset'; hint = 'Click a face and move inward or outward; click to finish. Type a distance.'; cursor = 'crosshair'; shortcut = 'f';
-  private face: { id: string; plane: Plane; start: THREE.Vector3; center: THREE.Vector3 } | null = null; private dist = 0;
+  private face: { id: string; plane: Plane; start: THREE.Vector3; center: THREE.Vector3 } | null = null; private dist = 0; private ignore: (id: string) => boolean = () => false;
   busy() { return !!this.face; }
   activate(ctx: ToolContext) { this.face = null; ctx.setHint(this.hint); ctx.setVCB('', 'Distance'); }
   deactivate(ctx: ToolContext) { this.face = null; ctx.preview([]); ctx.scene.clearOverlay(); ctx.scene.highlight(new Set(), true); }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    if (!this.face) { const p = ctx.scene.pick(ev, { facesOnly: true }); ctx.scene.highlight(p ? new Set([p.id]) : new Set(), true); return; }
-    const p = ctx.scene.planePoint(ev, this.face.plane.origin, this.face.plane.normal); if (!p) return;
+    if (!this.face) { const p = ctx.scene.pick(ev, { facesOnly: true }); ctx.scene.highlight(p ? new Set([p.id]) : new Set(), true); ctx.snap(ev, { faces: true }); return; }
+    // a point under the cursor (projected onto the face's plane) sets the offset; else the cursor on the plane
+    const s = ctx.snap(ev, { plane: this.face.plane, faces: false, ignoreIf: this.ignore });
+    const n = this.face.plane.normal; const p = s.point.clone().sub(n.clone().multiplyScalar(s.point.clone().sub(this.face.plane.origin).dot(n)));
     let d = p.distanceTo(this.face.center) - this.face.start.distanceTo(this.face.center);
-    if (ctx.options.gridSnap) d = Math.round(d * 100) / 100; this.dist = d;
+    if (!isPointSnap(s) && ctx.options.gridSnap) d = Math.round(d * 100) / 100; this.dist = d;
     ctx.scene.clearOverlay(); ctx.scene.addLine([this.face.start, p], MAGENTA, true); ctx.scene.addLabel(p, fmtM(Math.abs(d))); ctx.setVCB(d.toFixed(3), 'Distance');
     ctx.preview(Math.abs(d) > 1e-4 ? [{ op: 'offset', face: this.face.id, distance: +d.toFixed(5) }] : []);
   }
@@ -282,7 +286,7 @@ export class OffsetTool implements Tool {
     if (this.face) return this.finish(ctx, this.dist);
     const p = ctx.scene.pick(ev, { facesOnly: true }); if (!p) return;
     const e = findEntity(ctx.doc(), p.id); const center = e && e.kind === 'face' ? e.outer.reduce((c, q) => c.add(V(q)), new THREE.Vector3()).multiplyScalar(1 / e.outer.length) : p.point.clone();
-    this.face = { id: p.id, plane: { origin: p.point.clone(), normal: p.normal.clone() }, start: p.point.clone(), center };
+    this.face = { id: p.id, plane: { origin: p.point.clone(), normal: p.normal.clone() }, start: p.point.clone(), center }; this.ignore = previewOnly(ctx);
   }
   private async finish(ctx: ToolContext, d: number) {
     const f = this.face; this.face = null; ctx.preview([]); ctx.scene.clearOverlay();

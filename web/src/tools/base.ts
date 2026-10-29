@@ -24,7 +24,11 @@ export interface SnapOptions {
   ignore?: Set<string>;
   /** Snap onto faces (the "on face" inference). */
   faces?: boolean;
+  /** Leave out entities by compiled id, e.g. geometry that only exists in the current preview. */
+  ignoreIf?: (id: string) => boolean;
 }
+/** A snap on a definite point (not a free point on a line, face or plane). */
+export const isPointSnap = (s: Snap) => ['vertex', 'midpoint', 'center', 'intersection', 'edge', 'guide', 'origin'].includes(s.kind);
 
 export interface ToolContext {
   scene: Viewport;
