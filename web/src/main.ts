@@ -1,12 +1,12 @@
 import './style.css';
 import * as THREE from 'three';
-import { Viewport, A, V, type ViewName } from './scene';
+import { Viewport, A, V, COLOR, type ViewName } from './scene';
 import { api, Live, type CompiledScene, type PluginInfo } from './api';
 import { findEntity, topLevelId, walk, type Document, type Op, type OpResult } from './model';
 import { BUILTIN_TOOLS, placeComponentTool } from './tools';
 import { zoomWindow } from './tools/arc';
-import type { Tool, ToolContext, Snap, SnapOptions, AxisLock } from './tools/base';
-import { AXIS, AXIS_COLOR, snapColor, snapLabel } from './tools/base';
+import type { Tool, ToolContext, Snap, SnapKind, SnapOptions, AxisLock, Plane } from './tools/base';
+import { AXIS, AXIS_COLOR, GROUND, MAGENTA, snapColor, snapLabel } from './tools/base';
 import { Tray } from './ui/tray';
 import { renderMenubar, renderToolbar, renderHud, renderToolOptions, renderWelcome, layoutToolbar } from './ui/chrome';
 import { registerPlugin, getPlugins, onPlugin, type PluginHost, type CameraController } from './plugins';
@@ -381,8 +381,7 @@ export class App {
     if (this.tools.includes(prev)) this.setTool(prev.id); else this.setTool('select');
   }
   setLock(l: AxisLock) {
-    this.lock = this.lock === l ? null : l; const b = this.els['lock-badge'];
-    b.classList.toggle('show', !!this.lock); if (this.lock) { b.textContent = `Locked to ${({ x: 'red', y: 'blue', z: 'green' })[this.lock]} axis`; b.style.background = `#${AXIS_COLOR[this.lock].toString(16).padStart(6, '0')}`; }
+    this.lock = this.lock === l ? null : l; this.shiftLock = null; this.updateLockBadge();
     this.tool.onLock?.(this.ctx);
   }
   private makeContext(): ToolContext {
@@ -412,46 +411,125 @@ export class App {
   }
   private emit(ev: string, d: any) { this.listeners[ev]?.forEach(h => { try { h(d); } catch (e) { console.error(e); } }); }
 
-  /** SketchUp-like inference: endpoints, midpoints, on-edge, on-face, axis lock and axis inference, grid. */
-  private lastSnap: Snap | null = null; private snapAsked = false;
-  snap(ev: { clientX: number; clientY: number }, opts: SnapOptions = {}): Snap { const r = this.snapInner(ev, opts); this.lastSnap = r; this.snapAsked = true; return r; }
+  /** SketchUp-like inference. Point snaps first (endpoint, guide point, midpoint, origin, intersections,
+   *  on edge), then inference lines (the axes and parallels/perpendiculars from the previous point, the
+   *  axes from points the cursor rested on, guide lines), then on-face, then the work plane with the
+   *  grid. The arrow keys lock an axis; Shift holds whatever inference is under the cursor. */
+  private lastSnap: Snap | null = null; private snapAsked = false; private lastPlane: Plane = GROUND;
+  /** Points and edges the cursor rested on or clicked lately: "from point", parallel and perpendicular inference starts there. */
+  private refPoints: THREE.Vector3[] = []; private refEdges: { dir: THREE.Vector3; id: string }[] = [];
+  private dwell: { point: THREE.Vector3; id?: string; since: number } | null = null;
+  /** The inference held with Shift: a line (direction through an origin) or a plane. */
+  private shiftLock: { kind: SnapKind; label: string; color: number; origin?: THREE.Vector3; dir?: THREE.Vector3; axis?: 'x' | 'y' | 'z'; plane?: Plane } | null = null;
+  snap(ev: { clientX: number; clientY: number }, opts: SnapOptions = {}): Snap { const r = this.snapInner(ev, opts); this.lastSnap = r; this.snapAsked = true; this.encourage(r); return r; }
+  /** A point or edge the cursor rests on for a moment becomes an inference reference (SketchUp's "encouraging" an inference). */
+  private encourage(s: Snap) {
+    const pointy = ['vertex', 'midpoint', 'intersection', 'origin'].includes(s.kind) || (s.kind === 'guide' && !s.dir);
+    const edgy = (s.kind === 'edge' || s.kind === 'midpoint') && !!s.dir && !!s.id;
+    if (!pointy && !edgy) { this.dwell = null; return; }
+    const now = performance.now();
+    if (this.dwell && this.dwell.id === s.id && this.dwell.point.distanceTo(s.point) < 1e-6) { if (now - this.dwell.since > 350) this.remember(s); return; }
+    this.dwell = { point: s.point.clone(), id: s.id, since: now };
+  }
+  /** Keep a clicked or rested-on snap as an inference reference (the newest four points, two edges). */
+  private remember(s: Snap) {
+    if (!this.refPoints.some(p => p.distanceTo(s.point) < 1e-6)) { this.refPoints.unshift(s.point.clone()); this.refPoints.splice(4); }
+    if (s.dir && s.id && (s.kind === 'edge' || s.kind === 'midpoint') && !this.refEdges.some(e => e.id === s.id)) { this.refEdges.unshift({ dir: s.dir.clone().normalize(), id: s.id }); this.refEdges.splice(2); }
+  }
   private snapInner(ev: { clientX: number; clientY: number }, opts: SnapOptions = {}): Snap {
-    const sc = this.scene; const cursor = new THREE.Vector2(ev.clientX - sc.container.getBoundingClientRect().left, ev.clientY - sc.container.getBoundingClientRect().top);
+    const sc = this.scene; const rect = sc.container.getBoundingClientRect(); const cursor = new THREE.Vector2(ev.clientX - rect.left, ev.clientY - rect.top);
     const ignore = opts.ignore ?? new Set<string>(); const isIgnored = (id: string) => ignore.has(id) || ignore.has(this.resolve(id));
     const px = (p: THREE.Vector3) => sc.screenPoint(p).distanceTo(cursor);
-    const lock = opts.lock ?? null; const from = opts.from;
-    // candidate from locked axis: closest point on the axis line to the ray; everything else projects onto it
-    const onLock = (p: THREE.Vector3) => { if (!lock || !from) return p; const d = AXIS[lock]; return from.clone().addScaledVector(d, p.clone().sub(from).dot(d)); };
-    let best: Snap | null = null;
+    const from = opts.from; const sl = this.shiftLock;
+    const plane = sl?.plane ?? opts.plane ?? GROUND; this.lastPlane = plane;
     // a fingertip is far less precise than a mouse: snap from further away
     const k = (ev as { pointerType?: string }).pointerType === 'touch' ? 2.4 : 1;
-    if (!lock) {
-      const v = sc.nearestVertex(cursor.x, cursor.y, 10 * k);
-      if (v) best = { point: v.point, kind: 'vertex' };
-      if (!best) { const m = sc.nearestMidpoint(cursor.x, cursor.y, 9 * k, isIgnored); if (m) best = { point: m.point, kind: 'midpoint', id: m.id, dir: m.dir }; }
+    const step = () => (sc.cam.distance > 60 ? 0.1 : 0.01);
+    type Ray = { p: THREE.Vector3; d: THREE.Vector3; kind: SnapKind; axis?: 'x' | 'y' | 'z'; color: number; ref?: THREE.Vector3; id?: string };
+    // the line the point is held on: an axis (arrow keys) or the inference Shift holds
+    const held: Ray | null = opts.lock && from ? { p: from, d: AXIS[opts.lock], kind: 'axis', axis: opts.lock, color: AXIS_COLOR[opts.lock], ref: from }
+      : sl?.dir && (sl.origin ?? from) ? { p: (sl.origin ?? from)!, d: sl.dir, kind: sl.kind, axis: sl.axis, color: sl.color, ref: sl.origin ?? from } : null;
+    const onHeld = (p: THREE.Vector3) => held!.p.clone().addScaledVector(held!.d, p.clone().sub(held!.p).dot(held!.d));
+    const onPlane = (p: THREE.Vector3) => p.clone().sub(plane.normal.clone().multiplyScalar(p.clone().sub(plane.origin).dot(plane.normal)));
+    const guides = sc.compiled?.guides ?? [];
+    const lineLine = (a: Ray, b: Ray): THREE.Vector3 | null => {
+      const w = a.p.clone().sub(b.p); const bb = a.d.dot(b.d); const den = 1 - bb * bb; if (den < 1e-6) return null;
+      const d1 = a.d.dot(w), e1 = b.d.dot(w); const s = (bb * e1 - d1) / den, t = (e1 - bb * d1) / den;
+      const P = a.p.clone().addScaledVector(a.d, s), Q = b.p.clone().addScaledVector(b.d, t);
+      return P.distanceTo(Q) < 1e-4 ? P.lerp(Q, 0.5) : null;
+    };
+    const axisLike = (d: THREE.Vector3) => Math.abs(d.x) > 0.9999 || Math.abs(d.y) > 0.9999 || Math.abs(d.z) > 0.9999;
+    // inference lines
+    const rays: Ray[] = [];
+    if (from && !held) {
+      for (const ax of ['x', 'y', 'z'] as const) rays.push({ p: from, d: AXIS[ax], kind: 'axis', axis: ax, color: AXIS_COLOR[ax], ref: from });
+      for (const e of this.refEdges) {
+        if (isIgnored(e.id)) continue;
+        if (!axisLike(e.dir)) rays.push({ p: from, d: e.dir, kind: 'parallel', color: MAGENTA, ref: from });
+        const pd = e.dir.clone().cross(plane.normal); if (pd.lengthSq() > 1e-6 && !axisLike(pd.normalize())) rays.push({ p: from, d: pd, kind: 'perpendicular', color: MAGENTA, ref: from });
+      }
+    }
+    for (const r of this.refPoints) { if (from && r.distanceTo(from) < 1e-6) continue; for (const ax of ['x', 'y', 'z'] as const) rays.push({ p: r, d: AXIS[ax], kind: 'from', axis: ax, color: AXIS_COLOR[ax], ref: r }); }
+    for (const g of guides) if (g.direction && !isIgnored(g.id)) rays.push({ p: V(g.point), d: V(g.direction).normalize(), kind: 'guide', color: COLOR.cyan, id: g.id });
+    const notFrom = (p: THREE.Vector3) => !from || p.distanceTo(from) > 1e-3;
+    const refOf = (r: Ray) => (r.ref ? [{ from: r.ref, color: r.color }] : []);
+    // 1. points: endpoint, guide point, midpoint, origin
+    let best: Snap | null = null;
+    const v = sc.nearestVertex(cursor.x, cursor.y, 10 * k); if (v) best = { point: v.point, kind: 'vertex' };
+    if (!best) for (const g of guides) { if (g.direction || isIgnored(g.id)) continue; const p = V(g.point); if (px(p) < 9 * k) { best = { point: p, kind: 'guide', id: g.id }; break; } }
+    if (!best) { const m = sc.nearestMidpoint(cursor.x, cursor.y, 9 * k, isIgnored); if (m) best = { point: m.point, kind: 'midpoint', id: m.id, dir: m.dir, origin: m.point }; }
+    if (!best && px(new THREE.Vector3()) < 8 * k) best = { point: new THREE.Vector3(), kind: 'origin' };
+    if (held) {
+      // held on a line: its crossings with inference lines and edges, else what the cursor rests on projected onto it
+      let bd = 8 * k; let hit: Snap | null = null;
+      for (const r of rays) { const X = lineLine(held, r); if (!X || !notFrom(X)) continue; const d = px(X); if (d < bd) { bd = d; hit = { point: X, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, refs: refOf(r) }; } }
+      const h = sc.lineEdgeHit(held.p, held.d, cursor.x, cursor.y, bd, isIgnored); if (h && notFrom(h.point)) hit = { point: h.point, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, id: h.id };
+      if (hit) return hit;
       if (!best) { const e = sc.nearestEdge(ev, cursor.x, cursor.y, 7 * k, isIgnored); if (e) best = { point: e.point, kind: 'edge', id: e.id, dir: e.dir }; }
-    } else if (from) {
-      // snap to vertices projected onto the locked axis
-      for (const v of sc.vertices) { const p = onLock(v); if (px(p) < 8 * k && Math.abs(v.clone().sub(p).length()) < sc.pixelSize(p) * 8 * k) { best = { point: p, kind: 'axis', axis: lock }; break; } }
+      if (!best && opts.faces !== false) { const pk = sc.pick(ev, { facesOnly: true }); if (pk && !isIgnored(pk.id)) best = { point: pk.point.clone(), kind: 'face', id: pk.id }; }
+      if (best) { const q = onHeld(best.point); if (notFrom(q)) return { point: q, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, refs: q.distanceTo(best.point) > 1e-6 ? [{ from: best.point, color: held.color }] : undefined }; }
+      // vertices whose projection onto the line is under the cursor
+      for (const vt of sc.vertices) { const q = onHeld(vt); if (px(q) < 8 * k && vt.distanceTo(q) < sc.pixelSize(q) * 8 * k && notFrom(q)) return { point: q, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, refs: [{ from: vt, color: held.color }] }; }
+      // free along the line, the length rounded to the grid step
+      let q = sc.linePoint(ev, held.p, held.d);
+      if (this.options.gridSnap && from) { const g = step(); const L = Math.round(q.clone().sub(from).dot(held.d) / g) * g; q = from.clone().addScaledVector(held.d, L); }
+      return { point: q, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p };
     }
-    if (!best && opts.faces !== false && !lock) {
+    // 2. crossings: inference lines with each other and with edges
+    if (!best) {
+      let bd = 8 * k;
+      for (let i = 0; i < rays.length; i++) for (let j = i + 1; j < rays.length; j++) {
+        const X = lineLine(rays[i], rays[j]); if (!X || !notFrom(X)) continue; const d = px(X); if (d >= bd) continue;
+        const ax = rays[i].kind === 'axis' ? rays[i].axis : rays[j].kind === 'axis' ? rays[j].axis : undefined;
+        bd = d; best = { point: X, kind: 'intersection', axis: ax, refs: [...refOf(rays[i]), ...refOf(rays[j])] };
+      }
+      for (const r of rays) {
+        if (px(sc.linePoint(ev, r.p, r.d)) > 6 * k) continue;
+        const h = sc.lineEdgeHit(r.p, r.d, cursor.x, cursor.y, bd, isIgnored); if (!h || !notFrom(h.point)) continue;
+        bd = h.d; best = { point: h.point, kind: 'intersection', id: h.id, axis: r.kind === 'axis' ? r.axis : undefined, refs: refOf(r) };
+      }
+    }
+    // 3. on edge
+    if (!best) { const e = sc.nearestEdge(ev, cursor.x, cursor.y, 7 * k, isIgnored); if (e) best = { point: e.point, kind: 'edge', id: e.id, dir: e.dir, origin: e.point }; }
+    if (best) return sl?.plane ? { ...best, point: onPlane(best.point) } : best;
+    // 4. inference lines
+    let bd = 6 * k; let ray: { r: Ray; q: THREE.Vector3 } | null = null;
+    for (const r of rays) { const q = sc.linePoint(ev, r.p, r.d); if (r.kind !== 'guide' && !notFrom(q)) continue; const d = px(q); if (d < bd) { bd = d; ray = { r, q }; } }
+    if (ray) {
+      const { r } = ray; let q = ray.q;
+      if (from && this.options.gridSnap && (r.kind === 'axis' || r.kind === 'parallel' || r.kind === 'perpendicular')) { const g = step(); const L = Math.round(q.clone().sub(from).dot(r.d) / g) * g; if (Math.abs(L) > 1e-9) q = from.clone().addScaledVector(r.d, L); }
+      return { point: sl?.plane ? onPlane(q) : q, kind: r.kind, axis: r.axis, dir: r.d, origin: r.p, id: r.id, refs: r.kind === 'axis' ? undefined : refOf(r) };
+    }
+    // 5. on face
+    if (opts.faces !== false && !sl?.plane) {
       const pk = sc.pick(ev, { facesOnly: true });
-      if (pk && !isIgnored(pk.id)) best = { point: pk.point.clone(), kind: 'face', id: pk.id, normal: pk.back ? pk.normal.clone().negate() : pk.normal.clone() };
+      if (pk && !isIgnored(pk.id)) return { point: pk.point.clone(), kind: 'face', id: pk.id, normal: pk.back ? pk.normal.clone().negate() : pk.normal.clone() };
     }
-    if (best) return best;
-    // free point: on the work plane (or along the locked axis)
-    let p: THREE.Vector3 | null = null;
-    if (lock && from) p = sc.linePoint(ev, from, AXIS[lock]);
-    else { const pl = opts.plane ?? { origin: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0) }; p = sc.planePoint(ev, pl.origin, pl.normal); }
-    if (!p) p = from?.clone() ?? new THREE.Vector3();
-    let kind: Snap['kind'] = lock ? 'axis' : 'plane'; let axis: Snap['axis'] = lock ?? undefined;
-    if (from && !lock) {
-      // axis inference: near an axis line through `from`
-      for (const ax of ['x', 'y', 'z'] as const) { const q = from.clone().addScaledVector(AXIS[ax], p.clone().sub(from).dot(AXIS[ax])); if (px(q) < 6 * k && q.distanceTo(from) > 1e-3) { p = q; kind = 'axis'; axis = ax; break; } }
-    }
-    if (kind === 'plane' && this.options.gridSnap) {
-      const g = sc.cam.distance > 60 ? 0.1 : 0.01; p.set(Math.round(p.x / g) * g, Math.round(p.y / g) * g, Math.round(p.z / g) * g);
-      // snap onto the visible 1 m grid lines (and their crossings) when within a few pixels
+    // 6. the work plane, rounded to the grid step and pulled onto the visible 1 m grid lines
+    let p = sc.planePoint(ev, plane.origin, plane.normal) ?? from?.clone() ?? new THREE.Vector3();
+    let kind: SnapKind = 'plane';
+    if (this.options.gridSnap) {
+      const g = step(); p.set(Math.round(p.x / g) * g, Math.round(p.y / g) * g, Math.round(p.z / g) * g);
       if (this.display.grid) {
         const G = 1; const gx = Math.round(p.x / G) * G, gz = Math.round(p.z / G) * G; let onGrid = false;
         if (px(new THREE.Vector3(gx, p.y, p.z)) < 5) { p.x = gx; onGrid = true; }
@@ -459,7 +537,24 @@ export class App {
         if (onGrid) kind = 'grid';
       }
     }
-    return { point: p, kind, axis };
+    return { point: p, kind };
+  }
+  /** Shift: hold the inference under the cursor — a direction (axis, edge, parallel, guide, from point) or a face's plane. */
+  private holdInference(): boolean {
+    const s = this.lastSnap; if (!s || !this.snapAsked || this.lock || this.shiftLock) return false;
+    if (['axis', 'from', 'parallel', 'perpendicular', 'edge', 'guide'].includes(s.kind) && s.dir) this.shiftLock = { kind: s.kind, axis: s.axis, dir: s.dir.clone().normalize(), origin: (s.origin ?? s.point).clone(), color: snapColor(s), label: `Holding: ${snapLabel(s)}` };
+    else if (s.kind === 'face' && s.normal) this.shiftLock = { kind: 'face', plane: { origin: s.point.clone(), normal: s.normal.clone() }, color: snapColor(s), label: 'Holding the face plane' };
+    else if (s.kind === 'plane' || s.kind === 'grid') this.shiftLock = { kind: 'plane', plane: { origin: this.lastPlane.origin.clone(), normal: this.lastPlane.normal.clone() }, color: 0x6b7280, label: 'Holding the work plane' };
+    else return false;
+    this.updateLockBadge(); this.tool.onLock?.(this.ctx); return true;
+  }
+  /** A clicked point is a reference for the next ones (the rectangle's first corner, a line's start…). */
+  private rememberClick() { if (this.snapAsked && this.lastSnap && this.lastSnap.kind !== 'free') this.remember(this.lastSnap); }
+  private releaseInference() { if (!this.shiftLock) return; this.shiftLock = null; this.updateLockBadge(); this.tool.onLock?.(this.ctx); }
+  private updateLockBadge() {
+    const b = this.els['lock-badge']; const sl = this.shiftLock;
+    const text = this.lock ? `Locked to ${({ x: 'red', y: 'blue', z: 'green' })[this.lock]} axis` : sl?.label ?? ''; const color = this.lock ? AXIS_COLOR[this.lock] : sl?.color ?? 0x888888;
+    b.classList.toggle('show', !!text); if (text) { b.textContent = text; b.style.background = `#${color.toString(16).padStart(6, '0')}`; }
   }
 
   // ---- MCP / live commands -----------------------------------------------------------------------
@@ -507,7 +602,7 @@ export class App {
     const deliverDown = (ev: PointerEvent) => {
       const before = !!this.tool.busy?.();
       if (this.camCtl?.onPointerDown?.(ev)) { stroke = null; return; }
-      this.tool.onMove?.(ev, this.ctx); this.tool.onDown?.(ev, this.ctx);
+      this.tool.onMove?.(ev, this.ctx); this.tool.onDown?.(ev, this.ctx); this.rememberClick();
       stroke = { x: ev.clientX, y: ev.clientY, started: !before && !!this.tool.busy?.(), moved: false };
       this.updateTouchBar();
     };
@@ -529,7 +624,7 @@ export class App {
       }
       if (this.camCtl?.onPointerDown?.(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic */ } e.preventDefault(); return; }
       if (e.button === 1 || e.button === 2) { mid = { x: e.clientX, y: e.clientY, pan: e.shiftKey }; canvas.setPointerCapture(e.pointerId); e.preventDefault(); return; }
-      this.tool.onDown?.(e, this.ctx);
+      this.tool.onDown?.(e, this.ctx); this.rememberClick();
     });
     canvas.addEventListener('pointermove', e => {
       if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
@@ -585,6 +680,7 @@ export class App {
       if (this.camCtl?.onKey?.(e, true)) { e.preventDefault(); return; }
       if ((e.key === 'Control' || e.key === 'Alt' || e.key === 'Shift') && !e.repeat) {
         const others = [e.ctrlKey, e.altKey, e.shiftKey, e.metaKey].filter(Boolean).length; // only a lone modifier starts a temporary tool
+        if (e.key === 'Shift' && others === 1 && this.holdInference()) { e.preventDefault(); return; }
         if (others === 1 && this.beginTempTool(e.key as ModKey)) { e.preventDefault(); return; }
         if (this.tool.onKey?.(e, this.ctx)) return; // e.g. Move toggles copy with Ctrl mid-operation
         return;
@@ -612,9 +708,10 @@ export class App {
     });
     window.addEventListener('keyup', e => {
       if (this.camCtl?.onKey?.(e, false)) return;
+      if (e.key === 'Shift') this.releaseInference();
       if (e.key === 'Control' || e.key === 'Alt' || e.key === 'Shift') { if (this.temp?.key === e.key) { this.endTempTool(e.key as ModKey); return; } this.tool.onKey?.(e, this.ctx); }
     });
-    window.addEventListener('blur', () => this.endTempTool());
+    window.addEventListener('blur', () => { this.endTempTool(); this.releaseInference(); });
   }
 
   // ---- ui -----------------------------------------------------------------------------------------------

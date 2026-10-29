@@ -76,9 +76,12 @@ Tests: `cargo test`. Type-check: `cd web && npx tsc --noEmit`.
 then you are back in the tool you had. Which key does what is set in the Shortcuts tray (Shift can be
 assigned too; by default it keeps its selection meaning).
 
-Inference as in SketchUp: green endpoint, cyan midpoint, red on-edge, blue on-face dots, axis-coloured
-lines, and the **arrow keys lock an axis** (→ red x, ← green z, ↑ blue y). Numbers typed while a tool is
-active go into the **Measurements** box.
+Inference as in SketchUp: green endpoint, cyan midpoint, red on-edge, blue on-face dots, black
+intersection crosses, axis-coloured lines, magenta parallel/perpendicular to an edge you rested the
+cursor on, dotted **from point** lines from points you rested on or clicked, guide points and lines,
+and the origin. The **arrow keys lock an axis** (→ red x, ← green z, ↑ blue y) and **Shift holds the
+inference under the cursor** (a direction, or a face's plane). Lengths along inferred lines snap to
+1 cm. Numbers typed while a tool is active go into the **Measurements** box.
 
 Trays: Entity Info, Tags (layers), Materials, Outliner, Scenes, Section Planes, Display, Model Info,
 History, Plugins.

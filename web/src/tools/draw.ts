@@ -13,7 +13,7 @@ export function planeBasis(normal: THREE.Vector3): { u: THREE.Vector3; w: THREE.
 
 /** Line (pencil): chained edges; closed coplanar loops become faces (done by the engine). */
 export class LineTool implements Tool {
-  id = 'line'; label = 'Line'; hint = 'Click the start of the line. Arrow keys lock an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; shortcut = 'l';
+  id = 'line'; label = 'Line'; hint = 'Click the start of the line. Arrow keys lock an axis (→ red, ← green, ↑ blue); hold Shift to keep the inference under the cursor.'; cursor = 'crosshair'; shortcut = 'l';
   private start: THREE.Vector3 | null = null; private first: THREE.Vector3 | null = null;
   private plane: Plane = GROUND; private cur: Snap | null = null;
   busy() { return !!this.start; }
@@ -59,11 +59,20 @@ export class RectangleTool implements Tool {
     const { u, w } = planeBasis(this.plane.normal); const d = b.clone().sub(a); const du = d.dot(u), dw = d.dot(w);
     return { pts: [a.clone(), a.clone().addScaledVector(u, du), a.clone().addScaledVector(u, du).addScaledVector(w, dw), a.clone().addScaledVector(w, dw)], du, dw, u, w };
   }
+  /** The corner on the plane; a free corner close to a square snaps to one (SketchUp's "Square" inference). */
+  private corner(ctx: ToolContext, s: Snap) {
+    const p = this.onPlane(s.point);
+    if (!this.first || !['plane', 'grid', 'face', 'from', 'intersection'].includes(s.kind)) return p;
+    const { u, w } = planeBasis(this.plane.normal); const d = p.clone().sub(this.first); const du = d.dot(u), dw = d.dot(w); const tol = ctx.scene.pixelSize(p) * 6;
+    if (Math.abs(du) < tol || Math.abs(Math.abs(du) - Math.abs(dw)) > tol) return p;
+    const L = (Math.abs(du) + Math.abs(dw)) / 2; const q = this.first.clone().addScaledVector(u, Math.sign(du) * L).addScaledVector(w, Math.sign(dw) * L);
+    s.point.copy(q); s.kind = 'square'; s.refs = undefined; return q; // the app's marker shows the snap it was handed
+  }
   onMove(ev: PointerEvent, ctx: ToolContext) {
     const s = ctx.snap(ev, { plane: this.first ? this.plane : GROUND, faces: !this.first });
     ctx.scene.clearOverlay(); drawSnap(ctx, s);
     if (!this.first) return;
-    const p = this.onPlane(s.point); this.last = p;
+    const p = this.corner(ctx, s); this.last = p;
     const { pts, du, dw } = this.corners(this.first, p);
     ctx.scene.addLine([...pts, pts[0]], INK, false, 2); ctx.scene.addFace(pts);
     if (Math.abs(du) > 0.01) ctx.scene.addLabel(pts[0].clone().lerp(pts[1], 0.5), fmtM(Math.abs(du)));
@@ -75,7 +84,7 @@ export class RectangleTool implements Tool {
     if (ev.button !== 0) return;
     const s = ctx.snap(ev, { plane: this.first ? this.plane : GROUND, faces: !this.first });
     if (!this.first) { this.first = s.point.clone(); this.plane = planeFromSnap(s, GROUND); ctx.setHint('Click the opposite corner, or type width; depth and press Enter.'); return; }
-    this.finish(ctx, this.onPlane(s.point));
+    this.finish(ctx, this.corner(ctx, s));
   }
   private async finish(ctx: ToolContext, b: THREE.Vector3) {
     if (!this.first) return;

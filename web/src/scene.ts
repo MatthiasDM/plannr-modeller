@@ -386,6 +386,27 @@ export class Viewport {
     return best;
   }
 
+  /** Where the infinite line (p, d) crosses a model edge within `r` pixels of the cursor: the "Intersection" inference. */
+  lineEdgeHit(p: THREE.Vector3, d: THREE.Vector3, cx: number, cy: number, r: number, ignore?: (id: string) => boolean): { point: THREE.Vector3; id: string; d: number } | null {
+    const s = this.screenCache(); let best: { point: THREE.Vector3; id: string; d: number } | null = null; let bd = r;
+    const u = new THREE.Vector3(), w0 = new THREE.Vector3(), P = new THREE.Vector3(), Q = new THREE.Vector3();
+    for (let i = 0; i < s.segA.length; i += 3) {
+      if (s.segA[i + 2] <= 0 || s.segB[i + 2] <= 0) continue;
+      const ax = s.segA[i], ay = s.segA[i + 1], bx = s.segB[i], by = s.segB[i + 1];
+      if (Math.min(ax, bx) > cx + r || Math.max(ax, bx) < cx - r || Math.min(ay, by) > cy + r || Math.max(ay, by) < cy - r) continue;
+      const sg = this.segments[i / 3]; if (ignore?.(sg.id)) continue;
+      u.subVectors(sg.b, sg.a); const L = u.length(); if (L < 1e-9) continue; u.divideScalar(L);
+      // closest points of the two lines; a crossing when they (nearly) meet inside the segment
+      w0.subVectors(p, sg.a); const b = d.dot(u); const den = 1 - b * b; if (den < 1e-6) continue;
+      const dd = d.dot(w0), e = u.dot(w0); const sp = (b * e - dd) / den, t = (e - b * dd) / den;
+      if (t < -1e-6 || t > L + 1e-6) continue;
+      P.copy(p).addScaledVector(d, sp); Q.copy(sg.a).addScaledVector(u, t); if (P.distanceTo(Q) > 1e-4) continue;
+      const dpx = this.screenPoint(P).distanceTo(new THREE.Vector2(cx, cy));
+      if (dpx < bd) { bd = dpx; best = { point: P.clone(), id: sg.id, d: dpx }; }
+    }
+    return best;
+  }
+
   /** Blue highlight for faces and edges. */
   highlight(ids: Set<string>, hover = false) {
     const target = hover ? this.hoverGroup : this.selectionGroup; target.clear();
@@ -411,17 +432,28 @@ export class Viewport {
   /** The inference marker under the cursor, drawn by the app for every tool on its own layer
    *  (tools clearing their overlay don't touch it): a ringed dot / square by kind, a cross on the
    *  bare working plane, and its label. `null` hides it. */
-  setSnapMarker(s: { point: THREE.Vector3; kind: string; axis?: string } | null, color = 0x888888, label = '') {
+  setSnapMarker(s: { point: THREE.Vector3; kind: string; axis?: string; refs?: { from: THREE.Vector3; color: number }[] } | null, color = 0x888888, label = '') {
     this.snapGroup.clear();
     if (!s) { if (this.snapEl) this.snapEl.style.display = 'none'; return; }
     const p = s.point; const px = this.pixelSize(p);
+    // dotted inference lines from the reference points (SketchUp's "from point" lines)
+    for (const r of s.refs ?? []) {
+      if (r.from.distanceTo(p) < 1e-6) continue;
+      const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([r.from, p]), new THREE.LineDashedMaterial({ color: r.color, dashSize: px * 5, gapSize: px * 4, depthTest: false, transparent: true }));
+      l.computeLineDistances(); l.renderOrder = 6; this.snapGroup.add(l);
+    }
     const flat = (geo: THREE.BufferGeometry, c: number, order: number) => { const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: c, depthTest: false, transparent: true })); m.position.copy(p); m.quaternion.copy(this.cam.camera.quaternion); m.renderOrder = order; this.snapGroup.add(m); };
     if (s.kind === 'plane' || s.kind === 'free') {
       // a small cross on the working plane: where the click lands when nothing else catches it
       const r = px * 7; const pts = [p.clone().add(new THREE.Vector3(-r, 0, 0)), p.clone().add(new THREE.Vector3(r, 0, 0)), p.clone().add(new THREE.Vector3(0, 0, -r)), p.clone().add(new THREE.Vector3(0, 0, r))];
       const l = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x3c4148, depthTest: false })); l.renderOrder = 7; this.snapGroup.add(l);
       flat(new THREE.CircleGeometry(px * 2, 12), 0x3c4148, 8);
-    } else if (s.kind === 'edge' || s.kind === 'axis' || s.kind === 'grid') {
+    } else if (s.kind === 'intersection') {
+      // a cross, like SketchUp's
+      const r = px * 6; const q = this.cam.camera.quaternion; const pts = [new THREE.Vector3(-r, -r, 0), new THREE.Vector3(r, r, 0), new THREE.Vector3(-r, r, 0), new THREE.Vector3(r, -r, 0)].map(v => v.applyQuaternion(q).add(p));
+      flat(new THREE.CircleGeometry(px * 9, 24), 0xffffff, 7);
+      const l = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true })); l.renderOrder = 8; this.snapGroup.add(l); // transparent: drawn in the same pass as the white disc, so it stays on top
+    } else if (['edge', 'axis', 'grid', 'from', 'parallel', 'perpendicular', 'square'].includes(s.kind) || (s.kind === 'guide' && (s as any).dir)) {
       flat(new THREE.PlaneGeometry(px * 16, px * 16), 0xffffff, 7); flat(new THREE.PlaneGeometry(px * 11, px * 11), color, 8);
     } else {
       flat(new THREE.CircleGeometry(px * 9, 24), 0xffffff, 7); flat(new THREE.CircleGeometry(px * 6.5, 24), color, 8);

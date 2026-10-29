@@ -2,8 +2,16 @@ import * as THREE from 'three';
 import type { Viewport } from '../scene';
 import type { Document, Op, OpResult } from '../model';
 
-export type SnapKind = 'vertex' | 'midpoint' | 'edge' | 'face' | 'guide' | 'axis' | 'grid' | 'plane' | 'free';
-export interface Snap { point: THREE.Vector3; kind: SnapKind; id?: string; normal?: THREE.Vector3; axis?: 'x' | 'y' | 'z'; dir?: THREE.Vector3 }
+export type SnapKind = 'vertex' | 'midpoint' | 'intersection' | 'edge' | 'face' | 'guide' | 'origin' | 'axis' | 'from' | 'parallel' | 'perpendicular' | 'square' | 'grid' | 'plane' | 'free';
+export interface Snap {
+  point: THREE.Vector3; kind: SnapKind; id?: string; normal?: THREE.Vector3; axis?: 'x' | 'y' | 'z';
+  /** Direction of the edge, axis or inference line the point lies on. */
+  dir?: THREE.Vector3;
+  /** A point on that line (the reference point of a "from point" inference, the previous point of an axis one). */
+  origin?: THREE.Vector3;
+  /** Dotted inference lines to draw from these reference points to the snap point. */
+  refs?: { from: THREE.Vector3; color: number }[];
+}
 export interface Plane { origin: THREE.Vector3; normal: THREE.Vector3 }
 export type AxisLock = 'x' | 'y' | 'z' | null;
 
@@ -73,14 +81,22 @@ export const INK = 0x1b1b1b, MAGENTA = 0xc8169a, SELECT = 0x2f6fde;
 
 /** Colour a rubber-band line like SketchUp: red/green/blue when parallel to an axis, magenta when snapped. */
 export function lineColor(a: THREE.Vector3, b: THREE.Vector3, snap?: Snap): number {
-  if (snap?.axis) return AXIS_COLOR[snap.axis];
+  if (snap?.kind === 'parallel' || snap?.kind === 'perpendicular') return MAGENTA;
+  if (snap?.axis && (snap.kind === 'axis' || snap.kind === 'intersection')) return AXIS_COLOR[snap.axis];
   const d = b.clone().sub(a); const L = d.length(); if (L < 1e-6) return INK;
   const ax = Math.abs(d.x) / L, ay = Math.abs(d.y) / L, az = Math.abs(d.z) / L;
   if (ax > 0.9999) return AXIS_COLOR.x; if (ay > 0.9999) return AXIS_COLOR.y; if (az > 0.9999) return AXIS_COLOR.z;
   return INK;
 }
-export const snapColor = (s: Snap) => s.kind === 'vertex' ? 0x1e8e3e : s.kind === 'midpoint' ? 0x18a0b8 : s.kind === 'edge' ? 0xd93025 : s.kind === 'face' ? 0x1a73e8 : s.kind === 'guide' ? 0x18a0b8 : s.kind === 'grid' ? 0x6b7280 : s.axis ? AXIS_COLOR[s.axis] : 0x888888;
-export const snapLabel = (s: Snap) => ({ vertex: 'Endpoint', midpoint: 'Midpoint', edge: 'On Edge', face: 'On Face', guide: 'On Guide', grid: 'On Grid', axis: s.axis ? `On ${({ x: 'Red', y: 'Blue', z: 'Green' })[s.axis]} Axis` : '', plane: '', free: '' })[s.kind];
+export const snapColor = (s: Snap): number => ({
+  vertex: 0x1e8e3e, midpoint: 0x18a0b8, intersection: INK, edge: 0xd93025, face: 0x1a73e8, guide: 0x18a0b8, origin: INK,
+  axis: s.axis ? AXIS_COLOR[s.axis] : 0x888888, from: s.axis ? AXIS_COLOR[s.axis] : 0x888888, parallel: MAGENTA, perpendicular: MAGENTA, square: MAGENTA, grid: 0x6b7280, plane: 0x888888, free: 0x888888,
+})[s.kind];
+export const AXIS_NAME = { x: 'Red', y: 'Blue', z: 'Green' };
+export const snapLabel = (s: Snap): string => ({
+  vertex: 'Endpoint', midpoint: 'Midpoint', intersection: 'Intersection', edge: 'On Edge', face: 'On Face', guide: s.dir ? 'On Guide' : 'Guide Point', origin: 'Origin',
+  axis: s.axis ? `On ${AXIS_NAME[s.axis]} Axis` : 'On Line', from: s.axis ? `From Point (${AXIS_NAME[s.axis].toLowerCase()})` : 'From Point', parallel: 'Parallel to Edge', perpendicular: 'Perpendicular to Edge', square: 'Square', grid: 'On Grid', plane: '', free: '',
+})[s.kind];
 
 /** Draw the snap marker + label for a snap. */
 export function drawSnap(_ctx: ToolContext, _s: Snap) {
