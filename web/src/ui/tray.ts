@@ -1,4 +1,4 @@
-import { MOD_LABEL, type App, type ModKey } from '../main';
+import { MOD_LABEL, THEMES, type App, type ModKey, type Theme } from '../main';
 function loadCollapsed(): Set<string> { try { const v = JSON.parse(localStorage.getItem('plannr.trayCollapsed') ?? 'null'); if (v?.collapsed) return new Set([...v.collapsed, ...(v.known ?? []).filter((k: string) => !v.collapsed.includes(k)).map((k: string) => `!${k}`)]); } catch { /* ignore */ } return new Set(); }
 import { icon } from './icons';
 import { findEntity, materialOf, layerOf, walk, fmt, fmtM, fmtM2, KIND_LABEL, polygonNormal, type Entity, type FaceEntity, type Vec3 } from '../model';
@@ -129,7 +129,8 @@ export class Tray {
   private display(): string {
     const a = this.app; const row = (k: string, label: string, on: boolean) => `<div class="layer-row"><button class="icon-btn" data-display="${k}">${icon(on ? 'eye' : 'eyeOff')}</button><span class="name">${label}</span></div>`;
     return row('grid', 'Grid', a.display.grid) + row('axes', 'Axes', a.display.axes) + row('edges', 'Edges', a.display.edges) + row('figure', 'Scale figure', a.display.figure) + row('shadows', 'Shadows', a.display.shadows) +
-      `<div class="layer-row"><input type="checkbox" data-opt="gridSnap" ${a.options.gridSnap ? 'checked' : ''}><span class="name">Snap to 1 cm grid</span></div>`;
+      `<div class="layer-row"><input type="checkbox" data-opt="gridSnap" ${a.options.gridSnap ? 'checked' : ''}><span class="name">Snap to 1 cm grid</span></div>
+      <div class="layer-row"><span class="name">Theme</span><select data-opt="theme">${THEMES.map(t => `<option value="${t}" ${a.theme === t ? 'selected' : ''}>${{ system: 'System', light: 'Light', dark: 'Dark' }[t]}</option>`).join('')}</select></div>`;
   }
   private modelInfo(): string {
     const m = this.app.scene.compiled?.metrics; if (!m) return `<div class="empty">Compiling…</div>`;
@@ -207,6 +208,7 @@ export class Tray {
     el.querySelectorAll<HTMLElement>('[data-erase]').forEach(b => b.onclick = () => a.commitOps([{ op: 'erase', ids: [b.dataset.erase!] }], 'Erase'));
     el.querySelectorAll<HTMLElement>('[data-display]').forEach(b => b.onclick = () => a.toggleDisplay(b.dataset.display as any));
     el.querySelector<HTMLInputElement>('[data-opt="gridSnap"]')?.addEventListener('change', (e) => { a.options.gridSnap = (e.target as HTMLInputElement).checked; });
+    el.querySelector<HTMLSelectElement>('[data-opt="theme"]')?.addEventListener('change', (e) => a.setTheme((e.target as HTMLSelectElement).value as Theme));
     el.querySelectorAll<HTMLSelectElement>('[data-modtool]').forEach(s => s.onchange = () => a.setModifierTool(s.dataset.modtool as ModKey, s.value));
   }
 }

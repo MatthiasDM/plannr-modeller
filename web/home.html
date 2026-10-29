@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head>
+  <script>try { const t = localStorage.getItem('plannr.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Plannr — 3D modelling in your browser</title>
@@ -13,8 +14,11 @@
     --shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06);
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #15171a; --surface: #1d2024; --ink: #eceae6; --muted: #a3a6ad; --line: #2c3036; --accent: #5a93f0; --brick: #d07a5c; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35); }
+    :root:not([data-theme="light"]) { --bg: #15171a; --surface: #1d2024; --ink: #eceae6; --muted: #a3a6ad; --line: #2c3036; --accent: #5a93f0; --brick: #d07a5c; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35); color-scheme: dark; }
   }
+  :root[data-theme="dark"] { --bg: #15171a; --surface: #1d2024; --ink: #eceae6; --muted: #a3a6ad; --line: #2c3036; --accent: #5a93f0; --brick: #d07a5c; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35); color-scheme: dark; }
+  .theme-btn { background: none; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); width: 34px; height: 34px; cursor: pointer; font-size: 16px; line-height: 1; }
+  .theme-btn:hover { color: var(--ink); }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
@@ -75,6 +79,7 @@
       <a class="hide-sm" href="#features">Features</a>
       <a class="hide-sm" href="#self-host">Self-host</a>
       <a href="https://github.com/MatthiasDM/plannr-modeller">GitHub</a>
+      <button class="theme-btn" id="theme" title="Switch light / dark" aria-label="Switch light / dark">☾</button>
       <a class="btn primary" href="/app">Open the modeller</a>
     </nav>
   </header>
@@ -142,6 +147,15 @@ cargo run --release -p plannr-server     # http://localhost:8795</code></pre>
   // Ko-fi: one setting for every coffee button on the page
   const COFFEE_URL = 'https://ko-fi.com/matthiasdm';
   document.querySelectorAll('[data-coffee]').forEach(a => { if (COFFEE_URL) { a.href = COFFEE_URL; a.target = '_blank'; a.rel = 'noopener'; } else a.style.display = 'none'; });
+</script>
+<script>
+  (function () {
+    const b = document.getElementById('theme'); const root = document.documentElement;
+    const dark = () => root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+    const paint = () => { b.textContent = dark() ? '☀' : '☾'; };
+    b.addEventListener('click', () => { const t = dark() ? 'light' : 'dark'; root.dataset.theme = t; try { localStorage.setItem('plannr.theme', t); } catch (e) {} paint(); });
+    paint();
+  })();
 </script>
 </body>
 </html>

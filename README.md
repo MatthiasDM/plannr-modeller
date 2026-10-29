@@ -86,6 +86,9 @@ inference under the cursor** (a direction, or a face's plane). Lengths along inf
 Trays: Entity Info, Tags (layers), Materials, Outliner, Scenes, Section Planes, Display, Model Info,
 History, Plugins.
 
+**Light or dark:** View ▸ Theme (or the Display tray) switches between System, Light and Dark for the
+chrome and the viewport; the choice is remembered in the browser, and the front page shares it.
+
 ## MCP
 
 Every tool is an MCP tool with the same semantics (`draw_line`, `draw_rectangle`, `draw_circle`,

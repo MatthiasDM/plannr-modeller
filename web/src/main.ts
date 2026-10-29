@@ -32,6 +32,11 @@ const DEFAULT_MODIFIER_TOOLS: Record<ModKey, string> = { Control: 'orbit', Alt: 
 function loadModifierTools(): Record<ModKey, string> {
   try { return { ...DEFAULT_MODIFIER_TOOLS, ...JSON.parse(localStorage.getItem('plannr.modifierTools') ?? '{}') }; } catch { return { ...DEFAULT_MODIFIER_TOOLS }; }
 }
+export type Theme = 'system' | 'light' | 'dark';
+export const THEMES: Theme[] = ['system', 'light', 'dark'];
+function readTheme(): Theme { try { const t = localStorage.getItem('plannr.theme'); return t === 'light' || t === 'dark' ? t : 'system'; } catch { return 'system'; } }
+/** `data-theme` on <html> picks the CSS variables; without it the OS preference applies. */
+export function applyTheme(t: Theme) { if (t === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; }
 
 export class App {
   scene: Viewport;
@@ -43,6 +48,13 @@ export class App {
   tool: Tool = this.tools[0];
   options: ToolContext['options'] = { circleSegments: 24, gridSnap: true, material: 'default', layer: 'layer0' };
   display = { grid: true, axes: true, edges: true, figure: true, shadows: true };
+  /** Light or dark chrome and viewport; 'system' follows the OS. Kept in localStorage (index.html applies it before the first paint). */
+  theme: Theme = readTheme();
+  setTheme(t: Theme) {
+    this.theme = t; applyTheme(t);
+    try { t === 'system' ? localStorage.removeItem('plannr.theme') : localStorage.setItem('plannr.theme', t); } catch { /* storage blocked */ }
+    this.scene.applyTheme(); this.refreshUI();
+  }
   lock: AxisLock = null;
   /** Hold a modifier to use a tool until it is released (Ctrl → Orbit by default). */
   modifierTools: Record<ModKey, string> = loadModifierTools();

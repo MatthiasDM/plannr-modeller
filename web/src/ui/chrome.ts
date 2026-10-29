@@ -1,4 +1,5 @@
-import type { App } from '../main';
+import { THEMES, type App, type Theme } from '../main';
+const THEME_LABEL: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
 import { icon } from './icons';
 import { TOOLBAR } from '../tools';
 import { getPlugins } from '../plugins';
@@ -31,6 +32,7 @@ export function renderMenubar(app: App, el: HTMLElement) {
       'sep', ...app.doc.layers.map(l => ({ label: `${l.visible ? '✓ ' : '   '}Tag: ${l.name}`, act: () => app.commitOps([{ op: 'update_layer', id: l.id, visible: !l.visible }], 'Tag visibility') })),
       'sep', ...(['left', 'top'] as const).map(d => ({ label: `${app.paletteDock === d ? '✓ ' : '   '}Tools on the ${d}`, act: () => app.dockPalette(d) })),
       { label: '   Reset tool palette size', act: () => app.resetPaletteSize() },
+      'sep', ...THEMES.map(t => ({ label: `${app.theme === t ? '✓ ' : '   '}Theme: ${THEME_LABEL[t]}`, act: () => app.setTheme(t) })),
     ]],
     ['Camera', () => [
       { label: 'Zoom Extents', key: '⇧Z', act: () => app.zoomExtents() }, { label: 'Zoom Selection', act: () => app.zoomSelection(), disabled: !app.selection.size }, { label: 'Zoom Window', act: () => app.setTool('zoomwin') }, 'sep',
