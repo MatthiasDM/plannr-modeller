@@ -100,7 +100,8 @@ struct Builder<'a> {
     by_key: HashMap<(String, bool), usize>,
     edges: CompiledEdges,
     out: CompiledScene,
-    cut: Option<(P3, P3)>,
+    /// Every active section plane (world origin, normal): what remains is what all of them keep.
+    cuts: Vec<(P3, P3)>,
     bb: Option<(P3, P3)>,
     hidden: Vec<String>,
     /// `<instanceId>#` while expanding an instance, so its faces resolve to the instance.
@@ -149,7 +150,8 @@ impl<'a> Builder<'a> {
     }
 
     fn push_segment(&mut self, id: &str, a: P3, b: P3) {
-        let seg = match self.cut { Some((o, n)) => clip_segment(a, b, o, n), None => Some((a, b)) };
+        let mut seg = Some((a, b));
+        for (o, n) in &self.cuts { seg = seg.and_then(|(a, b)| clip_segment(a, b, *o, *n)); }
         if let Some((a, b)) = seg {
             self.edges.positions.extend_from_slice(&[a[0] as f32, a[1] as f32, a[2] as f32, b[0] as f32, b[1] as f32, b[2] as f32]);
             self.edges.ids.push(if self.prefix.is_empty() { id.to_string() } else { format!("{}{}", self.prefix, id) });
@@ -186,10 +188,10 @@ impl<'a> Builder<'a> {
         let pts: Vec<P3> = outer.iter().chain(holes.iter().flatten()).copied().collect();
         let idx = tessellate(&outer, &holes);
         let mut tris: Vec<[P3; 3]> = idx.chunks(3).filter(|c| c.len() == 3).map(|c| [pts[c[0] as usize], pts[c[1] as usize], pts[c[2] as usize]]).collect();
-        if let Some((o, cn)) = self.cut {
+        for (o, cn) in &self.cuts {
             let mut kept = vec![];
             for t in tris {
-                let poly = clip_polygon(&t, o, cn);
+                let poly = clip_polygon(&t, *o, *cn);
                 if poly.len() >= 3 {
                     for i in 1..poly.len() - 1 { kept.push([poly[0], poly[i], poly[i + 1]]); }
                 }
@@ -263,18 +265,18 @@ pub fn compile(doc: &Document, reg: &Registry, opts: &CompileOptions) -> Compile
     let expanded = reg.expand_all(doc);
     let doc = &expanded;
     let hidden: Vec<String> = doc.layers.iter().filter(|l| !l.visible).map(|l| l.id.clone()).collect();
-    // the active section plane (world coordinates)
-    let mut cut = None;
+    // the active section planes (world coordinates); several combine, keeping what every one keeps
+    let mut cuts = vec![];
     if !opts.ignore_sections {
         doc.visit(|v| {
             if let Entity::Section(s) = v.entity {
-                if s.active && cut.is_none() && !hidden.iter().any(|h| h == &s.layer) {
-                    cut = Some((mat_apply(&v.transform, s.origin), normalize(mat_apply_dir(&v.transform, s.normal))));
+                if s.active && !hidden.iter().any(|h| h == &s.layer) {
+                    cuts.push((mat_apply(&v.transform, s.origin), normalize(mat_apply_dir(&v.transform, s.normal))));
                 }
             }
         });
     }
-    let mut b = Builder { doc, groups: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cut, bb: None, hidden, prefix: String::new(), depth: 0, centers: HashSet::new() };
+    let mut b = Builder { doc, groups: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cuts, bb: None, hidden, prefix: String::new(), depth: 0, centers: HashSet::new() };
     b.out.metrics.definitions = doc.components.len();
     let m = mat_identity();
     for e in &doc.entities { b.entity(e, &m); }

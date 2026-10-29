@@ -246,11 +246,9 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             let n = normalize(*normal);
             if len(n) < 0.5 { return err("normal must be non-zero"); }
             let active = active.unwrap_or(true);
-            if active { deactivate_sections(&mut doc.entities); }
             Ok(push_created(doc, Entity::Section(Section { id: new_id(), layer, origin: *origin, normal: n, active, extra: Default::default() })))
         }
         Op::UpdateSection { id, origin, normal, active } => {
-            if active == &Some(true) { deactivate_sections(&mut doc.entities); }
             let (e, _) = doc.find_mut(id).ok_or_else(|| OpError(format!("no entity {id}")))?;
             let Entity::Section(s) = e else { return err(format!("{id} is not a section plane")) };
             if let Some(o) = origin { s.origin = *o; }
@@ -364,15 +362,6 @@ fn make_face(doc: &Document, outer: Vec<P3>, holes: Vec<Vec<P3>>, layer: Option<
     Ok(Face { id: new_id(), layer, outer, holes, material, back_material: None, extra: Default::default() })
 }
 
-fn deactivate_sections(list: &mut [Entity]) {
-    for e in list.iter_mut() {
-        match e {
-            Entity::Section(s) => s.active = false,
-            Entity::Group(g) => deactivate_sections(&mut g.entities),
-            _ => {}
-        }
-    }
-}
 
 // ---- draw_line with face-from-loop -------------------------------------------------
 

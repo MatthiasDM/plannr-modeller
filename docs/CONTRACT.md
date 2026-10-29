@@ -21,7 +21,7 @@ z green. All points are `[x, y, z]`. Ids are strings (UUID v4). JSON is camelCas
   "layers":    [{ "id": "uuid", "name": "Layer0", "visible": true, "color": "#7a8aa0" }],
   "materials": [{ "id": "uuid", "name": "Brick", "color": "#B0623F", "opacity": 1.0 }],
   "entities":  [ /* Entity, see below */ ],
-  "scenes":    [{ "id": "uuid", "name": "Scene 1", "camera": [px,py,pz, tx,ty,tz, ux,uy,uz], "section": "sectionId|null" }],
+  "scenes":    [{ "id": "uuid", "name": "Scene 1", "camera": [px,py,pz, tx,ty,tz, ux,uy,uz], "section": "sectionId|null", "sections": ["sectionId"] }],
   "components": [{ "id": "uuid", "name": "Window 120", "description": "", "entities": [ /* Entity, local coords */ ] }],  // definitions shared by instances
   "extensions": { "<pluginId>": {} }   // opaque per-plugin data, preserved as-is
 }
@@ -39,7 +39,7 @@ The default document has one layer `Layer0` and one material `Default` (`#F4F2EE
 | `guide` | `point`, `direction?` | guide point, or an infinite guide line when `direction` is set |
 | `dimension` | `a`, `b`, `offset: [x,y,z]` | linear dimension between two points, drawn offset from them |
 | `text` | `position`, `text`, `anchor?` | a label; with `anchor` a leader is drawn to that point |
-| `section` | `origin`, `normal`, `active: bool` | section plane; when active, geometry on the +normal side is cut away |
+| `section` | `origin`, `normal`, `active: bool` | section plane; when active, geometry on the +normal side is cut away (several active planes combine) |
 | `custom` | `type: "<plugin>.<name>"`, `data: {}` | plugin entity; the core stores it and asks the plugin registry to expand it into core entities at compile time |
 | `instance` | `definition: id`, `transform: [16]`, `name?` | a placed copy of a `components[]` definition; compiles to the definition's entities under `transform` with ids `<instanceId>#<entityId>` (so picking resolves to the instance). `move`/`rotate`/`scale`/`copy`/`mirror`/`erase`/`set_layer`/`make_group` act on the instance's transform; `explode` replaces it by world-coordinate copies; `paint` on `<instanceId>#<faceId>` paints the **definition** face, i.e. every instance |
 
@@ -82,7 +82,7 @@ accepted within 1 mm.
 | `add_guide` | `point`, `direction?` | |
 | `add_dimension` | `a`, `b`, `offset` | |
 | `add_text` | `position`, `text`, `anchor?` | |
-| `add_section` / `update_section` | `origin`, `normal`, `active?` / `id`, `origin?`, `normal?`, `active?` | activating one section deactivates the others. |
+| `add_section` / `update_section` | `origin`, `normal`, `active?` / `id`, `origin?`, `normal?`, `active?` | every active section cuts; several combine, keeping only what all of them keep. |
 | `slice_section` | `id`, `layer?`, `name?` | a 2D slice (SketchUp's "Create Group from Slice"): every face of the model — plugin geometry included, hidden tags left out — is cut by section plane `id` (active or not), and the cut lines become edges in a new group in the plane (`name` default "Slice N", on a "Slices" tag made when missing). Pieces of one line are merged; joints between touching solids of the same material are dropped, those between different materials stay. Errors when the plane cuts nothing. |
 | `update_entity` | `id`, `patch: {}` | shallow-merge arbitrary fields (name, text, outer, …) after validation. |
 | `measure` | `a`, `b` | no change; `measurement` = distance. |
@@ -123,7 +123,7 @@ normal follows the given winding (for `draw_rectangle` the normal passed). Edge 
 
 Groups' transforms are baked into world coordinates. Faces whose layer is hidden are skipped. Both
 sides of a face render: a back-face group (`back: true`) uses `backMaterial` or the standard back colour
-`#B7C1CC`. An active section plane drops every triangle and edge segment fully on its cut-away side and
+`#B7C1CC`. Each active section plane drops every triangle and edge segment fully on its cut-away side and
 clips those that cross it. Face outlines are emitted as edge segments with the face id so the SketchUp
 black-edge look needs no extra work in the browser.
 

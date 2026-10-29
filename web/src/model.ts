@@ -18,7 +18,7 @@ export type Entity = FaceEntity | EdgeEntity | GroupEntity | GuideEntity | Dimen
 export interface ComponentDefinition { id: string; name: string; description?: string; entities: Entity[] }
 export type EntityKind = Entity['kind'];
 
-export interface Scene { id: string; name: string; camera: number[]; section?: string | null }
+export interface Scene { id: string; name: string; camera: number[]; section?: string | null; sections?: string[] }
 export interface Document {
   version: number; units: string; layers: Layer[]; materials: Material[]; entities: Entity[]; scenes: Scene[];
   components?: ComponentDefinition[];

@@ -154,6 +154,21 @@ mod tests {
     }
 
     #[test]
+    fn several_active_sections_combine() {
+        let mut doc = Document::default();
+        let id = square(&mut doc, 2.0);
+        apply(&mut doc, &Op::PushPull { face: id, distance: 2.0 }, &reg()).unwrap();
+        apply(&mut doc, &Op::AddSection { origin: [0.0, 1.0, 0.0], normal: up(), active: Some(true), layer: None }, &reg()).unwrap();
+        apply(&mut doc, &Op::AddSection { origin: [1.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0], active: Some(true), layer: None }, &reg()).unwrap();
+        let actives = doc.entities.iter().filter(|e| matches!(e, Entity::Section(s) if s.active)).count();
+        assert_eq!(actives, 2, "adding a plane leaves the others active");
+        let c = compile(&doc, &reg(), &CompileOptions::default());
+        assert!(c.bounds.max[1] <= 1.0 + 1e-9 && c.bounds.max[0] <= 1.0 + 1e-9, "both cuts apply: {:?}", c.bounds);
+        // kept: x ≤ 1, y ≤ 1 of a 2×2×2 box → base 2, top none, sides: x=0 (2), z=0 (1), z=2 (1), x=1 cut none, y = 1 cut none
+        assert!((c.metrics.area - 6.0).abs() < 1e-6, "base 1×2 + x=0 side 2×1 + two z sides 1×1 = 6, got {}", c.metrics.area);
+    }
+
+    #[test]
     fn compile_id_ranges_cover_all_indices() {
         let doc = sample_document();
         let c = compile(&doc, &reg(), &CompileOptions::default());

@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { Viewport, A, V, COLOR, type ViewName } from './scene';
 import { api, Live, type CompiledScene, type PluginInfo } from './api';
-import { findEntity, topLevelId, walk, type Document, type Op, type OpResult } from './model';
+import { findEntity, topLevelId, walk, type Document, type Op, type OpResult, type Scene } from './model';
 import { BUILTIN_TOOLS, placeComponentTool } from './tools';
 import { zoomWindow } from './tools/arc';
 import type { Tool, ToolContext, Snap, SnapKind, SnapOptions, AxisLock, Plane } from './tools/base';
@@ -340,11 +340,14 @@ export class App {
   }
   zoomSelection() { this.selection.size ? this.zoomTo([...this.selection]) : this.zoomExtents(); }
   setView(v: ViewName) { this.setCameraController(null); this.rememberView(); this.scene.cam.setView(v, this.scene.bounds); this.rememberViewSoon(); }
-  async saveScene() { const name = await this.promptText('Scene name', `Scene ${this.doc.scenes.length + 1}`); if (!name) return; const active = [...walk(this.doc.entities)].map(x => x.entity).find(e => e.kind === 'section' && e.active); await this.putScenes([...this.doc.scenes, { id: crypto.randomUUID(), name, camera: this.scene.cam.serialize(), section: active?.id ?? null }], 'Add scene'); }
-  async updateScene(id: string) { await this.putScenes(this.doc.scenes.map(s => s.id === id ? { ...s, camera: this.scene.cam.serialize() } : s), 'Update scene'); }
+  async saveScene() { const name = await this.promptText('Scene name', `Scene ${this.doc.scenes.length + 1}`); if (!name) return; const active = this.activeSections(); await this.putScenes([...this.doc.scenes, { id: crypto.randomUUID(), name, camera: this.scene.cam.serialize(), section: active[0] ?? null, sections: active }], 'Add scene'); }
+  private activeSections(): string[] { return [...walk(this.doc.entities)].map(x => x.entity).filter(e => e.kind === 'section' && e.active).map(e => e.id); }
+  /** The planes a scene keeps active (older scenes stored a single one). */
+  private sceneSections(s: Scene): string[] { return s.sections ?? (s.section ? [s.section] : []); }
+  async updateScene(id: string) { const active = this.activeSections(); await this.putScenes(this.doc.scenes.map(s => s.id === id ? { ...s, camera: this.scene.cam.serialize(), section: active[0] ?? null, sections: active } : s), 'Update scene'); }
   async removeScene(id: string) { await this.putScenes(this.doc.scenes.filter(s => s.id !== id), 'Remove scene'); }
   private async putScenes(scenes: Document['scenes'], label: string) { if (!this.projectId) return; await api.putDocument(this.projectId, { ...this.doc, scenes }); await this.refresh(label); }
-  restoreScene(id: string) { const s = this.doc.scenes.find(s => s.id === id); if (!s) return; this.rememberView(); this.scene.cam.restore(s.camera); this.rememberViewSoon(); const ops: Op[] = []; for (const { entity } of walk(this.doc.entities)) if (entity.kind === 'section' && entity.active !== (entity.id === s.section)) ops.push({ op: 'update_section', id: entity.id, active: entity.id === s.section }); if (ops.length) this.commitOps(ops, 'Scene section'); }
+  restoreScene(id: string) { const s = this.doc.scenes.find(s => s.id === id); if (!s) return; this.rememberView(); this.scene.cam.restore(s.camera); this.rememberViewSoon(); const ops: Op[] = []; const keep = this.sceneSections(s); for (const { entity } of walk(this.doc.entities)) if (entity.kind === 'section' && entity.active !== keep.includes(entity.id)) ops.push({ op: 'update_section', id: entity.id, active: keep.includes(entity.id) }); if (ops.length) this.commitOps(ops, 'Scene section'); }
   toggleDisplay(k: keyof App['display']) {
     this.display[k] = !this.display[k];
     this.scene.grid.visible = this.display.grid; this.scene.axes.visible = this.display.axes; this.scene.figure.visible = this.display.figure;

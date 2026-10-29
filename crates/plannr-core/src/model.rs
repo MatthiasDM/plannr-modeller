@@ -36,8 +36,12 @@ pub struct Scene {
     pub name: String,
     #[serde(default)]
     pub camera: Vec<f64>,
+    /// The active section plane of older documents (one at a time then); `sections` supersedes it.
     #[serde(default)]
     pub section: Option<String>,
+    /// The section planes active in this scene.
+    #[serde(default)]
+    pub sections: Vec<String>,
     #[serde(flatten, default)]
     pub extra: Map<String, Value>,
 }
