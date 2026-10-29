@@ -70,7 +70,7 @@ Tests: `cargo test`. Type-check: `cd web && npx tsc --noEmit`.
 | Paint Bucket | B | Active material onto a face (Shift: whole object, Alt: sample) |
 | Orbit / Pan / Zoom | O / H / Z | Middle-drag orbits, Shift+middle pans, wheel zooms in any tool; Shift+Z zoom extents |
 | Zoom Window | — | Drag a rectangle to fill the view with it; ⌘[ and ⌘] step through previous and next views |
-| Section Plane | — | Click a face to cut along it, the ground for a horizontal cut |
+| Section Plane | — | Click a face to cut along it, the ground for a horizontal cut; the plane is previewed while hovering, its arrows on the side that is cut away (Tab flips it; Reverse later in Entity Info) |
 
 **Hold a modifier for a tool:** holding Ctrl orbits and holding Option/Alt pans until you release the key,
 then you are back in the tool you had. Which key does what is set in the Shortcuts tray (Shift can be

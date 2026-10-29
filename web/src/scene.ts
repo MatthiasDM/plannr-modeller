@@ -235,10 +235,8 @@ export class Viewport {
     }
     this.bounds = c.bounds && isFinite(c.bounds.min[0]) && c.bounds.max[0] >= c.bounds.min[0] ? c.bounds : undefined;
     for (const s of c.sections) {
-      const size = this.bounds ? Math.max(this.bounds.max[0] - this.bounds.min[0], this.bounds.max[2] - this.bounds.min[2], this.bounds.max[1] - this.bounds.min[1]) + 2 : 6;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ color: s.active ? COLOR.blue : 0x888888, transparent: true, opacity: s.active ? 0.07 : 0.04, side: THREE.DoubleSide, depthWrite: false }));
-      m.position.copy(V(s.origin)); m.lookAt(V(s.origin).add(V(s.normal))); this.modelGroup.add(m); this.sectionMeshes.push(m); this.guideIds.set(m, s.id);
-      const frame = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), new THREE.LineBasicMaterial({ color: s.active ? COLOR.blue : 0x888888 })); frame.position.copy(m.position); frame.quaternion.copy(m.quaternion); this.modelGroup.add(frame);
+      const { group, sheet } = this.sectionShape(V(s.origin), V(s.normal), s.active ? COLOR.blue : 0x888888, s.active ? 0.07 : 0.04);
+      this.modelGroup.add(group); this.sectionMeshes.push(sheet); this.guideIds.set(sheet, s.id);
     }
     if (this.bounds) this.fitShadows();
     this.renderStaticLabels();
@@ -462,6 +460,27 @@ export class Viewport {
     this.snapEl.textContent = label; this.snapEl.style.display = label ? '' : 'none'; (this.snapEl as any).__pos = p.clone();
   }
 
+  /** What a section plane looks like: a translucent sheet sized to the model, its frame, and arrows at
+   *  the corners pointing to the side that is cut away (the way SketchUp draws them). */
+  sectionShape(origin: THREE.Vector3, normal: THREE.Vector3, color: number, opacity: number, centerArrow = false): { group: THREE.Group; sheet: THREE.Mesh } {
+    const b = this.bounds; const size = b ? Math.max(b.max[0] - b.min[0], b.max[2] - b.min[2], b.max[1] - b.min[1]) + 2 : 6;
+    const group = new THREE.Group();
+    const sheet = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false }));
+    sheet.position.copy(origin); sheet.lookAt(origin.clone().add(normal));
+    const frame = new THREE.LineSegments(new THREE.EdgesGeometry(sheet.geometry), new THREE.LineBasicMaterial({ color })); frame.position.copy(sheet.position); frame.quaternion.copy(sheet.quaternion);
+    group.add(sheet, frame);
+    const n = normal.clone().normalize(); const len = size / 12;
+    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const corner = new THREE.Vector3(sx * size * 0.46, sy * size * 0.46, 0).applyQuaternion(sheet.quaternion).add(origin);
+      group.add(new THREE.ArrowHelper(n, corner, len, color, len * 0.4, len * 0.22));
+    }
+    if (centerArrow) { const l = Math.min(len, this.pixelSize(origin) * 60); group.add(new THREE.ArrowHelper(n, origin, l, color, l * 0.4, l * 0.22)); }
+    return { group, sheet };
+  }
+  /** Preview of a section plane about to be placed (cleared with the overlay). */
+  addSectionPreview(origin: THREE.Vector3, normal: THREE.Vector3) {
+    const { group } = this.sectionShape(origin, normal, COLOR.blue, 0.12, true); group.renderOrder = 4; this.overlay.add(group);
+  }
   // overlay helpers ------------------------------------------------------------
   clearOverlay() { this.overlay.clear(); for (const el of Array.from(this.labels.querySelectorAll('.vlabel:not(.static)'))) el.remove(); }
   addLine(points: THREE.Vector3[], color = COLOR.ink, dashed = false, width = 1): THREE.Line {

@@ -68,6 +68,7 @@ export class Tray {
         body += `${vec('origin', e.origin, 'Origin')}<label>Tilt</label><div class="row"><input type="number" step="1" min="0" max="180" data-sec="tilt" value="${tilt.toFixed(1)}" title="0° = horizontal cut, 90° = vertical"><input type="range" min="0" max="180" step="1" data-sec-range="tilt" value="${tilt.toFixed(0)}" style="width:70px"></div>
           <label>Heading</label><div class="row"><input type="number" step="1" min="0" max="360" data-sec="heading" value="${heading.toFixed(1)}" title="Direction the cut-away side faces, 0° = +z"><input type="range" min="0" max="360" step="1" data-sec-range="heading" value="${heading.toFixed(0)}" style="width:70px"></div>
           <label>Offset</label><div class="row"><input type="number" step="0.05" data-sec="offset" value="0" title="Push the plane along its normal (m), Enter applies"></div>
+          <label>Cut side</label><div><button class="btn" data-sec-reverse="${e.id}" title="Cut away the other side of the plane (the arrows point to the side that is removed)">${icon('flip')}Reverse</button></div>
           <label>Active</label><input type="checkbox" data-field="active" ${e.active ? 'checked' : ''}><label></label><div class="muted" style="font-size:11px">Use Move (axis locks ← → ↑) and Rotate on the plane itself too.</div>
           <label>2D slice</label><div><button class="btn" data-slice="${e.id}" title="The cut lines of the whole model at this plane, as a new group of edges">${icon('slice')}Create slice</button></div>`; break; }
       case 'instance': { const def = (a.doc.components ?? []).find(c => c.id === e.definition); const n = [...walk(a.doc.entities)].filter(x => x.entity.kind === 'instance' && (x.entity as any).definition === e.definition).length;
@@ -123,7 +124,7 @@ export class Tray {
   private sections(): string {
     const a = this.app; const secs = [...walk(a.doc.entities)].map(x => x.entity).filter(e => e.kind === 'section');
     if (!secs.length) return `<div class="empty">No section planes. Use the Section Plane tool.</div>`;
-    return secs.map(s => s.kind === 'section' ? `<div class="layer-row"><button class="icon-btn" data-section-toggle="${s.id}">${icon(s.active ? 'eye' : 'eyeOff')}</button><span class="name" data-select="${s.id}">Section · ${s.normal.map(x => x.toFixed(1)).join(',')} @ ${s.origin.map(x => x.toFixed(2)).join(', ')}</span><button class="icon-btn" data-slice="${s.id}" title="Create a 2D slice: the cut lines at this plane, as a group">${icon('slice')}</button><button class="icon-btn" data-erase="${s.id}">${icon('trash')}</button></div>` : '').join('');
+    return secs.map(s => s.kind === 'section' ? `<div class="layer-row"><button class="icon-btn" data-section-toggle="${s.id}">${icon(s.active ? 'eye' : 'eyeOff')}</button><span class="name" data-select="${s.id}">Section · ${s.normal.map(x => x.toFixed(1)).join(',')} @ ${s.origin.map(x => x.toFixed(2)).join(', ')}</span><button class="icon-btn" data-sec-reverse="${s.id}" title="Reverse: cut away the other side">${icon('flip')}</button><button class="icon-btn" data-slice="${s.id}" title="Create a 2D slice: the cut lines at this plane, as a group">${icon('slice')}</button><button class="icon-btn" data-erase="${s.id}">${icon('trash')}</button></div>` : '').join('');
   }
   private display(): string {
     const a = this.app; const row = (k: string, label: string, on: boolean) => `<div class="layer-row"><button class="icon-btn" data-display="${k}">${icon(on ? 'eye' : 'eyeOff')}</button><span class="name">${label}</span></div>`;
@@ -200,6 +201,7 @@ export class Tray {
     el.querySelectorAll<HTMLElement>('[data-scene-update]').forEach(b => b.onclick = () => a.updateScene(b.dataset.sceneUpdate!));
     el.querySelectorAll<HTMLElement>('[data-scene-del]').forEach(b => b.onclick = () => a.removeScene(b.dataset.sceneDel!));
     el.querySelector<HTMLElement>('[data-act="addScene"]')?.addEventListener('click', () => a.saveScene());
+    el.querySelectorAll<HTMLElement>('[data-sec-reverse]').forEach(b => b.onclick = (ev) => { ev.stopPropagation(); const s = findEntity(a.doc, b.dataset.secReverse!); if (s?.kind === 'section') a.commitOps([{ op: 'update_section', id: s.id, normal: s.normal.map(x => -x) as Vec3 }], 'Reverse section'); });
     el.querySelectorAll<HTMLElement>('[data-slice]').forEach(b => b.onclick = (ev) => { ev.stopPropagation(); a.sliceSection(b.dataset.slice!); });
     el.querySelectorAll<HTMLElement>('[data-section-toggle]').forEach(b => b.onclick = () => { const s = findEntity(a.doc, b.dataset.sectionToggle!); if (s?.kind === 'section') a.commitOps([{ op: 'update_section', id: s.id, active: !s.active }], 'Section'); });
     el.querySelectorAll<HTMLElement>('[data-erase]').forEach(b => b.onclick = () => a.commitOps([{ op: 'erase', ids: [b.dataset.erase!] }], 'Erase'));

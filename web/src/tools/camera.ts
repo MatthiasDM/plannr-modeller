@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import type { Tool, ToolContext } from './base';
 import { arr, AXIS } from './base';
 import { parseNumbers } from './base';
@@ -26,24 +27,48 @@ export class ZoomTool implements Tool {
   onMove(ev: PointerEvent, ctx: ToolContext) { if (this.down === null) return; ctx.scene.cam.dolly(Math.pow(1.01, ev.clientY - this.down)); this.down = ev.clientY; }
   onUp() { this.down = null; }
 }
-/** Section Plane: click a face to cut along it; click the ground for a horizontal cut (arrow keys pick the axis). */
+/** Section Plane: click a face to cut along it; click the ground for a horizontal cut (arrow keys pick the
+ *  axis). The plane is previewed while hovering, with arrows on the side that is cut away: by default the
+ *  side facing the camera; Tab flips it. */
 export class SectionTool implements Tool {
-  id = 'section'; label = 'Section Plane'; hint = 'Click a face to place a section plane on it, or the ground for a horizontal cut (↑ blue / → red / ← green lock the direction). Type a height.'; cursor = 'crosshair';
-  activate(ctx: ToolContext) { ctx.setHint(this.hint); ctx.setVCB('', 'Height'); }
-  deactivate(ctx: ToolContext) { ctx.scene.clearOverlay(); }
-  onMove(ev: PointerEvent, ctx: ToolContext) {
-    const p = ctx.scene.pick(ev, { facesOnly: true }); ctx.scene.highlight(p ? new Set([p.id]) : new Set(), true);
-  }
-  async onDown(ev: PointerEvent, ctx: ToolContext) {
-    if (ev.button !== 0) return;
+  id = 'section'; label = 'Section Plane'; hint = 'Click a face to place a section plane on it, or the ground for a horizontal cut (↑ blue / → red / ← green lock the direction). The arrows show the side that is cut away: Tab flips it. Type a height.'; cursor = 'crosshair';
+  private flip = false; private last: PointerEvent | null = null;
+  activate(ctx: ToolContext) { ctx.setHint(this.hint); ctx.setVCB('', 'Height'); this.flip = false; this.last = null; }
+  deactivate(ctx: ToolContext) { ctx.scene.clearOverlay(); ctx.scene.highlight(new Set(), true); }
+  /** Where the plane would go: on the hovered face (else the ground at 1.2 m), along the locked axis if
+   *  any; the side facing the camera is cut away unless flipped. */
+  private place(ev: { clientX: number; clientY: number }, ctx: ToolContext) {
     const p = ctx.scene.pick(ev, { facesOnly: true });
     const normal = ctx.lock ? AXIS[ctx.lock].clone() : p ? p.normal.clone() : AXIS.y.clone();
     const origin = p ? p.point.clone() : (ctx.scene.groundPoint(ev)?.setY(1.2) ?? AXIS.y.clone().multiplyScalar(1.2));
+    return { p, origin, normal: this.orient(normal, origin, ctx) };
+  }
+  private orient(normal: THREE.Vector3, origin: THREE.Vector3, ctx: ToolContext) {
+    if (normal.dot(ctx.scene.cam.camera.position.clone().sub(origin)) < 0) normal.negate();
+    if (this.flip) normal.negate();
+    return normal;
+  }
+  onMove(ev: PointerEvent, ctx: ToolContext) {
+    this.last = ev;
+    const { p, origin, normal } = this.place(ev, ctx);
+    ctx.scene.highlight(p ? new Set([p.id]) : new Set(), true);
+    ctx.scene.clearOverlay(); ctx.scene.addSectionPreview(origin, normal);
+    ctx.scene.addLabel(origin, this.flip ? 'Cuts away the far side · Tab flips' : 'Cuts away the side facing you · Tab flips', 'infer');
+  }
+  onKey(ev: KeyboardEvent, ctx: ToolContext) {
+    if (ev.key !== 'Tab') return false;
+    this.flip = !this.flip; if (this.last) this.onMove(this.last, ctx); return true;
+  }
+  onLock(ctx: ToolContext) { if (this.last) this.onMove(this.last, ctx); }
+  async onDown(ev: PointerEvent, ctx: ToolContext) {
+    if (ev.button !== 0) return;
+    const { origin, normal } = this.place(ev, ctx);
+    ctx.scene.clearOverlay();
     await ctx.ops([{ op: 'add_section', origin: arr(origin), normal: arr(normal), active: true }], 'Section plane');
   }
   async onVCB(v: string, ctx: ToolContext) {
     const n = parseNumbers(v); if (!n.length) return;
-    const axis = ctx.lock ?? 'y'; const o = [0, 0, 0] as [number, number, number]; o[{ x: 0, y: 1, z: 2 }[axis]] = n[0];
-    await ctx.ops([{ op: 'add_section', origin: o, normal: arr(AXIS[axis]), active: true }], 'Section plane');
+    const axis = ctx.lock ?? 'y'; const o = AXIS[axis].clone().multiplyScalar(n[0]);
+    await ctx.ops([{ op: 'add_section', origin: arr(o), normal: arr(this.orient(AXIS[axis].clone(), o, ctx)), active: true }], 'Section plane');
   }
 }
