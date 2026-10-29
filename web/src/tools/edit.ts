@@ -54,10 +54,19 @@ export class SelectTool implements Tool {
     }
     this.down = null;
     const p = ctx.scene.pick(ev);
+    this.clicks = [this.clicks[1], p ? ctx.resolve(p.id) : null];
     if (!p) { if (mode === 'replace') ctx.select([]); return; }
     ctx.select([ctx.resolve(p.id)], mode);
   }
-  onDblClick(ev: MouseEvent, ctx: ToolContext) { const p = ctx.scene.pick(ev); if (p) (ctx as any).enterGroup?.(p.id); }
+  /** What the last two clicks selected: a double-click opens a group only when both landed on it (a click
+   *  on empty space followed quickly by one on the group is two single clicks, not a double-click). */
+  private clicks: (string | null)[] = [null, null];
+  onDblClick(ev: MouseEvent, ctx: ToolContext) {
+    const p = ctx.scene.pick(ev); if (!p) return;
+    const g = ctx.resolve(p.id); if (this.clicks[0] !== g || this.clicks[1] !== g) return;
+    (ctx as any).enterGroup?.(g); this.clicks = [null, null];
+    ctx.select([ctx.resolve(p.id)]); // inside the group now: the face (or nested group) under the cursor, as SketchUp does
+  }
 }
 
 export class EraserTool implements Tool {
