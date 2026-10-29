@@ -406,9 +406,12 @@ export class Viewport {
   }
 
   /** Blue highlight for faces and edges. */
+  /** Set by the app: a group id stands for everything inside it (the compiled faces carry their own ids). */
+  expandIds: (ids: Set<string>) => Set<string> = ids => ids;
   highlight(ids: Set<string>, hover = false) {
     const target = hover ? this.hoverGroup : this.selectionGroup; target.clear();
     if (!ids.size) return;
+    ids = this.expandIds(ids);
     // plugin geometry is compiled as `<entityId>#<faceKey>`: an entity id matches all its faces, a full id just that face
     const bases = new Set<string>(); for (const id of ids) if (!id.includes('#')) bases.add(id);
     const hit = (fid: string) => ids.has(fid) || (bases.size > 0 && bases.has(fid.split('#')[0]));

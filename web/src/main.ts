@@ -197,6 +197,7 @@ export class App {
     this.bindInput(); installTooltips();
     this.scene.start();
     onPlugin(p => { this.tools.push(...(p.tools ?? [])); p.activate?.(this.pluginHost()); this.refreshUI(); });
+    this.scene.expandIds = ids => { const out = new Set(ids); for (const id of ids) { const e = findEntity(this.doc, id); if (e?.kind === 'group') for (const { entity } of walk(e.entities)) out.add(entity.id); } return out; };
     this.refreshUI(); this.setTool('select');
     this.boot();
   }

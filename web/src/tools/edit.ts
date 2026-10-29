@@ -34,6 +34,8 @@ export class SelectTool implements Tool {
       this.box.classList.toggle('crossing', ev.clientX < this.down.x);
       return;
     }
+    // with a selection made, nothing else lights up on hover unless Shift / Ctrl would add to it
+    if (ctx.selection().size && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) { ctx.scene.highlight(new Set(), true); return; }
     hoverPick(ev, ctx);
   }
   onDown(ev: PointerEvent, ctx: ToolContext) { if (ev.button === 0) this.down = { x: ev.clientX, y: ev.clientY }; }
