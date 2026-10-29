@@ -12,6 +12,18 @@ import { renderMenubar, renderToolbar, renderHud, renderToolOptions, renderWelco
 import { registerPlugin, getPlugins, onPlugin, type PluginHost, type CameraController } from './plugins';
 import { promptText, confirmDialog, installTooltips } from './ui/dialog';
 
+/** The page itself never zooms: pinches and double-taps belong to the 3D view (which handles its own
+ *  pinch). The viewport meta and `touch-action` cover most browsers; iOS Safari ignores both for pinch,
+ *  so its gesture events and multi-finger moves outside the canvas are cancelled here. */
+function lockPageZoom() {
+  const stop = (e: Event) => e.preventDefault();
+  for (const t of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(t, stop, { passive: false });
+  document.addEventListener('touchmove', (e: TouchEvent) => { if (e.touches.length > 1 && !(e.target instanceof HTMLCanvasElement)) e.preventDefault(); }, { passive: false });
+  // trackpad pinch on desktop arrives as ctrl+wheel: outside the canvas it would zoom the page
+  window.addEventListener('wheel', (e: WheelEvent) => { if (e.ctrlKey && !(e.target instanceof HTMLCanvasElement)) e.preventDefault(); }, { passive: false });
+}
+lockPageZoom();
+
 const emptyDoc = (): Document => ({ version: 0, units: 'm', layers: [{ id: 'layer0', name: 'Layer0', visible: true, color: '#7a8aa0' }], materials: [{ id: 'default', name: 'Default', color: '#F4F2EE', opacity: 1 }], entities: [], scenes: [], extensions: {} });
 
 export type ModKey = 'Control' | 'Alt' | 'Shift';

@@ -343,3 +343,11 @@ table.data tr:hover td { background: var(--surface-2); }
 .touch-bar.show { display: flex; }
 .touch-bar button { border: 1px solid var(--glass-border); background: var(--glass); backdrop-filter: blur(10px) saturate(1.4); border-radius: 999px; padding: 10px 16px; font-size: 14px; font-weight: 600; box-shadow: var(--shadow-md); touch-action: manipulation; color: var(--ink); white-space: nowrap; }
 .touch-bar button[data-k="Enter"] { background: var(--accent); color: #fff; border-color: transparent; }
+
+/* ---- no page zoom: a pinch or double-tap zooms the model, never the interface ---------- */
+/* pan-x pan-y keeps panels scrollable but leaves out pinch-zoom and double-tap-zoom for the whole page */
+html, body, #app { touch-action: pan-x pan-y; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* iOS Safari zooms the page into any focused field whose text is under 16px */
+@media (pointer: coarse) {
+  input[type=text], input[type=number], input[type=search], input:not([type]), select, textarea { font-size: 16px; }
+}
