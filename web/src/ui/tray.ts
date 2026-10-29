@@ -68,7 +68,8 @@ export class Tray {
         body += `${vec('origin', e.origin, 'Origin')}<label>Tilt</label><div class="row"><input type="number" step="1" min="0" max="180" data-sec="tilt" value="${tilt.toFixed(1)}" title="0° = horizontal cut, 90° = vertical"><input type="range" min="0" max="180" step="1" data-sec-range="tilt" value="${tilt.toFixed(0)}" style="width:70px"></div>
           <label>Heading</label><div class="row"><input type="number" step="1" min="0" max="360" data-sec="heading" value="${heading.toFixed(1)}" title="Direction the cut-away side faces, 0° = +z"><input type="range" min="0" max="360" step="1" data-sec-range="heading" value="${heading.toFixed(0)}" style="width:70px"></div>
           <label>Offset</label><div class="row"><input type="number" step="0.05" data-sec="offset" value="0" title="Push the plane along its normal (m), Enter applies"></div>
-          <label>Active</label><input type="checkbox" data-field="active" ${e.active ? 'checked' : ''}><label></label><div class="muted" style="font-size:11px">Use Move (axis locks ← → ↑) and Rotate on the plane itself too.</div>`; break; }
+          <label>Active</label><input type="checkbox" data-field="active" ${e.active ? 'checked' : ''}><label></label><div class="muted" style="font-size:11px">Use Move (axis locks ← → ↑) and Rotate on the plane itself too.</div>
+          <label>2D slice</label><div><button class="btn" data-slice="${e.id}" title="The cut lines of the whole model at this plane, as a new group of edges">${icon('slice')}Create slice</button></div>`; break; }
       case 'instance': { const def = (a.doc.components ?? []).find(c => c.id === e.definition); const n = [...walk(a.doc.entities)].filter(x => x.entity.kind === 'instance' && (x.entity as any).definition === e.definition).length;
         body += `<label>Definition</label><div><b>${esc(def?.name ?? '?')}</b> <span class="muted">· ${n} instance${n === 1 ? '' : 's'}</span></div><label>Contents</label><div>${def ? [...walk(def.entities)].length : 0} entities</div><label>Name</label><input type="text" data-field="name" value="${esc(e.name ?? '')}" placeholder="(instance name)">`; break; }
       case 'custom': body += `<label>Plugin type</label><div>${esc(e.type)}</div><label>Data</label><div class="muted" style="word-break:break-all;font-size:11px">${esc(JSON.stringify(e.data)).slice(0, 300)}</div>`; break;
@@ -122,7 +123,7 @@ export class Tray {
   private sections(): string {
     const a = this.app; const secs = [...walk(a.doc.entities)].map(x => x.entity).filter(e => e.kind === 'section');
     if (!secs.length) return `<div class="empty">No section planes. Use the Section Plane tool.</div>`;
-    return secs.map(s => s.kind === 'section' ? `<div class="layer-row"><button class="icon-btn" data-section-toggle="${s.id}">${icon(s.active ? 'eye' : 'eyeOff')}</button><span class="name" data-select="${s.id}">Section · ${s.normal.map(x => x.toFixed(1)).join(',')} @ ${s.origin.map(x => x.toFixed(2)).join(', ')}</span><button class="icon-btn" data-erase="${s.id}">${icon('trash')}</button></div>` : '').join('');
+    return secs.map(s => s.kind === 'section' ? `<div class="layer-row"><button class="icon-btn" data-section-toggle="${s.id}">${icon(s.active ? 'eye' : 'eyeOff')}</button><span class="name" data-select="${s.id}">Section · ${s.normal.map(x => x.toFixed(1)).join(',')} @ ${s.origin.map(x => x.toFixed(2)).join(', ')}</span><button class="icon-btn" data-slice="${s.id}" title="Create a 2D slice: the cut lines at this plane, as a group">${icon('slice')}</button><button class="icon-btn" data-erase="${s.id}">${icon('trash')}</button></div>` : '').join('');
   }
   private display(): string {
     const a = this.app; const row = (k: string, label: string, on: boolean) => `<div class="layer-row"><button class="icon-btn" data-display="${k}">${icon(on ? 'eye' : 'eyeOff')}</button><span class="name">${label}</span></div>`;
@@ -199,6 +200,7 @@ export class Tray {
     el.querySelectorAll<HTMLElement>('[data-scene-update]').forEach(b => b.onclick = () => a.updateScene(b.dataset.sceneUpdate!));
     el.querySelectorAll<HTMLElement>('[data-scene-del]').forEach(b => b.onclick = () => a.removeScene(b.dataset.sceneDel!));
     el.querySelector<HTMLElement>('[data-act="addScene"]')?.addEventListener('click', () => a.saveScene());
+    el.querySelectorAll<HTMLElement>('[data-slice]').forEach(b => b.onclick = (ev) => { ev.stopPropagation(); a.sliceSection(b.dataset.slice!); });
     el.querySelectorAll<HTMLElement>('[data-section-toggle]').forEach(b => b.onclick = () => { const s = findEntity(a.doc, b.dataset.sectionToggle!); if (s?.kind === 'section') a.commitOps([{ op: 'update_section', id: s.id, active: !s.active }], 'Section'); });
     el.querySelectorAll<HTMLElement>('[data-erase]').forEach(b => b.onclick = () => a.commitOps([{ op: 'erase', ids: [b.dataset.erase!] }], 'Erase'));
     el.querySelectorAll<HTMLElement>('[data-display]').forEach(b => b.onclick = () => a.toggleDisplay(b.dataset.display as any));

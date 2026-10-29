@@ -54,6 +54,8 @@ pub enum Op {
     AddText { position: P3, text: String, #[serde(default)] anchor: Option<P3>, #[serde(default)] layer: Option<String> },
     AddSection { origin: P3, normal: P3, #[serde(default)] active: Option<bool>, #[serde(default)] layer: Option<String> },
     UpdateSection { id: String, #[serde(default)] origin: Option<P3>, #[serde(default)] normal: Option<P3>, #[serde(default)] active: Option<bool> },
+    /// A 2D slice: the cut lines of the whole model at section plane `id`, as a new group of edges.
+    SliceSection { id: String, #[serde(default)] layer: Option<String>, #[serde(default)] name: Option<String> },
     UpdateEntity { id: String, patch: Value },
     Measure { a: P3, b: P3 },
     SetExtension { plugin: String, data: Value },
@@ -87,7 +89,7 @@ impl Op {
             Op::SetLayer { .. } => "set_layer", Op::MakeGroup { .. } => "make_group", Op::Explode { .. } => "explode", Op::AddLayer { .. } => "add_layer",
             Op::UpdateLayer { .. } => "update_layer", Op::RemoveLayer { .. } => "remove_layer", Op::AddMaterial { .. } => "add_material",
             Op::UpdateMaterial { .. } => "update_material", Op::AddGuide { .. } => "add_guide", Op::AddDimension { .. } => "add_dimension",
-            Op::AddText { .. } => "add_text", Op::AddSection { .. } => "add_section", Op::UpdateSection { .. } => "update_section",
+            Op::AddText { .. } => "add_text", Op::AddSection { .. } => "add_section", Op::UpdateSection { .. } => "update_section", Op::SliceSection { .. } => "slice_section",
             Op::UpdateEntity { .. } => "update_entity", Op::Measure { .. } => "measure", Op::SetExtension { .. } => "set_extension", Op::Custom { .. } => "custom",
             Op::DrawArc { .. } => "draw_arc", Op::FollowMe { .. } => "follow_me", Op::Mirror { .. } => "mirror",
             Op::MakeComponent { .. } => "make_component", Op::PlaceComponent { .. } => "place_component", Op::MakeUnique { .. } => "make_unique",
@@ -256,6 +258,7 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             if let Some(a) = active { s.active = *a; }
             Ok(OpResult { modified: vec![id.clone()], ..Default::default() })
         }
+        Op::SliceSection { id, layer, name } => crate::slice::slice_section(doc, reg, id, layer.as_deref(), name.as_deref()),
         Op::UpdateEntity { id, patch } => update_entity(doc, split_key(id).0, patch),
         Op::Measure { a, b } => Ok(OpResult { measurement: Some(dist(*a, *b)), ..Default::default() }),
         Op::SetExtension { plugin, data } => {

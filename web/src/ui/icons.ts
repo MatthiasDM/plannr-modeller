@@ -21,6 +21,7 @@ export const ICONS: Record<string, string> = {
   pan: wrap('<path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11M12 10V4.5a1.5 1.5 0 0 1 3 0V11M15 11V6.5a1.5 1.5 0 0 1 3 0V14c0 3.5-2 6-6 6s-5-2-7.5-6a1.4 1.4 0 0 1 2.3-1.6L9 14V8.5a1.5 1.5 0 0 1 3 0" fill="#fff"/>'),
   zoom: wrap('<circle cx="10.5" cy="10.5" r="6.5" fill="#fff"/><path d="M15.5 15.5 21 21M8 10.5h5M10.5 8v5"/>'),
   zoomext: wrap('<path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><rect x="8" y="8" width="8" height="8" fill="#e8f0fb"/>'),
+  slice: wrap('<path d="M3 10l9-5 9 5-9 5z" stroke-dasharray="2.2 2"/><path d="M3 10l9 5 9-5" stroke="#c8169a"/><path d="M12 15v5M9 18l3 2 3-2"/>'),
   section: wrap('<path d="M4 15 12 19l8-4V9l-8-4-8 4z" fill="#e8f0fb"/><path d="M2 12h20" stroke="#1a73e8" stroke-dasharray="3 2"/><path d="M4 12l8 4 8-4" stroke="#1a73e8"/>'),
   iso: wrap('<path d="M4 16l8 4 8-4V8l-8-4-8 4z" fill="#fff"/><path d="M4 8l8 4 8-4M12 12v8"/>'),
   top: wrap('<rect x="5" y="5" width="14" height="14" fill="#fff"/><path d="M5 5l14 14M19 5 5 19" stroke-width="1"/>'),

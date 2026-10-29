@@ -51,6 +51,7 @@ export type Op =
   | { op: 'add_text'; position: Vec3; text: string; anchor?: Vec3 }
   | { op: 'add_section'; origin: Vec3; normal: Vec3; active?: boolean }
   | { op: 'update_section'; id: string; origin?: Vec3; normal?: Vec3; active?: boolean }
+  | { op: 'slice_section'; id: string; layer?: string; name?: string }
   | { op: 'update_entity'; id: string; patch: Record<string, unknown> }
   | { op: 'measure'; a: Vec3; b: Vec3 }
   | { op: 'set_extension'; plugin: string; data: unknown }

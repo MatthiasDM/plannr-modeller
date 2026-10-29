@@ -8,6 +8,7 @@ pub mod model;
 pub mod ops;
 pub mod plugin;
 pub mod sample;
+pub mod slice;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

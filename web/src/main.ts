@@ -298,6 +298,16 @@ export class App {
   enterGroup(id: string) { const e = findEntity(this.doc, id); const g = e?.kind === 'group' ? e : null; if (!g) return; this.enteredGroup = g.id; this.select([]); this.toast(`Editing group “${g.name}” — Esc to close`); this.refreshUI(); }
   exitGroup() { if (!this.enteredGroup) return; this.enteredGroup = null; this.select([]); this.refreshUI(); }
   async deleteSelection() { if (!this.selection.size) return; const ids = [...this.selection]; this.selection.clear(); await this.commitOps([{ op: 'erase', ids }], 'Erase'); }
+  /** A 2D slice: the model's cut lines at section plane `id`, as a new group of edges in the plane. */
+  async sliceSection(id: string) {
+    try {
+      const r = await this.commitOps([{ op: 'slice_section', id }], 'Slice');
+      const gid = r[0]?.created?.[0]; if (!gid) return;
+      const g = this.doc.entities.find(e => e.id === gid); const n = g?.kind === 'group' ? g.entities.length : 0;
+      this.select([gid]);
+      this.toast(`${g?.kind === 'group' ? g.name : 'Slice'}: ${n} lines on the "Slices" tag. Move (M) or copy it to plan with it; hide the tag in View to get it out of the way.`, 6000);
+    } catch (e: any) { this.toast(`Slice: ${e.message ?? e}`); }
+  }
   async groupSelection() { if (!this.selection.size) return; const r = await this.commitOps([{ op: 'make_group', ids: [...this.selection], name: `Group ${this.doc.entities.filter(e => e.kind === 'group').length + 1}` }], 'Make group'); if (r[0]?.created?.[0]) this.select([r[0].created[0]]); }
   async makeComponent() {
     if (!this.selection.size) return this.toast('Select the entities that make up the component first');
