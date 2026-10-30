@@ -15,6 +15,8 @@ export const BUILTIN_TOOLS: Tool[] = [
   new OrbitTool(), new PanTool(), new ZoomTool(), new ZoomWindowTool(), new SectionTool(),
 ];
 /** Toolbar layout: groups of tool ids, SketchUp "Large Tool Set" order. */
+/** The tools an embedded viewer offers: looking around, measuring and sectioning, no editing. */
+export const EMBED_TOOLS = new Set(['select', 'orbit', 'pan', 'zoom', 'zoomwin', 'zoomext', 'section', 'tape']);
 export const TOOLBAR: string[][] = [
   ['select', 'eraser'],
   ['line', 'rectangle', 'rotrect', 'circle', 'polygon', 'arc', 'arc3', 'arc2', 'pie'],

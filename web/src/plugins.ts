@@ -50,6 +50,8 @@ export interface PluginHost {
   setCameraController(c: CameraController | null): void;
   cameraController(): CameraController | null;
   on(event: 'changed' | 'selection' | 'tool' | 'xray', handler: (detail: any) => void): () => void;
+  /** Add a viewport command (`set_storey`, …) that MCP, the WebSocket and an embedding page can call. */
+  registerCommand(name: string, fn: (args: any) => any): void;
 }
 
 const plugins: Plugin[] = [];

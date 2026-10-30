@@ -538,6 +538,11 @@ fn import_house(doc: &mut Document, data: &Value) -> Result<OpResult, OpError> {
         }
     }
     save_settings(doc, &s);
+    // a re-import replaces the construction entities of the previous one (`replace: false` keeps them);
+    // faces, groups, guides, sections and other plugins' entities drawn alongside stay
+    if data.get("replace").and_then(|v| v.as_bool()).unwrap_or(true) {
+        doc.entities.retain(|e| match e { Entity::Custom(c) if c.type_.starts_with("construction.") => { r.removed.push(c.id.clone()); false } _ => true });
+    }
     let types = script::available_types(&s);
     let count = s.count();
     let lvl = |v: &Value| v.get("level").and_then(|x| x.as_u64()).map(|x| (x as usize).min(count - 1)).unwrap_or(0);

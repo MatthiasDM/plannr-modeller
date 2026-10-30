@@ -89,6 +89,14 @@ History, Plugins.
 **Light or dark:** View ▸ Theme (or the Display tray) switches between System, Light and Dark for the
 chrome and the viewport; the choice is remembered in the browser, and the front page shares it.
 
+## Embedding
+
+Another app can show a project in an iframe (`/app?project=<id>&embed=1&owner=<key>`): viewer mode
+with the looking, measuring and section tools only, driven over `postMessage` (storeys, views, zoom to
+an entity, selection, screenshots, any op). An app that keeps its own house model pushes it with the
+construction plugin's `import_house`, which replaces the previous import and leaves what was drawn
+beside it. See [docs/EMBED.md](docs/EMBED.md) and `web/public/embed-example.html`.
+
 ## MCP
 
 Every tool is an MCP tool with the same semantics (`draw_line`, `draw_rectangle`, `draw_circle`,

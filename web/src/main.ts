@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { Viewport, A, V, COLOR, type ViewName } from './scene';
 import { api, Live, type CompiledScene, type PluginInfo } from './api';
 import { findEntity, topLevelId, walk, type Document, type Op, type OpResult, type Scene } from './model';
-import { BUILTIN_TOOLS, placeComponentTool } from './tools';
+import { BUILTIN_TOOLS, EMBED_TOOLS, placeComponentTool } from './tools';
 import { zoomWindow } from './tools/arc';
 import type { Tool, ToolContext, Snap, SnapKind, SnapOptions, AxisLock, Plane } from './tools/base';
 import { AXIS, AXIS_COLOR, GROUND, MAGENTA, snapColor, snapLabel } from './tools/base';
@@ -48,6 +48,10 @@ export class App {
   tool: Tool = this.tools[0];
   options: ToolContext['options'] = { circleSegments: 24, gridSnap: true, material: 'default', layer: 'layer0' };
   display = { grid: true, axes: true, edges: true, figure: true, shadows: true };
+  /** Viewer mode (`?embed=1`): no menus or trays, the looking/measuring tools only, driven by the page that embeds it over postMessage. */
+  readonly embed = new URLSearchParams(location.search).has('embed');
+  /** Viewport commands added by plugins (see PluginHost.registerCommand). */
+  private commands = new Map<string, (args: any) => any>();
   /** Light or dark chrome and viewport; 'system' follows the OS. Kept in localStorage (index.html applies it before the first paint). */
   theme: Theme = readTheme();
   setTheme(t: Theme) {
@@ -183,6 +187,7 @@ export class App {
   setCameraController(c: CameraController | null) { if (this.camCtl && this.camCtl !== c) this.camCtl.release(); this.camCtl = c; }
 
   constructor(root: HTMLElement) {
+    if (this.embed) root.classList.add('embed');
     root.innerHTML = `<div class="menubar"></div><div class="toolbar"></div>
       <div class="toolbar-resizer" title="Drag to resize the tools · double-click to reset"></div><div class="dock-preview"></div>
       <div class="viewport"><div class="labels"></div><div class="view-hud"></div><div class="tool-options"></div><div class="lock-badge"></div><div class="toast"></div><div class="touch-bar"></div></div>
@@ -199,6 +204,7 @@ export class App {
     onPlugin(p => { this.tools.push(...(p.tools ?? [])); p.activate?.(this.pluginHost()); this.refreshUI(); });
     this.scene.expandIds = ids => { const out = new Set(ids); for (const id of ids) { const e = findEntity(this.doc, id); if (e?.kind === 'group') for (const { entity } of walk(e.entities)) out.add(entity.id); } return out; };
     this.refreshUI(); this.setTool('select');
+    if (this.embed) this.installEmbedBridge();
     this.boot();
   }
 
@@ -210,7 +216,11 @@ export class App {
     await this.loadPluginScripts();
     const q = new URLSearchParams(location.search).get('project');
     const last = q ?? localStorage.getItem('plannr.lastProject');
-    if (this.online && last) { try { await this.openProject(last); return; } catch { /* fall through */ } }
+    if (this.online && last) {
+      try { await this.openProject(last); this.post({ event: 'ready', project: this.projectId, name: this.projectName, version: this.doc.version }); return; }
+      catch (e: any) { if (this.embed) { this.toast(`Cannot open project: ${e.message ?? e}`); this.post({ event: 'error', message: String(e.message ?? e) }); return; } }
+    }
+    if (this.embed) { this.toast('No project: add ?project=<id> to the URL'); this.post({ event: 'error', message: 'no project' }); return; }
     this.showWelcome();
   }
   /** Load the browser bundle of every engine plugin that ships one. */
@@ -322,7 +332,7 @@ export class App {
   selectAll() { this.select((this.enteredGroup ? (findEntity(this.doc, this.enteredGroup) as any)?.entities ?? [] : this.doc.entities).map((e: any) => e.id)); }
   enterGroup(id: string) { const e = findEntity(this.doc, id); const g = e?.kind === 'group' ? e : null; if (!g) return; this.enteredGroup = g.id; this.select([]); this.toast(`Editing group “${g.name}” — Esc to close`); this.refreshUI(); }
   exitGroup() { if (!this.enteredGroup) return; this.enteredGroup = null; this.select([]); this.refreshUI(); }
-  async deleteSelection() { if (!this.selection.size) return; const ids = [...this.selection]; this.selection.clear(); await this.commitOps([{ op: 'erase', ids }], 'Erase'); }
+  async deleteSelection() { if (!this.selection.size) return; const ids = [...this.selection]; if (this.embed && ids.some(id => findEntity(this.doc, id)?.kind !== 'section')) return; /* a viewer only erases its own section planes */ this.selection.clear(); await this.commitOps([{ op: 'erase', ids }], 'Erase'); }
   /** A 2D slice: the model's cut lines at section plane `id`, as a new group of edges in the plane. */
   async sliceSection(id: string) {
     try {
@@ -372,6 +382,7 @@ export class App {
   // ---- tools ---------------------------------------------------------------------------------
   setTool(id: string) {
     const t = this.tools.find(t => t.id === id); if (!t) return;
+    if (this.embed && !EMBED_TOOLS.has(id)) return;
     this.tool.deactivate?.(this.ctx); this.scene.clearOverlay(); this.scene.setSnapMarker(null); this.setLock(null);
     this.tool = t; t.activate?.(this.ctx);
     this.scene.renderer.domElement.style.cursor = t.cursor;
@@ -423,6 +434,7 @@ export class App {
       setCameraController: (c) => this.setCameraController(c), cameraController: () => this.camCtl,
       simulatePointer: (kind, x, y, button = 0) => this.simulatePointer(kind, x, y, button), canvas: () => this.scene.renderer.domElement,
       on: (ev, h) => { this.listeners[ev].add(h); return () => this.listeners[ev].delete(h); },
+      registerCommand: (name, fn) => { this.commands.set(name, fn); },
     };
   }
   private emit(ev: string, d: any) { this.listeners[ev]?.forEach(h => { try { h(d); } catch (e) { console.error(e); } }); }
@@ -596,9 +608,29 @@ export class App {
       case 'set_options': for (const k of ['grid', 'axes', 'edges', 'figure', 'shadows'] as const) { const key = ({ grid: 'gridVisible', axes: 'axesVisible', edges: 'edgesVisible', figure: 'figureVisible', shadows: 'shadows' })[k]; if (a[key] !== undefined && !!a[key] !== this.display[k]) this.toggleDisplay(k); }
         if (Array.isArray(a.xray)) { this.scene.setXray(a.xray.map(String)); this.emit('xray', this.scene.xrayMaterials); }
         return { ...this.display, xray: this.scene.xrayMaterials };
-      default: throw new Error(`unknown viewport command ${name}`);
+      case 'open_project': await this.openProject(a.id); return { project: this.projectId, name: this.projectName, version: this.doc.version };
+      case 'get_document': return this.doc;
+      case 'ops': { const r = await this.commitOps(a.ops ?? [], a.label ?? 'Ops'); return { results: r, version: this.doc.version }; }
+      default: { const fn = this.commands.get(name); if (!fn) throw new Error(`unknown viewport command ${name}`); return await fn(a ?? {}); }
     }
   }
+  /** The embed bridge: the page that embeds the viewer (an iframe) sends `{ type: 'plannr', id, command, args }`
+   *  and gets `{ type: 'plannr', id, result | error }` back; events (`ready`, `selection`, `changed`, `tool`)
+   *  arrive as `{ type: 'plannr', event, … }`. `?origin=<https://host>` restricts who may talk to it. */
+  private embedOrigin: string | null = null;
+  private installEmbedBridge() {
+    this.embedOrigin = new URLSearchParams(location.search).get('origin');
+    window.addEventListener('message', async (ev) => {
+      const m = ev.data; if (!m || m.type !== 'plannr' || typeof m.command !== 'string') return;
+      if (this.embedOrigin && ev.origin !== this.embedOrigin) return;
+      const reply = (body: any) => (ev.source as Window | null)?.postMessage({ type: 'plannr', id: m.id, ...body }, ev.origin || '*');
+      try { reply({ result: await this.handleCommand(m.command, m.args ?? {}) }); } catch (e: any) { reply({ error: String(e?.message ?? e) }); }
+    });
+    this.listeners.selection.add(ids => this.post({ event: 'selection', ids }));
+    this.listeners.changed.add(doc => this.post({ event: 'changed', version: doc.version }));
+    this.listeners.tool.add(tool => this.post({ event: 'tool', tool }));
+  }
+  private post(body: any) { if (!this.embed || window.parent === window) return; window.parent.postMessage({ type: 'plannr', ...body }, this.embedOrigin ?? '*'); }
   private state() { return { camera: this.scene.cam.serialize(), selection: [...this.selection], tool: this.tool.id, hover: this.hover, version: this.doc.version, enteredGroup: this.enteredGroup, display: this.display }; }
   private sendState() { this.live?.sendState({ camera: this.scene.cam.serialize(), selection: [...this.selection], tool: this.tool.id, hover: this.hover }); }
 

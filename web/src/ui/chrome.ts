@@ -1,7 +1,7 @@
 import { THEMES, type App, type Theme } from '../main';
 const THEME_LABEL: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
 import { icon } from './icons';
-import { TOOLBAR } from '../tools';
+import { TOOLBAR, EMBED_TOOLS } from '../tools';
 import { getPlugins } from '../plugins';
 import type { ProjectSummary } from '../api';
 
@@ -79,7 +79,8 @@ export function renderMenubar(app: App, el: HTMLElement) {
 const holdName: Record<string, string> = { Control: 'Ctrl', Alt: '⌥', Shift: '⇧', Meta: '⌘' };
 
 export function renderToolbar(app: App, el: HTMLElement) {
-  const groups: { ids: string[]; plugin?: { name: string; accent: string } }[] = [...TOOLBAR.map(ids => ({ ids })), ...getPlugins().flatMap(p => (p.toolbar ?? (p.tools?.length ? [p.tools.map(t => t.id)] : [])).map(ids => ({ ids, plugin: { name: p.name, accent: p.accent ?? '#8e44ad' } })))];
+  let groups: { ids: string[]; plugin?: { name: string; accent: string } }[] = [...TOOLBAR.map(ids => ({ ids })), ...getPlugins().flatMap(p => (p.toolbar ?? (p.tools?.length ? [p.tools.map(t => t.id)] : [])).map(ids => ({ ids, plugin: { name: p.name, accent: p.accent ?? '#8e44ad' } })))];
+  if (app.embed) groups = groups.filter(g => !g.plugin).map(g => ({ ids: g.ids.filter(id => EMBED_TOOLS.has(id)) })).filter(g => g.ids.length);
   const top = document.getElementById('app')?.classList.contains('dock-top');
   el.innerHTML = `<button class="toolbar-grip" title="Drag to move the tools to the ${top ? 'left' : 'top'} · tap to switch">${top ? '⋮' : '⋯'}</button><div class="groups">` + groups.map(g => `<div class="group ${g.plugin ? 'plugin' : ''}" style="--n:${g.ids.length};${g.plugin ? `--plugin-accent:${g.plugin.accent}` : ''}" ${g.plugin ? `title="${esc(g.plugin.name)} plugin"` : ''}>${g.ids.map(id => {
     const t = app.tools.find(t => t.id === id);

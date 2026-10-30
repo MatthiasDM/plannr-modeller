@@ -45,6 +45,20 @@ fn max_y(s: &plannr_core::CompiledScene, prefix: &str) -> f64 {
 fn room4(d: &mut Document) -> String { op(d, "add_room", json!({ "name": "Box", "level": 0, "origin": [0, 0], "size": [4, 4] })).created[0].clone() }
 
 #[test]
+fn importing_again_replaces_the_construction_entities_and_keeps_what_was_drawn_beside_them() {
+    let mut d = imported();
+    let rooms = customs(&d, "construction.room").len();
+    apply(&mut d, &Op::DrawRectangle { corner: [20.0, 0.0, 20.0], opposite: [22.0, 0.0, 22.0], normal: [0.0, 1.0, 0.0], u: None, layer: None, material: None }, &reg()).unwrap();
+    let faces = d.entities.iter().filter(|e| matches!(e, Entity::Face(_))).count();
+    let r = op(&mut d, "import_house", json!({ "house": house() }));
+    assert_eq!(customs(&d, "construction.room").len(), rooms, "the same rooms, not twice as many");
+    assert_eq!(d.entities.iter().filter(|e| matches!(e, Entity::Face(_))).count(), faces, "the face drawn beside the house stays");
+    assert!(!r.removed.is_empty() && r.created.len() == r.removed.len());
+    op(&mut d, "import_house", json!({ "house": house(), "replace": false }));
+    assert_eq!(customs(&d, "construction.room").len(), rooms * 2, "replace: false appends");
+}
+
+#[test]
 fn import_house_counts() {
     let d = imported();
     assert_eq!(customs(&d, "construction.room").len(), 13);

@@ -72,7 +72,7 @@ Face keys (`<id>#<key>`): room → `floor`, `ceiling`, `wall.<edge>` (both faces
 | `add_run` | `level`, `system`, `points`, `diameter?` | |
 | `update` | `id`, `patch` | deep-merges `patch` into the entity's `data` (arrays replaced) |
 | `set_finish` | `id`, `face`, `material` | sets `data.finishes[face]` (`floor`, `ceiling`, `wall.<edge>.interior/exterior`, `interior`, `exterior`, `roof`) |
-| `import_house` | `house: <Uzzetje HouseModel JSON>` | converts a native Uzzetje document (floors, rooms, polyRooms, walls, openings with `roomEdge`/`polyEdge`/`wall` refs, roof + roofVolumes, fixtures, runs, cavity, finishes) into plugin entities; plan `[x, y]` → `[x, z]` |
+| `import_house` | `house: <Uzzetje HouseModel JSON>`, `replace: true` | replaces the construction entities of the previous import (`replace: false` appends); faces, groups, guides, sections and other plugins' entities stay; converts a native Uzzetje document (floors, rooms, polyRooms, walls, openings with `roomEdge`/`polyEdge`/`wall` refs, roof + roofVolumes, fixtures, runs, cavity, finishes) into plugin entities; plan `[x, y]` → `[x, z]` |
 | `summary` | — | no change; returns per-storey rooms with areas, wall lengths, opening counts |
 
 Every op returns the usual `OpResult` (`created` / `modified` / `removed`, plus `entities`).

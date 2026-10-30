@@ -458,6 +458,9 @@ P.registerPlugin({
   beforeMove,
   activate(h) {
     host = h; masonryActivate(h); h.mount(floorBar); renderFloorBar(); void loadCatalogue(h.ctx).then(() => h.refresh());
+    h.registerCommand?.('get_storeys', () => ({ level: state.level, isolated: !!state.isolateSection, storeys: ext(h.document()).storeys.map((s, i) => ({ index: i, name: s.name, height: s.height })) }));
+    h.registerCommand?.('set_storey', (a) => { const n = ext(h.document()).storeys.length; const i = Math.max(0, Math.min(n - 1, Math.round(+a.level || 0))); setLevel(i); return { level: i }; });
+    h.registerCommand?.('isolate_storey', async (a) => { await isolate(a.on !== false); return { level: state.level, isolated: !!state.isolateSection }; });
     h.on('changed', () => { const doc = h.document(); const x = ext(doc); if (state.level >= x.storeys.length) state.level = Math.max(0, x.storeys.length - 1); const iso = doc.entities.find(e => e.kind === 'section' && (e as any).isolate === true && e.active); state.isolateSection = iso ? iso.id : (state.isolateSection && doc.entities.some(e => e.id === state.isolateSection) ? state.isolateSection : null); renderFloorBar(); });
   },
 });

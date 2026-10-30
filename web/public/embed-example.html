@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plannr embed example</title>
+<style>
+  body { margin: 0; font: 14px system-ui, sans-serif; display: grid; grid-template-rows: auto 1fr; height: 100vh; background: #f3f4f6; color: #1b1b1b; }
+  header { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: #fff; border-bottom: 1px solid #ddd; flex-wrap: wrap; }
+  button, select { font: inherit; padding: 4px 10px; }
+  iframe { border: 0; width: 100%; height: 100%; }
+  #log { margin-left: auto; color: #666; font-size: 12px; max-width: 40vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  img { height: 28px; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+<header>
+  <b>Plannr viewer</b>
+  <select id="storey"></select>
+  <label><input type="checkbox" id="isolate"> Isolate storey</label>
+  <button data-view="iso">Iso</button><button data-view="top">Top</button><button data-view="front">Front</button>
+  <button id="extents">Zoom extents</button>
+  <button id="shot">Screenshot</button><img id="thumb" alt="" hidden>
+  <span id="log">loading…</span>
+</header>
+<iframe id="frame" allow="fullscreen"></iframe>
+<script>
+  const q = new URLSearchParams(location.search); const project = q.get('project'); const owner = q.get('owner');
+  const frame = document.getElementById('frame'); const log = (t) => document.getElementById('log').textContent = t;
+  if (!project) log('add ?project=<id>[&owner=<key>] to the URL');
+  frame.src = `/app?project=${encodeURIComponent(project ?? '')}&embed=1${owner ? `&owner=${encodeURIComponent(owner)}` : ''}&origin=${encodeURIComponent(location.origin)}`;
+  let seq = 0; const pending = new Map();
+  window.addEventListener('message', async (ev) => {
+    const m = ev.data; if (!m || m.type !== 'plannr') return;
+    if (m.event) { log(`event: ${m.event}${m.message ? ' · ' + m.message : ''}${m.ids ? ' · ' + m.ids.length + ' selected' : ''}`); if (m.event === 'ready') await storeys(); return; }
+    const p = pending.get(m.id); if (!p) return; pending.delete(m.id); m.error ? p.reject(new Error(m.error)) : p.resolve(m.result);
+  });
+  const plannr = (command, args = {}) => new Promise((resolve, reject) => { const id = ++seq; pending.set(id, { resolve, reject }); frame.contentWindow.postMessage({ type: 'plannr', id, command, args }, '*'); });
+  async function storeys() {
+    try { const s = await plannr('get_storeys'); const sel = document.getElementById('storey'); sel.innerHTML = s.storeys.map(x => `<option value="${x.index}" ${x.index === s.level ? 'selected' : ''}>${x.name}</option>`).join(''); }
+    catch (e) { log(`no storeys: ${e.message}`); }
+  }
+  document.getElementById('storey').onchange = (e) => plannr('set_storey', { level: +e.target.value }).then(r => log(`storey ${r.level}`));
+  document.getElementById('isolate').onchange = (e) => plannr('isolate_storey', { on: e.target.checked }).then(r => log(`isolated: ${r.isolated}`));
+  document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => plannr('set_view', { view: b.dataset.view }));
+  document.getElementById('extents').onclick = () => plannr('zoom_extents');
+  document.getElementById('shot').onclick = async () => { const r = await plannr('screenshot', { width: 800, height: 500 }); const img = document.getElementById('thumb'); img.src = 'data:image/png;base64,' + r.png; img.hidden = false; log(`screenshot ${r.width}×${r.height}`); };
+</script>
+</body>
+</html>
