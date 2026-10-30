@@ -27,7 +27,7 @@ export interface PluginInfo { id: string; name: string; entityTypes: string[]; o
 export const owner: string = (() => {
   const k = 'plannr.owner';
   const given = new URLSearchParams(location.search).get('owner'); // an embedding app passes the key it manages (not stored)
-  if (given && /^[A-Za-z0-9_-]{8,128}$/.test(given)) return given;
+  if (given && /^[A-Za-z0-9-]{16,64}$/.test(given)) return given; // the server's rule (routes.rs)
   try {
     let v = localStorage.getItem(k);
     if (!v) { v = (crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9-]/g, ''); localStorage.setItem(k, v); }

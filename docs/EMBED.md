@@ -15,7 +15,7 @@ https://plannr.example.org/app?project=<id>&embed=1&owner=<key>[&origin=https://
 |---|---|
 | `project` | the Plannr project to show |
 | `embed=1` | viewer mode: no menus, trays or status bar; the tools are Select, Orbit, Pan, Zoom, Zoom Window, Zoom Extents, Section Plane and Tape Measure; the storey bar and the Iso / Top / Front / Right buttons stay. Delete only removes section planes the viewer made. |
-| `owner` | on a public instance, the owner key the project was made with (8–128 characters of `A-Z a-z 0-9 _ -`). The embedding app manages this key and sends it as `X-Plannr-Owner` on its own REST calls; it is not stored in the browser. A private instance ignores it. |
+| `owner` | on a public instance, the owner key the project was made with (16–64 characters of `A-Z a-z 0-9 -`, e.g. a UUID). The embedding app manages this key and sends it as `X-Plannr-Owner` on its own REST calls; it is not stored in the browser. A private instance ignores it. |
 | `origin` | optional: only messages from this origin are accepted, and events go only there. Without it any parent page may talk to the viewer. |
 
 ## Messages
