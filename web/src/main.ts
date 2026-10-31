@@ -1,6 +1,6 @@
 import './style.css';
 import * as THREE from 'three';
-import { Viewport, A, V, COLOR, type ViewName } from './scene';
+import { Viewport, A, V, COLOR, type ViewName, FACE_STYLES, type FaceStyle } from './scene';
 import { api, Live, type CompiledScene, type PluginInfo } from './api';
 import { findEntity, topLevelId, walk, type Document, type Op, type OpResult, type Scene } from './model';
 import { BUILTIN_TOOLS, EMBED_TOOLS, placeComponentTool } from './tools';
@@ -48,6 +48,21 @@ export class App {
   tool: Tool = this.tools[0];
   options: ToolContext['options'] = { circleSegments: 24, gridSnap: true, material: 'default', layer: 'layer0' };
   display = { grid: true, axes: true, edges: true, figure: true, shadows: true };
+  /** Face style and back edges are kept in this browser, like the theme. Hidden geometry on show is a view of this session. */
+  faceStyle: FaceStyle = (() => { try { const v = localStorage.getItem('plannr.faceStyle'); return FACE_STYLES.some(s => s.id === v) ? v as FaceStyle : 'shaded'; } catch { return 'shaded'; } })();
+  backEdges = (() => { try { return localStorage.getItem('plannr.backEdges') === '1'; } catch { return false; } })();
+  hiddenGeometry = false;
+  setFaceStyle(s: FaceStyle) { this.faceStyle = s; this.scene.setFaceStyle(s); this.scene.highlight(this.selection); try { localStorage.setItem('plannr.faceStyle', s); } catch { /* storage blocked */ } this.refreshUI(); renderHud(this, this.els['view-hud']); }
+  setBackEdges(on: boolean) { this.backEdges = on; this.scene.setBackEdges(on); try { localStorage.setItem('plannr.backEdges', on ? '1' : '0'); } catch { /* storage blocked */ } this.refreshUI(); }
+  async setHiddenGeometry(on: boolean) { this.hiddenGeometry = on; await this.refresh(); }
+  /** What Edit → Unhide → Last brings back. */
+  private lastHidden: string[] = [];
+  get hiddenIds(): string[] { return [...walk(this.doc.entities)].filter(x => x.entity.hidden === true).map(x => x.entity.id); }
+  async hideSelection() { const ids = [...this.selection]; if (!ids.length) return; await this.commitOps([{ op: 'set_hidden', ids, hidden: true }], 'Hide'); this.lastHidden = ids; this.select([]); }
+  async unhideSelected() { const ids = [...this.selection].filter(id => findEntity(this.doc, id)?.hidden === true); if (ids.length) await this.commitOps([{ op: 'set_hidden', ids, hidden: false }], 'Unhide'); }
+  async unhideLast() { const ids = this.lastHidden.filter(id => findEntity(this.doc, id)?.hidden === true); if (ids.length) { await this.commitOps([{ op: 'set_hidden', ids, hidden: false }], 'Unhide'); this.lastHidden = []; } }
+  async unhideAll() { const ids = this.hiddenIds; if (ids.length) await this.commitOps([{ op: 'set_hidden', ids, hidden: false }], 'Unhide all'); }
+  async toggleHidden(id: string) { const e = findEntity(this.doc, id); if (e) await this.commitOps([{ op: 'set_hidden', ids: [id], hidden: e.hidden !== true }], e.hidden === true ? 'Unhide' : 'Hide'); }
   /** Viewer mode (`?embed=1`): no menus or trays, the looking/measuring tools only, driven by the page that embeds it over postMessage. */
   readonly embed = new URLSearchParams(location.search).has('embed');
   /** Viewport commands added by plugins (see PluginHost.registerCommand). */
@@ -203,6 +218,7 @@ export class App {
     this.scene.start();
     onPlugin(p => { this.tools.push(...(p.tools ?? [])); p.activate?.(this.pluginHost()); this.refreshUI(); });
     this.scene.expandIds = ids => { const out = new Set(ids); for (const id of ids) { const e = findEntity(this.doc, id); if (e?.kind === 'group') for (const { entity } of walk(e.entities)) out.add(entity.id); } return out; };
+    this.scene.faceStyle = this.faceStyle; this.scene.backEdges = this.backEdges;
     this.refreshUI(); this.setTool('select');
     if (this.embed) this.installEmbedBridge();
     this.boot();
@@ -261,7 +277,7 @@ export class App {
     if (!this.projectId) return;
     const seq = ++this.compileSeq;
     try {
-      const [p, c, h] = await Promise.all([api.getProject(this.projectId), api.compile(this.projectId), api.history(this.projectId)]);
+      const [p, c, h] = await Promise.all([api.getProject(this.projectId), api.compile(this.projectId, this.hiddenGeometry), api.history(this.projectId)]);
       if (seq !== this.compileSeq) return;
       this.doc = p.document; this.projectName = p.name; this.historyList = h;
       const cur = h.findIndex(x => x.version === this.doc.version); this.canUndo = h.length > 0; this.canRedo = h.length > 0; void cur;
@@ -309,10 +325,10 @@ export class App {
     if (!ops.length) { this.clearPreview(); return; }
     this.previewTimer = setTimeout(async () => {
       const seq = ++this.previewSeq;
-      try { const c = await api.preview(this.projectId!, ops); if (seq === this.previewSeq && this.previewSeq > 0) this.applyCompiled(c); } catch { /* invalid intermediate state: ignore */ }
+      try { const c = await api.preview(this.projectId!, ops, this.hiddenGeometry); if (seq === this.previewSeq && this.previewSeq > 0) this.applyCompiled(c); } catch { /* invalid intermediate state: ignore */ }
     }, 30);
   }
-  private clearPreview() { clearTimeout(this.previewTimer); if (this.previewSeq > 0) { this.previewSeq = 0; if (this.projectId) api.compile(this.projectId).then(c => { if (this.previewSeq === 0) this.applyCompiled(c); }).catch(() => {}); } }
+  private clearPreview() { clearTimeout(this.previewTimer); if (this.previewSeq > 0) { this.previewSeq = 0; if (this.projectId) api.compile(this.projectId, this.hiddenGeometry).then(c => { if (this.previewSeq === 0) this.applyCompiled(c); }).catch(() => {}); } }
   async undo() { if (!this.projectId) return; try { const r = await api.undo(this.projectId); this.toast(`Undo ${r.label}`); await this.refresh(); } catch (e: any) { this.toast(e.message); } }
   async redo() { if (!this.projectId) return; try { const r = await api.redo(this.projectId); this.toast(`Redo ${r.label}`); await this.refresh(); } catch (e: any) { this.toast(e.message); } }
 
@@ -607,7 +623,10 @@ export class App {
       case 'zoom_window': this.setCameraController(null); this.rememberView(); zoomWindow(this.ctx, a.x0 ?? 0, a.y0 ?? 0, a.x1 ?? 1, a.y1 ?? 1); await new Promise(r => setTimeout(r, 450)); this.rememberView(); return { camera: cam.serialize() };
       case 'set_options': for (const k of ['grid', 'axes', 'edges', 'figure', 'shadows'] as const) { const key = ({ grid: 'gridVisible', axes: 'axesVisible', edges: 'edgesVisible', figure: 'figureVisible', shadows: 'shadows' })[k]; if (a[key] !== undefined && !!a[key] !== this.display[k]) this.toggleDisplay(k); }
         if (Array.isArray(a.xray)) { this.scene.setXray(a.xray.map(String)); this.emit('xray', this.scene.xrayMaterials); }
-        return { ...this.display, xray: this.scene.xrayMaterials };
+        if (a.faceStyle !== undefined) { if (!FACE_STYLES.some(s => s.id === a.faceStyle)) throw new Error(`unknown face style ${a.faceStyle}`); this.setFaceStyle(a.faceStyle); }
+        if (a.backEdges !== undefined) this.setBackEdges(!!a.backEdges);
+        if (a.hiddenGeometry !== undefined && !!a.hiddenGeometry !== this.hiddenGeometry) await this.setHiddenGeometry(!!a.hiddenGeometry);
+        return { ...this.display, xray: this.scene.xrayMaterials, faceStyle: this.faceStyle, backEdges: this.backEdges, hiddenGeometry: this.hiddenGeometry };
       case 'open_project': await this.openProject(a.id); return { project: this.projectId, name: this.projectName, version: this.doc.version };
       case 'get_document': return this.doc;
       case 'ops': { const r = await this.commitOps(a.ops ?? [], a.label ?? 'Ops'); return { results: r, version: this.doc.version }; }
@@ -739,6 +758,8 @@ export class App {
       const mod = e.metaKey || e.ctrlKey; const k = e.altKey && e.code.startsWith('Key') ? e.code.slice(3).toLowerCase() : e.key.toLowerCase(); // ⌥+letter works as the letter (walking mode uses bare letters to move)
       if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
       if (mod && k === 'a') { e.preventDefault(); this.selectAll(); return; }
+      if (mod && k === 'e') { e.preventDefault(); e.shiftKey ? this.unhideAll() : this.hideSelection(); return; }
+      if (e.altKey && !mod && /^Digit[1-5]$/.test(e.code)) { e.preventDefault(); this.setFaceStyle(FACE_STYLES[+e.code.slice(5) - 1].id); return; }
       if (mod && (k === 'n' || k === 'o')) { e.preventDefault(); this.showWelcome(); return; }
       if (mod && e.key === '[') { e.preventDefault(); this.previousView(); return; }
       if (mod && e.key === ']') { e.preventDefault(); this.nextView(); return; }

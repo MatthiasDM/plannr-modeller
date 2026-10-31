@@ -90,9 +90,15 @@ pub struct CompiledScene {
 pub struct CompileOptions {
     /// Ignore active section planes.
     pub ignore_sections: bool,
+    /// Draw hidden entities as ghosts (View → Hidden Geometry) instead of leaving them out.
+    pub show_hidden: bool,
 }
 
 const BACK_ID: &str = "back";
+/// The material group of ghosts (hidden geometry on show).
+const GHOST_ID: &str = "__hidden";
+const GHOST_COLOR: &str = "#8a93a0";
+const GHOST_OPACITY: f64 = 0.22;
 
 struct Builder<'a> {
     doc: &'a Document,
@@ -102,6 +108,8 @@ struct Builder<'a> {
     out: CompiledScene,
     /// Every active section plane (world origin, normal): what remains is what all of them keep.
     cuts: Vec<(P3, P3)>,
+    show_hidden: bool,
+    ghost: usize,
     bb: Option<(P3, P3)>,
     hidden: Vec<String>,
     /// `<instanceId>#` while expanding an instance, so its faces resolve to the instance.
@@ -113,11 +121,11 @@ struct Builder<'a> {
 
 impl<'a> Builder<'a> {
     fn group_index(&mut self, material: Option<&str>, back: bool) -> usize {
-        let (id, name, color, opacity) = match material.and_then(|m| self.doc.material_by_ref(m)) {
+        let (id, name, color, opacity) = if self.ghost > 0 { (GHOST_ID.to_string(), "Hidden geometry".to_string(), GHOST_COLOR.to_string(), GHOST_OPACITY) } else { match material.and_then(|m| self.doc.material_by_ref(m)) {
             Some(m) => (m.id.clone(), m.name.clone(), m.color.clone(), m.opacity),
             None if back => (BACK_ID.to_string(), "Back face".to_string(), BACK_FACE_COLOR.to_string(), 1.0),
             None => { let m = self.doc.default_material(); (m.id.clone(), m.name.clone(), m.color.clone(), m.opacity) }
-        };
+        } };
         let key = (id.clone(), back);
         if let Some(i) = self.by_key.get(&key) { return *i; }
         self.groups.push(CompiledGroup { material: id, name, color, opacity, back, ..Default::default() });
@@ -217,6 +225,20 @@ impl<'a> Builder<'a> {
 
     fn entity(&mut self, e: &Entity, m: &Mat4) {
         if self.hidden.iter().any(|h| h == e.layer()) { return; }
+        if e.hidden() {
+            if !self.show_hidden || matches!(e, Entity::Guide(_) | Entity::Dimension(_) | Entity::Text(_) | Entity::Section(_)) { return; }
+            // a ghost: drawn and pickable, but it does not count in the metrics
+            let metrics = self.out.metrics.clone();
+            self.ghost += 1;
+            self.entity_inner(e, m);
+            self.ghost -= 1;
+            self.out.metrics = metrics;
+            return;
+        }
+        self.entity_inner(e, m);
+    }
+
+    fn entity_inner(&mut self, e: &Entity, m: &Mat4) {
         match e {
             Entity::Face(f) => self.face(f, m),
             Entity::Edge(ed) => {
@@ -276,7 +298,7 @@ pub fn compile(doc: &Document, reg: &Registry, opts: &CompileOptions) -> Compile
             }
         });
     }
-    let mut b = Builder { doc, groups: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cuts, bb: None, hidden, prefix: String::new(), depth: 0, centers: HashSet::new() };
+    let mut b = Builder { doc, groups: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cuts, show_hidden: opts.show_hidden, ghost: 0, bb: None, hidden, prefix: String::new(), depth: 0, centers: HashSet::new() };
     b.out.metrics.definitions = doc.components.len();
     let m = mat_identity();
     for e in &doc.entities { b.entity(e, &m); }

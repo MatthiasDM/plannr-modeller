@@ -67,6 +67,7 @@ fn tools(state: &Shared) -> Vec<ToolDef> {
         tool("scale", "Scale entities about `origin` by per-axis factors.", json!({ "ids": ids("Entity ids"), "origin": pt("Scale origin"), "factors": pt("[sx, sy, sz]") }), &["ids", "origin", "factors"], Kind::Op("scale")),
         tool("copy", "Duplicate entities, each copy offset by `delta` more than the previous one.", json!({ "ids": ids("Entity ids"), "delta": pt("Offset per copy"), "count": { "type": "integer", "description": "Number of copies (default 1)" } }), &["ids", "delta"], Kind::Op("copy")),
         tool("erase", "Remove entities (a group with its children).", json!({ "ids": ids("Entity ids") }), &["ids"], Kind::Op("erase")),
+        tool("set_hidden", "Hide or show entities (Edit → Hide): a group or component with everything in it, a face, an edge, a plugin entity. Hidden geometry stays in the document but is left out of the view, slices and exports.", json!({ "ids": ids("Entity ids"), "hidden": b("true hides, false shows") }), &["ids", "hidden"], Kind::Op("set_hidden")),
         tool("paint", "Apply a material to faces (or every face inside a group). `material` may be a material id, a name, or a #rrggbb colour (created on the fly).", json!({ "ids": ids("Face or group ids"), "material": s("Material id, name or #hex"), "side": { "type": "string", "enum": ["front", "back", "both"], "description": "Which side (default front)" } }), &["ids", "material"], Kind::Op("paint")),
         tool("set_layer", "Move entities to a layer.", json!({ "ids": ids("Entity ids"), "layer": s("Layer id or name") }), &["ids", "layer"], Kind::Op("set_layer")),
         tool("make_group", "Wrap top-level entities in a group.", json!({ "ids": ids("Entity ids"), "name": s("Group name") }), &["ids"], Kind::Op("make_group")),
@@ -110,7 +111,7 @@ fn tools(state: &Shared) -> Vec<ToolDef> {
         tool("select", "Set the browser selection.", json!({ "ids": ids("Entity ids"), "mode": { "type": "string", "enum": ["replace", "add", "toggle"] } }), &["ids"], Kind::Viewport("select")),
         tool("activate_tool", "Activate a browser tool (select, eraser, line, rectangle, circle, polygon, pushpull, offset, move, rotate, scale, tape, text, dimension, paint, orbit, pan, zoom, section, or a plugin tool).", json!({ "tool": s("Tool id") }), &["tool"], Kind::Viewport("activate_tool")),
         tool("get_view_state", "Camera, selection, hover and active tool of the browser.", json!({}), &[], Kind::Viewport("get_state")),
-        tool("set_options", "Toggle browser display options. `xray` lists material ids drawn through everything in front of them (e.g. [\"electrical.conduit\", \"electrical.cable\"] shows conduits inside walls; [] turns it off).", json!({ "gridVisible": b("Grid"), "axesVisible": b("Axes"), "edgesVisible": b("Black edges"), "shadows": b("Shadows"), "xray": { "type": "array", "items": { "type": "string" }, "description": "Material ids to draw in X-ray" } }), &[], Kind::Viewport("set_options")),
+        tool("set_options", "Toggle browser display options. `faceStyle` sets how the whole model is drawn. `xray` lists material ids drawn through everything in front of them (e.g. [\"electrical.conduit\", \"electrical.cable\"] shows conduits inside walls; [] turns it off).", json!({ "gridVisible": b("Grid"), "axesVisible": b("Axes"), "edgesVisible": b("Black edges"), "shadows": b("Shadows"), "faceStyle": { "type": "string", "enum": ["shaded", "monochrome", "hiddenline", "wireframe", "xray"], "description": "Face style of the whole model, as in SketchUp" }, "backEdges": b("Dashed lines for the edges behind faces"), "hiddenGeometry": b("Show hidden entities as ghosts"), "xray": { "type": "array", "items": { "type": "string" }, "description": "Material ids to draw in X-ray" } }), &[], Kind::Viewport("set_options")),
     ];
     for p in state.registry.list() {
         for op in p.ops {
@@ -274,7 +275,7 @@ async fn builtin(s: &Shared, name: &str, id: &str, args: &Map<String, Value>) ->
         }
         "export_glb" => {
             let p = s.db.get(id).map_err(api)?;
-            let scene = s.compile(id, &CompileOptions { ignore_sections: true }).map_err(api)?;
+            let scene = s.compile(id, &CompileOptions { ignore_sections: true, ..Default::default() }).map_err(api)?;
             let bytes = export_glb(&scene);
             let safe: String = p.name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
             let path = args.get("path").and_then(|v| v.as_str()).map(|p| p.to_string()).unwrap_or_else(|| format!("data/exports/{safe}.glb"));

@@ -172,6 +172,23 @@ impl Entity {
             Entity::Dimension(e) => e.layer = layer, Entity::Text(e) => e.layer = layer, Entity::Section(e) => e.layer = layer, Entity::Custom(e) => e.layer = layer, Entity::Instance(e) => e.layer = layer,
         }
     }
+    fn extra(&self) -> &Map<String, Value> {
+        match self {
+            Entity::Face(e) => &e.extra, Entity::Edge(e) => &e.extra, Entity::Group(e) => &e.extra, Entity::Guide(e) => &e.extra,
+            Entity::Dimension(e) => &e.extra, Entity::Text(e) => &e.extra, Entity::Section(e) => &e.extra, Entity::Custom(e) => &e.extra, Entity::Instance(e) => &e.extra,
+        }
+    }
+    fn extra_mut(&mut self) -> &mut Map<String, Value> {
+        match self {
+            Entity::Face(e) => &mut e.extra, Entity::Edge(e) => &mut e.extra, Entity::Group(e) => &mut e.extra, Entity::Guide(e) => &mut e.extra,
+            Entity::Dimension(e) => &mut e.extra, Entity::Text(e) => &mut e.extra, Entity::Section(e) => &mut e.extra, Entity::Custom(e) => &mut e.extra, Entity::Instance(e) => &mut e.extra,
+        }
+    }
+    /// Hidden with Edit → Hide: left out of the compiled scene, slices and exports (the data stays).
+    pub fn hidden(&self) -> bool { self.extra().get("hidden").and_then(|v| v.as_bool()).unwrap_or(false) }
+    pub fn set_hidden(&mut self, hidden: bool) {
+        if hidden { self.extra_mut().insert("hidden".into(), Value::Bool(true)); } else { self.extra_mut().remove("hidden"); }
+    }
     pub fn kind(&self) -> &'static str {
         match self {
             Entity::Face(_) => "face", Entity::Edge(_) => "edge", Entity::Group(_) => "group", Entity::Guide(_) => "guide",

@@ -1,7 +1,13 @@
 // Line icons in the spirit of SketchUp's tool set. 24×24, stroke-based, axis colour hints.
 const S = 'fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"';
 const wrap = (body: string) => `<svg viewBox="0 0 24 24" ${S}>${body}</svg>`;
+const CUBE = 'M12 3l8 4.5v9L12 21l-8-4.5v-9z', CUBE_IN = 'M12 12l8-4.5M12 12v9M12 12L4 7.5';
 export const ICONS: Record<string, string> = {
+  styleShaded: wrap(`<path d="${CUBE}" fill="#9db8d9"/><path d="M12 12l8-4.5v9L12 21z" fill="#6f8fb5"/><path d="${CUBE_IN}"/>`),
+  styleMonochrome: wrap(`<path d="${CUBE}" fill="#e6e6e4"/><path d="M12 12l8-4.5v9L12 21z" fill="#b7bbc0"/><path d="${CUBE_IN}"/>`),
+  styleHiddenline: wrap(`<path d="${CUBE}" fill="#fff"/><path d="${CUBE_IN}"/>`),
+  styleWireframe: wrap(`<path d="${CUBE}"/><path d="${CUBE_IN}"/><path d="M12 3v9M4 16.5l8-4.5 8 4.5" stroke-width="1"/>`),
+  styleXray: wrap(`<path d="${CUBE}" fill="#9db8d9" fill-opacity=".4"/><path d="${CUBE_IN}"/><path d="M12 3v9M4 16.5l8-4.5 8 4.5" stroke-width="1" stroke-dasharray="1.6 1.6"/>`),
   select: wrap('<path d="M6 3l12 9-5 1.2 3.2 5.6-2.4 1.3L10.6 14.5 7 18z" fill="#fff"/>'),
   eraser: wrap('<path d="M4 15.5 13.5 6a2 2 0 0 1 2.8 0l3.7 3.7a2 2 0 0 1 0 2.8L13 19.5H8.5z" fill="#f6c8d2"/><path d="M8.5 19.5h11"/><path d="M9.5 10l5 5"/>'),
   line: wrap('<path d="M4 19 20 5"/><circle cx="4" cy="19" r="1.6" fill="#1e8e3e" stroke="none"/><circle cx="20" cy="5" r="1.6" fill="#1e8e3e" stroke="none"/>'),

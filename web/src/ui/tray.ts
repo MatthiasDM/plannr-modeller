@@ -1,3 +1,4 @@
+import { FACE_STYLES, type FaceStyle } from '../scene';
 import { MOD_LABEL, THEMES, type App, type ModKey, type Theme } from '../main';
 function loadCollapsed(): Set<string> { try { const v = JSON.parse(localStorage.getItem('plannr.trayCollapsed') ?? 'null'); if (v?.collapsed) return new Set([...v.collapsed, ...(v.known ?? []).filter((k: string) => !v.collapsed.includes(k)).map((k: string) => `!${k}`)]); } catch { /* ignore */ } return new Set(); }
 import { icon } from './icons';
@@ -49,7 +50,7 @@ export class Tray {
     if (ids.length > 1) {
       const kinds = ids.map(id => findEntity(a.doc, id)?.kind ?? '?');
       return `<div>${ids.length} entities selected <span class="muted">(${[...new Set(kinds)].join(', ')})</span></div>
-        <div class="btn-row"><button class="btn" data-act="group">${icon('group')} Make group</button><button class="btn" data-act="delete">${icon('trash')} Erase</button></div>`;
+        <div class="btn-row"><button class="btn" data-act="group">${icon('group')} Make group</button><button class="btn" data-act="hide">${icon('eyeOff')} Hide</button><button class="btn" data-act="delete">${icon('trash')} Erase</button></div>`;
     }
     const e = findEntity(a.doc, ids[0]); if (!e) return `<div class="empty">Unknown entity</div>`;
     if (e.kind === 'custom') { const pid = e.type.split('.')[0]; const p = getPlugins().find(p => p.id === pid); if (p?.renderEntity) return `<div data-plugin-entity="${pid}"></div>`; }
@@ -75,6 +76,7 @@ export class Tray {
         body += `<label>Definition</label><div><b>${esc(def?.name ?? '?')}</b> <span class="muted">· ${n} instance${n === 1 ? '' : 's'}</span></div><label>Contents</label><div>${def ? [...walk(def.entities)].length : 0} entities</div><label>Name</label><input type="text" data-field="name" value="${esc(e.name ?? '')}" placeholder="(instance name)">`; break; }
       case 'custom': body += `<label>Plugin type</label><div>${esc(e.type)}</div><label>Data</label><div class="muted" style="word-break:break-all;font-size:11px">${esc(JSON.stringify(e.data)).slice(0, 300)}</div>`; break;
     }
+    body += `<label>Hidden</label><input type="checkbox" data-hidden-field="${e.id}" ${e.hidden === true ? 'checked' : ''}>`;
     body += `</div><div class="btn-row">`;
     if (e.kind === 'group') body += `<button class="btn" data-act="explode">Explode</button><button class="btn" data-act="enter">Edit group</button>`;
     else if (e.kind === 'instance') body += `<button class="btn" data-act="placeAnother">Place another</button><button class="btn" data-act="makeUnique">Make unique</button><button class="btn" data-act="explode">Explode</button>`;
@@ -103,7 +105,7 @@ export class Tray {
       for (const e of ents) {
         if (e.kind === 'edge' && depth === 0 && a.doc.entities.length > 60) continue;
         const name = e.kind === 'group' ? e.name : e.kind === 'instance' ? `${(a.doc.components ?? []).find(c => c.id === e.definition)?.name ?? 'component'}${e.name ? ` (${e.name})` : ''}` : e.kind === 'text' ? `"${e.text}"` : e.kind === 'custom' ? `${(e.data as any)?.name ?? (e.data as any)?.kind ?? (e.data as any)?.style ?? ''} ${e.type.split('.').pop()}`.trim() : KIND_LABEL[e.kind];
-        rows.push(`<div class="list-row ${a.selection.has(e.id) ? 'active' : ''}" style="--depth:${depth}" data-select="${e.id}"><span class="name">${e.kind === 'group' ? icon('group') : e.kind === 'instance' ? icon('component') : ''}${esc(name)}</span><span class="muted">${layerOf(a.doc, e.layer)?.name ?? ''}</span></div>`);
+        rows.push(`<div class="list-row ${a.selection.has(e.id) ? 'active' : ''} ${e.hidden === true ? 'is-hidden' : ''}" style="--depth:${depth}" data-select="${e.id}"><span class="name">${e.kind === 'group' ? icon('group') : e.kind === 'instance' ? icon('component') : ''}${esc(name)}</span><span class="muted">${layerOf(a.doc, e.layer)?.name ?? ''}</span><button class="icon-btn" data-hide="${e.id}" title="${e.hidden === true ? 'Show' : 'Hide'}">${icon(e.hidden === true ? 'eyeOff' : 'eye')}</button></div>`);
         if (e.kind === 'group') walkTree(e.entities, depth + 1);
       }
     };
@@ -129,7 +131,10 @@ export class Tray {
   private display(): string {
     const a = this.app; const row = (k: string, label: string, on: boolean) => `<div class="layer-row"><button class="icon-btn" data-display="${k}">${icon(on ? 'eye' : 'eyeOff')}</button><span class="name">${label}</span></div>`;
     return row('grid', 'Grid', a.display.grid) + row('axes', 'Axes', a.display.axes) + row('edges', 'Edges', a.display.edges) + row('figure', 'Scale figure', a.display.figure) + row('shadows', 'Shadows', a.display.shadows) +
-      `<div class="layer-row"><input type="checkbox" data-opt="gridSnap" ${a.options.gridSnap ? 'checked' : ''}><span class="name">Snap to 1 cm grid</span></div>
+      `<div class="layer-row"><span class="name">Face style</span><select data-opt="faceStyle">${FACE_STYLES.map(s => `<option value="${s.id}" ${a.faceStyle === s.id ? 'selected' : ''}>${s.label}</option>`).join('')}</select></div>
+      <div class="layer-row"><input type="checkbox" data-opt="backEdges" ${a.backEdges ? 'checked' : ''}><span class="name">Back edges</span></div>
+      <div class="layer-row"><input type="checkbox" data-opt="hiddenGeometry" ${a.hiddenGeometry ? 'checked' : ''}><span class="name">Hidden geometry (${a.hiddenIds.length})</span>${a.hiddenIds.length ? '<button class="btn" data-act="unhideAll">Unhide all</button>' : ''}</div>
+      <div class="layer-row"><input type="checkbox" data-opt="gridSnap" ${a.options.gridSnap ? 'checked' : ''}><span class="name">Snap to 1 cm grid</span></div>
       <div class="layer-row"><span class="name">Theme</span><select data-opt="theme">${THEMES.map(t => `<option value="${t}" ${a.theme === t ? 'selected' : ''}>${{ system: 'System', light: 'Light', dark: 'Dark' }[t]}</option>`).join('')}</select></div>`;
   }
   private modelInfo(): string {
@@ -169,6 +174,13 @@ export class Tray {
       else a.commitOps([{ op: 'update_entity', id, patch }], 'Edit');
     });
     el.querySelector<HTMLElement>('[data-act="delete"]')?.addEventListener('click', () => a.deleteSelection());
+    el.querySelector<HTMLElement>('[data-act="hide"]')?.addEventListener('click', () => a.hideSelection());
+    el.querySelector<HTMLElement>('[data-act="unhideAll"]')?.addEventListener('click', () => a.unhideAll());
+    el.querySelector<HTMLInputElement>('[data-hidden-field]')?.addEventListener('change', (ev) => { const i = ev.target as HTMLInputElement; a.commitOps([{ op: 'set_hidden', ids: [i.dataset.hiddenField!], hidden: i.checked }], i.checked ? 'Hide' : 'Unhide'); });
+    el.querySelectorAll<HTMLElement>('[data-hide]').forEach(b => b.onclick = (ev) => { ev.stopPropagation(); a.toggleHidden(b.dataset.hide!); });
+    el.querySelector<HTMLSelectElement>('[data-opt="faceStyle"]')?.addEventListener('change', (e) => a.setFaceStyle((e.target as HTMLSelectElement).value as FaceStyle));
+    el.querySelector<HTMLInputElement>('[data-opt="backEdges"]')?.addEventListener('change', (e) => a.setBackEdges((e.target as HTMLInputElement).checked));
+    el.querySelector<HTMLInputElement>('[data-opt="hiddenGeometry"]')?.addEventListener('change', (e) => a.setHiddenGeometry((e.target as HTMLInputElement).checked));
     // section plane: tilt / heading / offset
     const secApply = () => {
       const id = [...a.selection][0]; const e = findEntity(a.doc, id); if (!e || e.kind !== 'section') return;

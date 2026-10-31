@@ -96,12 +96,12 @@ impl AppState {
         })
     }
 
-    pub fn preview(&self, id: &str, ops: &[Op]) -> ApiResult<CompiledScene> {
+    pub fn preview(&self, id: &str, ops: &[Op], opts: &CompileOptions) -> ApiResult<CompiledScene> {
         let reg = &self.registry;
         self.with(id, |p| {
             let mut doc = p.doc.clone();
             apply_many(&mut doc, ops, reg)?;
-            Ok(compile(&doc, reg, &CompileOptions::default()))
+            Ok(compile(&doc, reg, opts))
         })
     }
 

@@ -1,4 +1,5 @@
 import { THEMES, type App, type Theme } from '../main';
+import { FACE_STYLES } from '../scene';
 const THEME_LABEL: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
 import { icon } from './icons';
 import { TOOLBAR, EMBED_TOOLS } from '../tools';
@@ -25,10 +26,17 @@ export function renderMenubar(app: App, el: HTMLElement) {
       { label: 'Make group', key: 'G', act: () => app.groupSelection(), disabled: !app.selection.size },
       { label: 'Make Component…', act: () => app.makeComponent(), disabled: !app.selection.size },
       { label: 'Explode', act: () => app.explodeSelection(), disabled: !app.selection.size },
-      { label: 'Close group', key: 'Esc', act: () => app.exitGroup(), disabled: !app.enteredGroup },
+      { label: 'Close group', key: 'Esc', act: () => app.exitGroup(), disabled: !app.enteredGroup }, 'sep',
+      { label: 'Hide', key: `${KEY}E`, act: () => app.hideSelection(), disabled: !app.selection.size },
+      { label: 'Unhide selected', act: () => app.unhideSelected(), disabled: ![...app.selection].some(id => app.hiddenIds.includes(id)) },
+      { label: 'Unhide last', act: () => app.unhideLast(), disabled: !app.hiddenIds.length },
+      { label: 'Unhide all', key: `⇧${KEY}E`, act: () => app.unhideAll(), disabled: !app.hiddenIds.length },
     ]],
     ['View', () => [
       ...(['grid', 'axes', 'edges', 'figure', 'shadows'] as const).map(k => ({ label: `${app.display[k] ? '✓ ' : '   '}${({ grid: 'Grid', axes: 'Axes', edges: 'Edges', figure: 'Scale figure', shadows: 'Shadows' })[k]}`, act: () => app.toggleDisplay(k) })),
+      'sep', ...FACE_STYLES.map((s, i) => ({ label: `${app.faceStyle === s.id ? '✓ ' : '   '}Face style: ${s.label}`, key: `⌥${i + 1}`, act: () => app.setFaceStyle(s.id) })),
+      { label: `${app.backEdges ? '✓ ' : '   '}Back edges`, act: () => app.setBackEdges(!app.backEdges) },
+      { label: `${app.hiddenGeometry ? '✓ ' : '   '}Hidden geometry`, act: () => app.setHiddenGeometry(!app.hiddenGeometry) },
       'sep', ...app.doc.layers.map(l => ({ label: `${l.visible ? '✓ ' : '   '}Tag: ${l.name}`, act: () => app.commitOps([{ op: 'update_layer', id: l.id, visible: !l.visible }], 'Tag visibility') })),
       'sep', ...(['left', 'top'] as const).map(d => ({ label: `${app.paletteDock === d ? '✓ ' : '   '}Tools on the ${d}`, act: () => app.dockPalette(d) })),
       { label: '   Reset tool palette size', act: () => app.resetPaletteSize() },
@@ -113,8 +121,10 @@ export function layoutToolbar(el: HTMLElement) {
 }
 
 export function renderHud(app: App, el: HTMLElement) {
-  el.innerHTML = `<button data-view="iso" title="Iso">${icon('iso')}Iso</button><button data-view="top" title="Top">${icon('top')}Top</button><button data-view="front" title="Front">${icon('front')}Front</button><button data-view="right" title="Right">${icon('side')}Right</button><span class="sep"></span><button data-act="extents" title="Zoom Extents (Shift+Z)">${icon('zoomext')}</button><button data-act="prevview" title="Previous view (⌘[)" ${app.canPrevView ? '' : 'disabled'}>${icon('prevview')}</button><button data-act="nextview" title="Next view (⌘])" ${app.canNextView ? '' : 'disabled'}>${icon('nextview')}</button><span class="sep"></span><button data-act="undo" title="Undo (⌘Z)" ${app.canUndo ? '' : 'disabled'}>${icon('undo')}</button><button data-act="redo" title="Redo (⇧⌘Z)" ${app.canRedo ? '' : 'disabled'}>${icon('redo')}</button>`;
+  const styles = FACE_STYLES.map((s, i) => `<button class="${app.faceStyle === s.id ? 'active' : ''}" data-face-style="${s.id}" title="${s.label} (⌥${i + 1})">${icon(`style${s.id[0].toUpperCase()}${s.id.slice(1)}`)}</button>`).join('');
+  el.innerHTML = `${styles}<span class="sep"></span><button data-view="iso" title="Iso">${icon('iso')}Iso</button><button data-view="top" title="Top">${icon('top')}Top</button><button data-view="front" title="Front">${icon('front')}Front</button><button data-view="right" title="Right">${icon('side')}Right</button><span class="sep"></span><button data-act="extents" title="Zoom Extents (Shift+Z)">${icon('zoomext')}</button><button data-act="prevview" title="Previous view (⌘[)" ${app.canPrevView ? '' : 'disabled'}>${icon('prevview')}</button><button data-act="nextview" title="Next view (⌘])" ${app.canNextView ? '' : 'disabled'}>${icon('nextview')}</button><span class="sep"></span><button data-act="undo" title="Undo (⌘Z)" ${app.canUndo ? '' : 'disabled'}>${icon('undo')}</button><button data-act="redo" title="Redo (⇧⌘Z)" ${app.canRedo ? '' : 'disabled'}>${icon('redo')}</button>`;
   el.querySelectorAll<HTMLElement>('[data-view]').forEach(b => b.onclick = () => app.setView(b.dataset.view as any));
+  el.querySelectorAll<HTMLElement>('[data-face-style]').forEach(b => b.onclick = () => app.setFaceStyle(b.dataset.faceStyle as any));
   el.querySelector<HTMLElement>('[data-act="extents"]')!.onclick = () => app.zoomExtents();
   el.querySelector<HTMLElement>('[data-act="prevview"]')!.onclick = () => app.previousView(); el.querySelector<HTMLElement>('[data-act="nextview"]')!.onclick = () => app.nextView();
   el.querySelector<HTMLElement>('[data-act="undo"]')!.onclick = () => app.undo();

@@ -54,7 +54,7 @@ Wait for the `ready` event before sending commands. Commands:
 | `select` | `ids: [...]`, `mode?: replace \| add \| toggle` | `{ selection }` |
 | `activate_tool` | `tool` (one of the viewer tools) | `{ tool, hint }` |
 | `screenshot` | `width?, height?, view?` | `{ png, width, height }` (`png` is base64) |
-| `set_options` | `gridVisible?, axesVisible?, edgesVisible?, figureVisible?, shadows?: bool`, `xray?: [materialId…]` | the display state |
+| `set_options` | `gridVisible?, axesVisible?, edgesVisible?, figureVisible?, shadows?, backEdges?, hiddenGeometry?: bool`, `faceStyle?: shaded \| monochrome \| hiddenline \| wireframe \| xray`, `xray?: [materialId…]` | the display state |
 | `get_storeys` | — | `{ level, isolated, storeys: [{ index, name, height }] }` (construction plugin) |
 | `set_storey` | `level` | `{ level }` |
 | `isolate_storey` | `on: bool` | `{ level, isolated }` — a dollhouse view of the active storey |

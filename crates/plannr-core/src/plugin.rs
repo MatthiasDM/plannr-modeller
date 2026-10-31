@@ -136,6 +136,7 @@ impl Registry {
                             if let Ok(exp) = p.expand(c, doc) {
                                 for mut x in exp {
                                     if x.layer().is_empty() { x.set_layer(c.layer.clone()); }
+                                    if e.hidden() { x.set_hidden(true); }
                                     out.push(x);
                                 }
                             }

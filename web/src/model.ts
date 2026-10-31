@@ -53,6 +53,7 @@ export type Op =
   | { op: 'update_section'; id: string; origin?: Vec3; normal?: Vec3; active?: boolean }
   | { op: 'slice_section'; id: string; layer?: string; name?: string }
   | { op: 'update_entity'; id: string; patch: Record<string, unknown> }
+  | { op: 'set_hidden'; ids: string[]; hidden: boolean }
   | { op: 'measure'; a: Vec3; b: Vec3 }
   | { op: 'set_extension'; plugin: string; data: unknown }
   | { op: 'custom'; type: string; data: unknown }

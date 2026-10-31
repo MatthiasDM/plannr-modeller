@@ -131,8 +131,8 @@ pub fn default_label(ops: &[Op]) -> String {
     if ops.len() > 1 { format!("{cap} (+{})", ops.len() - 1) } else { cap }
 }
 
-async fn preview(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<OpsBody>) -> ApiResult<Json<Value>> {
-    Ok(Json(serde_json::to_value(s.preview(&id, &b.ops)?)?))
+async fn preview(State(s): State<Shared>, Path(id): Path<String>, Query(q): Query<CompileQuery>, Json(b): Json<OpsBody>) -> ApiResult<Json<Value>> {
+    Ok(Json(serde_json::to_value(s.preview(&id, &b.ops, &CompileOptions { show_hidden: flag(&q.hidden), ..Default::default() })?)?))
 }
 
 async fn undo(State(s): State<Shared>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
@@ -148,10 +148,11 @@ async fn history(State(s): State<Shared>, Path(id): Path<String>) -> ApiResult<J
 }
 
 #[derive(Deserialize)]
-struct CompileQuery { #[serde(default)] section: Option<String> }
+struct CompileQuery { #[serde(default)] section: Option<String>, #[serde(default)] hidden: Option<String> }
+fn flag(v: &Option<String>) -> bool { matches!(v.as_deref(), Some("1") | Some("true")) }
 
 async fn compile_project(State(s): State<Shared>, Path(id): Path<String>, Query(q): Query<CompileQuery>) -> ApiResult<Json<Value>> {
-    let opts = CompileOptions { ignore_sections: matches!(q.section.as_deref(), Some("0") | Some("false")) };
+    let opts = CompileOptions { ignore_sections: matches!(q.section.as_deref(), Some("0") | Some("false")), show_hidden: flag(&q.hidden) };
     Ok(Json(serde_json::to_value(s.compile(&id, &opts)?)?))
 }
 
@@ -195,7 +196,7 @@ fn safe_name(name: &str) -> String {
 
 async fn export_glb_route(State(s): State<Shared>, Path(id): Path<String>) -> ApiResult<Response> {
     let p = s.db.get(&id)?;
-    let scene = s.compile(&id, &CompileOptions { ignore_sections: true })?;
+    let scene = s.compile(&id, &CompileOptions { ignore_sections: true, ..Default::default() })?;
     let bytes = export_glb(&scene);
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "model/gltf-binary")

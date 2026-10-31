@@ -40,6 +40,8 @@ pub enum Op {
     Scale { ids: Vec<String>, origin: P3, factors: P3 },
     Copy { ids: Vec<String>, delta: P3, #[serde(default)] count: Option<usize> },
     Erase { ids: Vec<String> },
+    /// Hide or show entities (groups and components with everything in them); the data stays.
+    SetHidden { ids: Vec<String>, hidden: bool },
     Paint { ids: Vec<String>, material: String, #[serde(default)] side: Option<String> },
     SetLayer { ids: Vec<String>, layer: String },
     MakeGroup { ids: Vec<String>, #[serde(default)] name: Option<String> },
@@ -85,7 +87,7 @@ impl Op {
         match self {
             Op::DrawLine { .. } => "draw_line", Op::DrawRectangle { .. } => "draw_rectangle", Op::DrawPolygon { .. } => "draw_polygon",
             Op::DrawCircle { .. } => "draw_circle", Op::PushPull { .. } => "push_pull", Op::Offset { .. } => "offset", Op::Move { .. } => "move",
-            Op::Rotate { .. } => "rotate", Op::Scale { .. } => "scale", Op::Copy { .. } => "copy", Op::Erase { .. } => "erase", Op::Paint { .. } => "paint",
+            Op::Rotate { .. } => "rotate", Op::Scale { .. } => "scale", Op::Copy { .. } => "copy", Op::Erase { .. } => "erase", Op::SetHidden { .. } => "set_hidden", Op::Paint { .. } => "paint",
             Op::SetLayer { .. } => "set_layer", Op::MakeGroup { .. } => "make_group", Op::Explode { .. } => "explode", Op::AddLayer { .. } => "add_layer",
             Op::UpdateLayer { .. } => "update_layer", Op::RemoveLayer { .. } => "remove_layer", Op::AddMaterial { .. } => "add_material",
             Op::UpdateMaterial { .. } => "update_material", Op::AddGuide { .. } => "add_guide", Op::AddDimension { .. } => "add_dimension",
@@ -161,6 +163,16 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             transform_ids(doc, ids, &mat_about(&mat_scale(*factors), *origin), reg)
         }
         Op::Copy { ids, delta, count } => copy(doc, ids, *delta, count.unwrap_or(1).max(1), reg),
+        Op::SetHidden { ids, hidden } => {
+            let mut r = OpResult::default();
+            for id in ids {
+                let id = id.split('#').next().unwrap_or(id); // plugin and component geometry hides with its owner
+                let (e, _) = doc.find_mut(id).ok_or_else(|| OpError(format!("no entity {id}")))?;
+                e.set_hidden(*hidden);
+                if !r.modified.iter().any(|m| m == id) { r.modified.push(id.to_string()); }
+            }
+            Ok(r)
+        }
         Op::Erase { ids } => {
             let mut r = OpResult::default();
             for id in &bare_ids(ids) {

@@ -29,7 +29,7 @@ fn world_faces(doc: &Document) -> Vec<(Vec<Vec<P3>>, String)> {
     fn walk(doc: &Document, list: &[Entity], m: Mat4, hidden: &[&str], out: &mut Vec<(Vec<Vec<P3>>, String)>, depth: usize) {
         if depth > 16 { return; }
         for e in list {
-            if hidden.contains(&e.layer()) { continue; }
+            if hidden.contains(&e.layer()) || e.hidden() { continue; }
             match e {
                 Entity::Face(f) => {
                     let mut loops = vec![f.outer.iter().map(|p| mat_apply(&m, *p)).collect::<Vec<_>>()];

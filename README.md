@@ -86,6 +86,10 @@ inference under the cursor** (a direction, or a face's plane). Lengths along inf
 Trays: Entity Info, Tags (layers), Materials, Outliner, Scenes, Section Planes, Display, Model Info,
 History, Plugins.
 
+**Hide and show:** Edit ▸ Hide (⌘E) hides the selection, a group or component with everything in it; Unhide selected, last or all (⇧⌘E) bring it back, and the Outliner has an eye per row. View ▸ Hidden geometry shows hidden entities as ghosts you can select. Hidden entities stay in the document but leave slices and exports.
+
+**Face styles** as in SketchUp, in the view bar and View ▸ Face style (⌥1–5): X-ray, Wireframe, Hidden Line, Shaded, Monochrome, plus Back edges (dashed lines for what is behind faces).
+
 **Light or dark:** View ▸ Theme (or the Display tray) switches between System, Light and Dark for the
 chrome and the viewport; the choice is remembered in the browser, and the front page shares it.
 

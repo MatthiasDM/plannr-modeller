@@ -5,6 +5,9 @@ import type { Vec3 } from './model';
 export const V = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
 export const A = (p: THREE.Vector3): Vec3 => [p.x, p.y, p.z];
 
+/** How faces are drawn, as in SketchUp's Face Style. */
+export type FaceStyle = 'shaded' | 'monochrome' | 'hiddenline' | 'wireframe' | 'xray';
+export const FACE_STYLES: { id: FaceStyle; label: string }[] = [{ id: 'xray', label: 'X-ray' }, { id: 'wireframe', label: 'Wireframe' }, { id: 'hiddenline', label: 'Hidden Line' }, { id: 'shaded', label: 'Shaded' }, { id: 'monochrome', label: 'Monochrome' }];
 export interface Pick { id: string; kind: 'face' | 'edge' | 'guide' | 'text' | 'dimension' | 'section'; point: THREE.Vector3; normal: THREE.Vector3; material?: string; back?: boolean }
 export interface Bounds { min: Vec3; max: Vec3 }
 export interface SnapTarget { point: THREE.Vector3; kind: 'vertex' | 'midpoint' | 'edge' | 'face' | 'guide'; id?: string; dir?: THREE.Vector3; normal?: THREE.Vector3 }
@@ -138,6 +141,7 @@ export class Viewport {
     // dark edges in both themes: they read on the lit faces and still show against the dark sky
     this.edgeColor = dark ? 0x101216 : COLOR.ink;
     if (this.edgeLines) (this.edgeLines.material as THREE.LineBasicMaterial).color.set(this.edgeColor);
+    if (this.backLines) (this.backLines.material as THREE.LineDashedMaterial).color.set(this.edgeColor);
   }
 
   private makeAxes(): THREE.Group {
@@ -176,6 +180,35 @@ export class Viewport {
     if (mat.depthTest === !on) return;
     mat.depthTest = !on; mat.depthWrite = !on && !mat.transparent; mesh.renderOrder = on ? 4 : 0; mesh.castShadow = !on && !mat.transparent; mat.needsUpdate = true;
   }
+  /** The face style of the whole model; `backEdges` adds dashed lines for edges behind faces. */
+  faceStyle: FaceStyle = 'shaded'; backEdges = false; private backLines: THREE.LineSegments | null = null;
+  setFaceStyle(s: FaceStyle) { this.faceStyle = s; this.applyFaceStyles(); }
+  setBackEdges(on: boolean) { this.backEdges = on; this.applyFaceStyles(); }
+  private applyFaceStyles() {
+    for (const m of this.meshes) this.applyFaceStyle(m);
+    const style = this.faceStyle;
+    if (this.edgeLines) { const em = this.edgeLines.material as THREE.LineBasicMaterial; const t = style === 'xray'; if (em.transparent !== t) { em.transparent = t; em.needsUpdate = true; } } // drawn after the see-through faces, not dimmed by them
+    const want = this.backEdges && this.edgesVisible && !!this.edgeLines && (style === 'shaded' || style === 'monochrome' || style === 'hiddenline');
+    if (want && !this.backLines) {
+      const l = new THREE.LineSegments(this.edgeLines!.geometry, new THREE.LineDashedMaterial({ color: this.edgeColor, dashSize: 0.06, gapSize: 0.05, transparent: true, opacity: 0.55, depthWrite: false, depthFunc: THREE.GreaterDepth }));
+      l.computeLineDistances(); l.renderOrder = 2; this.modelGroup.add(l); this.backLines = l;
+    }
+    if (this.backLines) this.backLines.visible = want;
+  }
+  private applyFaceStyle(mesh: THREE.Mesh) {
+    const d = this.groupData.get(mesh); const mat = mesh.material as THREE.MeshLambertMaterial; const base = mesh.userData.base as { color: string; opacity: number } | undefined; if (!d || !base) return;
+    const ghost = d.material === '__hidden'; const style = ghost ? 'shaded' : this.faceStyle; const glass = base.opacity < 1;
+    mesh.visible = ghost || style !== 'wireframe';
+    mat.emissive.set(style === 'hiddenline' ? 0xffffff : 0x000000);
+    mat.color.set(style === 'hiddenline' ? 0x000000 : style === 'monochrome' ? (d.back ? '#b7c1cc' : '#f4f4f2') : base.color);
+    const see = style === 'xray' || glass;
+    mat.opacity = style === 'xray' ? Math.min(base.opacity, 0.45) : base.opacity;
+    if (mat.transparent !== see) { mat.transparent = see; mat.needsUpdate = true; }
+    const drawnThrough = this.xray.has(d.material);
+    mat.depthWrite = !see && !drawnThrough;
+    mesh.castShadow = !see && !drawnThrough && !ghost && (style === 'shaded' || style === 'monochrome');
+    mesh.receiveShadow = style !== 'hiddenline' && !ghost;
+  }
 
   setCompiled(c: CompiledScene) {
     this.compiled = c;
@@ -188,16 +221,17 @@ export class Viewport {
       geo.setIndex(g.indices);
       const transparent = g.opacity < 1;
       const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: new THREE.Color(g.color), transparent, opacity: g.opacity, depthWrite: !transparent, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: 4 })); // constant offset: edges win, faces never sink behind nearby surfaces at grazing angles
-      mesh.castShadow = !transparent; mesh.receiveShadow = true;
+      mesh.castShadow = !transparent; mesh.receiveShadow = true; mesh.userData.base = { color: g.color, opacity: g.opacity };
       this.modelGroup.add(mesh); this.meshes.push(mesh);
       this.groupData.set(mesh, { ids: g.ids, ranges: g.idRanges, material: g.material, back: g.back });
-      this.applyXray(mesh);
+      this.applyFaceStyle(mesh); this.applyXray(mesh);
     }
     // edges: one black segment list with ids
     this.edgeIds = c.edges.ids;
     const eg = new THREE.BufferGeometry(); eg.setAttribute('position', new THREE.Float32BufferAttribute(c.edges.positions, 3));
     this.edgeLines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: this.edgeColor })); this.edgeLines.renderOrder = 1; this.edgeLines.visible = this.edgesVisible;
     this.modelGroup.add(this.edgeLines);
+    this.backLines = null; this.applyFaceStyles();
     // snapping data
     const seen = new Map<string, THREE.Vector3>(); this.segments = [];
     const P = c.edges.positions;
@@ -272,7 +306,7 @@ export class Viewport {
   pick(ev: { clientX: number; clientY: number }, opts?: { ignore?: Set<string>; facesOnly?: boolean }): Pick | null {
     const rc = this.ray(ev);
     rc.params.Line = { threshold: this.cam.distance * 0.008 };
-    const faceHits = rc.intersectObjects(this.meshes, false);
+    const faceHits = this.faceStyle === 'wireframe' ? rc.intersectObjects(this.meshes.filter(m => m.visible), false) : rc.intersectObjects(this.meshes, false); // wireframe: only edges can be picked
     let face: Pick | null = null;
     for (const h of faceHits) {
       const d = this.groupData.get(h.object as THREE.Mesh)!; const first = (h.faceIndex ?? 0) * 3; let id = '';
@@ -416,6 +450,7 @@ export class Viewport {
     const bases = new Set<string>(); for (const id of ids) if (!id.includes('#')) bases.add(id);
     const hit = (fid: string) => ids.has(fid) || (bases.size > 0 && bases.has(fid.split('#')[0]));
     for (const mesh of this.meshes) {
+      if (!mesh.visible) continue; // wireframe: only the edges light up
       const d = this.groupData.get(mesh)!; const src = mesh.geometry.getIndex()!.array; const sub: number[] = [];
       d.ranges.forEach(([s, n], i) => { if (hit(d.ids[i])) for (let k = s; k < s + n; k++) sub.push(src[k]); });
       if (!sub.length) continue;

@@ -149,7 +149,7 @@ mod tests {
         assert!((cut.metrics.area - 12.0).abs() < 1e-6, "half the sides (4×2) + the base (4) = 12, got {}", cut.metrics.area);
         assert!(cut.bounds.max[1] <= 1.0 + 1e-9);
         let _ = full_area;
-        let ignored = compile(&doc, &reg(), &CompileOptions { ignore_sections: true });
+        let ignored = compile(&doc, &reg(), &CompileOptions { ignore_sections: true, ..Default::default() });
         assert!((ignored.metrics.area - full.metrics.area).abs() < 1e-9);
     }
 

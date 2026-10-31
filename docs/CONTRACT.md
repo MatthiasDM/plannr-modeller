@@ -83,6 +83,7 @@ accepted within 1 mm.
 | `add_dimension` | `a`, `b`, `offset` | |
 | `add_text` | `position`, `text`, `anchor?` | |
 | `add_section` / `update_section` | `origin`, `normal`, `active?` / `id`, `origin?`, `normal?`, `active?` | every active section cuts; several combine, keeping only what all of them keep. |
+| `set_hidden` | `ids`, `hidden` | hide or show entities (a group or component with everything in it); stored as `hidden: true` on the entity. Hidden entities leave the compiled scene, slices and exports; `compile?hidden=1` (and `preview?hidden=1`) draws them as ghosts in a material group `__hidden`, not counted in the metrics. A hidden section plane still cuts. |
 | `slice_section` | `id`, `layer?`, `name?` | a 2D slice (SketchUp's "Create Group from Slice"): every face of the model — plugin geometry included, hidden tags left out — is cut by section plane `id` (active or not), and the cut lines become edges in a new group in the plane (`name` default "Slice N", on a "Slices" tag made when missing). Pieces of one line are merged; joints between touching solids of the same material are dropped, those between different materials stay. Errors when the plane cuts nothing. |
 | `update_entity` | `id`, `patch: {}` | shallow-merge arbitrary fields (name, text, outer, …) after validation. |
 | `measure` | `a`, `b` | no change; `measurement` = distance. |
