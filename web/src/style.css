@@ -3,7 +3,7 @@
    picture — night-blue paper with a fine grid, cyan for what you click, amber as the second
    accent; light is blue lines on white paper. Text in IBM Plex Sans, labels, codes and numbers
    in IBM Plex Mono. Corners are sharp; a card lifts with a line, not a shadow. The tool
-   palette, like Uzzetje's sidebar, stays night-blue in both themes. */
+   palette follows the theme: white paper in light, night-blue in dark. */
 :root {
   /* light: a blueprint on paper */
   --chrome: #eef2f8; --surface: #ffffff; --surface-2: #f5f8fc; --surface-3: #e4ebf5;
@@ -14,9 +14,9 @@
   --amber: #d18a00;
   --red: #c2362b; --green: #1f8a5a; --blue: #1f5fa8; --magenta: #b4458f; --cyan: #1397b0;
   --grid: rgba(43, 95, 166, .09); --grid-3d: #c3d2e6;
-  /* the tool palette: always night-blue, in both themes */
-  --side-bg: #0a1422; --side-surface: #10203a; --side-line: #223a5a; --side-text: #e6eefb; --side-muted: #7f95b5; --side-faint: #4d6587;
-  --side-active: rgba(90, 209, 240, .09); --side-accent: #5ad1f0;
+  /* the tool palette (also toasts and tooltips): white paper here, night-blue in dark */
+  --side-bg: #ffffff; --side-surface: #f5f8fc; --side-line: #cfdae9; --side-text: #0f1b2d; --side-strong: #0a1422; --side-muted: #4f6382; --side-faint: #8a9bb5;
+  --side-active: rgba(31, 95, 168, .09); --side-accent: #1f5fa8; --side-paper: #ffffff; --side-grid: rgba(43, 95, 166, .07);
   --shadow-sm: 0 1px 2px rgba(15, 27, 45, .06);
   --shadow-md: 0 2px 6px rgba(15, 27, 45, .08), 0 12px 32px -20px rgba(15, 27, 45, .3);
   --shadow-lg: 0 4px 12px rgba(15, 27, 45, .12), 0 30px 70px -24px rgba(15, 27, 45, .5);
@@ -44,6 +44,8 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3); --shadow-md: 0 2px 6px rgba(0, 0, 0, .35), 0 14px 36px -20px rgba(0, 0, 0, .8);
     --shadow-lg: 0 4px 14px rgba(0, 0, 0, .45), 0 34px 80px -24px rgba(0, 0, 0, .95);
     --glass: rgba(21, 36, 58, .9); --glass-border: #27405f;
+    --side-bg: #0a1422; --side-surface: #10203a; --side-line: #223a5a; --side-text: #e6eefb; --side-strong: #ffffff; --side-muted: #7f95b5; --side-faint: #4d6587;
+    --side-active: rgba(90, 209, 240, .09); --side-accent: #5ad1f0; --side-paper: #22395a; --side-grid: rgba(90, 209, 240, .07);
     --sky-top: #0a1422; --sky-mid: #10203a; --horizon: #1a2c45; --ground: #0f1b2d;
     color-scheme: dark;
   }
@@ -58,6 +60,8 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3); --shadow-md: 0 2px 6px rgba(0, 0, 0, .35), 0 14px 36px -20px rgba(0, 0, 0, .8);
   --shadow-lg: 0 4px 14px rgba(0, 0, 0, .45), 0 34px 80px -24px rgba(0, 0, 0, .95);
   --glass: rgba(21, 36, 58, .9); --glass-border: #27405f;
+  --side-bg: #0a1422; --side-surface: #10203a; --side-line: #223a5a; --side-text: #e6eefb; --side-strong: #ffffff; --side-muted: #7f95b5; --side-faint: #4d6587;
+  --side-active: rgba(90, 209, 240, .09); --side-accent: #5ad1f0; --side-paper: #22395a; --side-grid: rgba(90, 209, 240, .07);
   --sky-top: #0a1422; --sky-mid: #10203a; --horizon: #1a2c45; --ground: #0f1b2d;
   color-scheme: dark;
 }
@@ -137,11 +141,11 @@ kbd { font-size: 10.5px; color: var(--ink-3); }
 .toolbar .group:last-child { border-bottom: 0; }
 .tool-btn { width: 23px; height: 23px; display: grid; place-items: center; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; cursor: default; padding: 0; color: var(--side-text); transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); }
 .tool-btn .icon svg { width: 17px; height: 17px; }
-.tool-btn:hover { background: var(--side-active); color: #fff; }
+.tool-btn:hover { background: var(--side-active); color: var(--side-strong); }
 .tool-btn:active { transform: scale(.94); }
 .tool-btn.active { background: var(--side-active); border-color: var(--side-accent); color: var(--side-accent); }
-/* the icons' white fills read as paper on the night-blue palette */
-.tool-btn .icon svg [fill="#fff"], .tool-btn .icon svg [fill="#e8f0fb"] { fill: #22395a; }
+/* the icons' white fills are the paper: white in light, a dark blue on the night-blue palette */
+.tool-btn .icon svg [fill="#fff"], .tool-btn .icon svg [fill="#e8f0fb"] { fill: var(--side-paper); }
 
 /* ---- viewport ------------------------------------------------------------------ */
 .viewport { grid-area: view; position: relative; overflow: hidden; background: linear-gradient(to bottom, var(--sky-top) 0%, var(--sky-mid) 42%, var(--horizon) 55%, var(--ground) 56%, var(--ground) 100%); }
@@ -237,7 +241,7 @@ table.data tr:hover td { background: var(--surface-2); }
 .welcome { position: fixed; inset: 0; background: rgba(5, 12, 22, .55); display: grid; place-items: center; z-index: 100; backdrop-filter: blur(6px); animation: fade var(--t-base) var(--ease); }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 .welcome .card { width: 820px; max-width: 94vw; max-height: 86vh; background: var(--surface); border-radius: 8px; box-shadow: var(--shadow-lg); display: grid; grid-template-columns: 260px 1fr; overflow: hidden; border: 1px solid var(--line-strong); }
-.welcome .side { background-color: var(--side-bg); background-image: linear-gradient(rgba(90, 209, 240, .07) 1px, transparent 1px), linear-gradient(90deg, rgba(90, 209, 240, .07) 1px, transparent 1px); background-size: 24px 24px; color: var(--side-text); border-right: 1px solid var(--side-line); padding: 30px 26px; display: flex; flex-direction: column; gap: 14px; position: relative; overflow: hidden; }
+.welcome .side { background-color: var(--side-bg); background-image: linear-gradient(var(--side-grid) 1px, transparent 1px), linear-gradient(90deg, var(--side-grid) 1px, transparent 1px); background-size: 24px 24px; color: var(--side-text); border-right: 1px solid var(--side-line); padding: 30px 26px; display: flex; flex-direction: column; gap: 14px; position: relative; overflow: hidden; }
 .welcome .side .icon svg { width: 46px; height: 46px; color: var(--side-accent); }
 .welcome .side h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .welcome .side p { margin: 0; color: var(--side-muted); line-height: 1.5; font-size: 12.5px; }
