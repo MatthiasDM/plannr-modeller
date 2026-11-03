@@ -86,7 +86,7 @@ export class App {
   private live: Live | null = null;
   private els: Record<string, HTMLElement> = {};
   private online = false; private previewTimer: any = null; private previewSeq = 0; private compileSeq = 0;
-  private listeners: Record<string, Set<(d: any) => void>> = { changed: new Set(), selection: new Set(), tool: new Set() };
+  private listeners: Record<string, Set<(d: any) => void>> = { changed: new Set(), selection: new Set(), tool: new Set(), xray: new Set() };
   private hover: string | null = null;
   private camCtl: CameraController | null = null;
   /** Camera history for Previous / Next view. */
@@ -449,7 +449,7 @@ export class App {
       mount: (el) => this.els.viewport.appendChild(el),
       setCameraController: (c) => this.setCameraController(c), cameraController: () => this.camCtl,
       simulatePointer: (kind, x, y, button = 0) => this.simulatePointer(kind, x, y, button), canvas: () => this.scene.renderer.domElement,
-      on: (ev, h) => { this.listeners[ev].add(h); return () => this.listeners[ev].delete(h); },
+      on: (ev, h) => { (this.listeners[ev] ??= new Set()).add(h); return () => this.listeners[ev].delete(h); },
       registerCommand: (name, fn) => { this.commands.set(name, fn); },
     };
   }
