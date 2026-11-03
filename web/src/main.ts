@@ -1,6 +1,6 @@
 import './style.css';
 import * as THREE from 'three';
-import { Viewport, A, V, COLOR, type ViewName, FACE_STYLES, type FaceStyle } from './scene';
+import { Viewport, A, V, COLOR, type ViewName, FACE_STYLES, type FaceStyle, type Pick as ScenePick } from './scene';
 import { api, Live, type CompiledScene, type PluginInfo } from './api';
 import { findEntity, topLevelId, walk, type Document, type Op, type OpResult, type Scene } from './model';
 import { BUILTIN_TOOLS, EMBED_TOOLS, placeComponentTool } from './tools';
@@ -435,12 +435,12 @@ export class App {
     this.snapAsked = false; this.tool.onMove?.(e, this.ctx);
     if (this.snapAsked && this.lastSnap) { const sn = this.lastSnap; this.scene.setSnapMarker(sn, snapColor(sn), snapLabel(sn)); } else this.scene.setSnapMarker(null);
   }
-  /** The face a shape tool draws on: under the cursor, or (for a snapped corner or edge) one around it that holds the point. */
+  /** The face a shape tool draws on: under the cursor, or (for a snapped corner or edge) the visible face that holds the point. */
   private faceNormal(ev: { clientX: number; clientY: number }, at?: THREE.Vector3): THREE.Vector3 | null {
-    const hit = (x: number, y: number) => { const pk = this.scene.pick({ clientX: x, clientY: y }, { facesOnly: true }); return pk ? { n: pk.back ? pk.normal.clone().negate() : pk.normal.clone(), p: pk.point } : null; };
+    const pk = this.scene.pickFace(ev); const under = pk ? { n: pk.back ? pk.normal.clone().negate() : pk.normal.clone(), p: pk.point } : null;
     const holds = (h: { n: THREE.Vector3; p: THREE.Vector3 }) => !at || Math.abs(h.n.dot(at.clone().sub(h.p))) < 1e-3;
-    const under = hit(ev.clientX, ev.clientY); if (under && holds(under)) return under.n.normalize();
-    if (at) for (const r of [6, 12]) for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; const h = hit(ev.clientX + Math.cos(a) * r, ev.clientY + Math.sin(a) * r); if (h && holds(h)) return h.n.normalize(); }
+    if (under && holds(under)) return under.n.normalize();
+    if (at) { const n = this.scene.faceAt(at); if (n) return n.normalize(); }
     return under ? under.n.normalize() : null;
   }
   private makeContext(): ToolContext {
@@ -499,7 +499,7 @@ export class App {
   }
   private snapInner(ev: { clientX: number; clientY: number }, opts: SnapOptions = {}): Snap {
     const sc = this.scene; const rect = sc.container.getBoundingClientRect(); const cursor = new THREE.Vector2(ev.clientX - rect.left, ev.clientY - rect.top);
-    const ignore = opts.ignore ?? new Set<string>(); const isIgnored = (id: string) => ignore.has(id) || ignore.has(this.resolve(id)) || !!opts.ignoreIf?.(id);
+    const ignore = opts.ignore ?? new Set<string>(); const isIgnored = (id: string) => (ignore.size > 0 && (ignore.has(id) || ignore.has(this.resolve(id)))) || !!opts.ignoreIf?.(id); // resolve() walks the document: only when something is ignored
     const px = (p: THREE.Vector3) => sc.screenPoint(p).distanceTo(cursor);
     const from = opts.from; const sl = this.shiftLock;
     const plane = sl?.plane ?? opts.plane ?? GROUND; this.lastPlane = plane;
@@ -535,22 +535,27 @@ export class App {
     // a shape keeps to its plane: a line along the plane's normal would only lead off it
     if (opts.inPlane) for (let i = rays.length - 1; i >= 0; i--) if (Math.abs(rays[i].d.dot(plane.normal)) > 0.999) rays.splice(i, 1);
     const notFrom = (p: THREE.Vector3) => !from || p.distanceTo(from) > 1e-3;
+    // geometry hidden behind a face is no snap (a layer inside a wall, the far side of a box), as in SketchUp; X-ray shows it all
+    let underHit: ScenePick | null | undefined;
+    const under = () => (underHit === undefined ? (underHit = sc.pickFace(ev)) : underHit);
+    // (not while something is left out, such as the geometry being moved: it is still in the depth picture)
+    const occlude = !ignore.size && !opts.ignoreIf; const seen = (p: THREE.Vector3) => !occlude || !sc.hidden(p);
     const refOf = (r: Ray) => (r.ref ? [{ from: r.ref, color: r.color }] : []);
     // 1. points: endpoint, guide point, midpoint, origin
     let best: Snap | null = null;
-    const v = sc.nearestVertex(cursor.x, cursor.y, 10 * k); if (v) best = { point: v.point, kind: 'vertex' };
+    const v = sc.nearestVertex(cursor.x, cursor.y, 10 * k, seen); if (v) best = { point: v.point, kind: 'vertex' };
     if (!best) for (const g of guides) { if (g.direction || isIgnored(g.id)) continue; const p = V(g.point); if (px(p) < 9 * k) { best = { point: p, kind: 'guide', id: g.id }; break; } }
-    if (!best) { const m = sc.nearestMidpoint(cursor.x, cursor.y, 9 * k, isIgnored); if (m) best = { point: m.point, kind: 'midpoint', id: m.id, dir: m.dir, origin: m.point }; }
-    if (!best) for (const c of sc.compiled?.centers ?? []) { if (isIgnored(c.id)) continue; const p = V(c.point); if (px(p) < 9 * k) { best = { point: p, kind: 'center', id: c.id, normal: V(c.normal) }; break; } }
+    if (!best) { const m = sc.nearestMidpoint(cursor.x, cursor.y, 9 * k, isIgnored, seen); if (m) best = { point: m.point, kind: 'midpoint', id: m.id, dir: m.dir, origin: m.point }; }
+    if (!best) for (const c of sc.compiled?.centers ?? []) { const p = V(c.point); if (px(p) < 9 * k && !isIgnored(c.id) && seen(p)) { best = { point: p, kind: 'center', id: c.id, normal: V(c.normal) }; break; } }
     if (!best && px(new THREE.Vector3()) < 8 * k) best = { point: new THREE.Vector3(), kind: 'origin' };
     if (held) {
       // held on a line: its crossings with inference lines and edges, else what the cursor rests on projected onto it
       let bd = 8 * k; let hit: Snap | null = null;
       for (const r of rays) { const X = lineLine(held, r); if (!X || !notFrom(X)) continue; const d = px(X); if (d < bd) { bd = d; hit = { point: X, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, refs: refOf(r) }; } }
-      const h = sc.lineEdgeHit(held.p, held.d, cursor.x, cursor.y, bd, isIgnored); if (h && notFrom(h.point)) hit = { point: h.point, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, id: h.id };
+      const h = sc.lineEdgeHit(held.p, held.d, cursor.x, cursor.y, bd, isIgnored, seen); if (h && notFrom(h.point)) hit = { point: h.point, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, id: h.id };
       if (hit) return hit;
-      if (!best) { const e = sc.nearestEdge(ev, cursor.x, cursor.y, 7 * k, isIgnored); if (e) best = { point: e.point, kind: 'edge', id: e.id, dir: e.dir }; }
-      if (!best && opts.faces !== false) { const pk = sc.pick(ev, { facesOnly: true }); if (pk && !isIgnored(pk.id)) best = { point: pk.point.clone(), kind: 'face', id: pk.id }; }
+      if (!best) { const e = sc.nearestEdge(ev, cursor.x, cursor.y, 7 * k, isIgnored, seen); if (e) best = { point: e.point, kind: 'edge', id: e.id, dir: e.dir }; }
+      if (!best && opts.faces !== false) { const pk = under(); if (pk && !isIgnored(pk.id)) best = { point: pk.point.clone(), kind: 'face', id: pk.id }; }
       if (best) { const q = onHeld(best.point); if (notFrom(q)) return { point: q, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, refs: q.distanceTo(best.point) > 1e-6 ? [{ from: best.point, color: held.color }] : undefined }; }
       // vertices whose projection onto the line is under the cursor
       for (const vt of sc.vertices) { const q = onHeld(vt); if (px(q) < 8 * k && vt.distanceTo(q) < sc.pixelSize(q) * 8 * k && notFrom(q)) return { point: q, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, refs: [{ from: vt, color: held.color }] }; }
@@ -570,12 +575,12 @@ export class App {
       }
       for (const r of rays) {
         if (px(sc.linePoint(ev, r.p, r.d)) > 6 * k) continue;
-        const h = sc.lineEdgeHit(r.p, r.d, cursor.x, cursor.y, bd, isIgnored); if (!h || !notFrom(h.point)) continue;
+        const h = sc.lineEdgeHit(r.p, r.d, cursor.x, cursor.y, bd, isIgnored, seen); if (!h || !notFrom(h.point)) continue;
         bd = h.d; best = { point: h.point, kind: 'intersection', id: h.id, axis: r.kind === 'axis' ? r.axis : undefined, refs: refOf(r) };
       }
     }
     // 3. on edge
-    if (!best) { const e = sc.nearestEdge(ev, cursor.x, cursor.y, 7 * k, isIgnored); if (e) best = { point: e.point, kind: 'edge', id: e.id, dir: e.dir, origin: e.point }; }
+    if (!best) { const e = sc.nearestEdge(ev, cursor.x, cursor.y, 7 * k, isIgnored, seen); if (e) best = { point: e.point, kind: 'edge', id: e.id, dir: e.dir, origin: e.point }; }
     if (best) return sl?.plane ? { ...best, point: onPlane(best.point) } : best;
     // 4. inference lines
     let bd = 6 * k; let ray: { r: Ray; q: THREE.Vector3 } | null = null;
@@ -587,7 +592,7 @@ export class App {
     }
     // 5. on face
     if (opts.faces !== false && !sl?.plane) {
-      const pk = sc.pick(ev, { facesOnly: true });
+      const pk = under();
       if (pk && !isIgnored(pk.id)) return { point: pk.point.clone(), kind: 'face', id: pk.id, normal: pk.back ? pk.normal.clone().negate() : pk.normal.clone() };
     }
     // 6. the work plane, rounded to the grid step and pulled onto the visible 1 m grid lines

@@ -302,6 +302,81 @@ export class Viewport {
   }
   private ray(ev: { clientX: number; clientY: number }) { this.raycaster.setFromCamera(this.ndc(ev), this.cam.camera); return this.raycaster; }
 
+  /** The face under the cursor, remembered for the same position, view and model (a raycast costs milliseconds on a big model). */
+  private faceCache: { x: number; y: number; cam: string; model: unknown; style: FaceStyle; hit: Pick | null } | null = null;
+  pickFace(ev: { clientX: number; clientY: number }): Pick | null {
+    const cam = this.cam.camera.matrixWorld.elements.join(','); const fc = this.faceCache;
+    if (fc && fc.x === ev.clientX && fc.y === ev.clientY && fc.cam === cam && fc.model === this.compiled && fc.style === this.faceStyle) return fc.hit;
+    const hit = this.pick(ev, { facesOnly: true }); this.faceCache = { x: ev.clientX, y: ev.clientY, cam, model: this.compiled, style: this.faceStyle, hit }; return hit;
+  }
+  private sightRay = new THREE.Raycaster();
+  /** The first opaque, visible face on the line of sight through a world point, and how far along that line the point is. */
+  private sightHit(p: THREE.Vector3, ignore?: (id: string) => boolean): { t: number; hit: { distance: number; point: THREE.Vector3; normal: THREE.Vector3; id: string } | null } {
+    const ndc = p.clone().project(this.cam.camera); this.sightRay.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.cam.camera);
+    const r = this.sightRay.ray; const t = p.clone().sub(r.origin).dot(r.direction);
+    for (const h of this.sightRay.intersectObjects(this.meshes, false)) {
+      const m = h.object as THREE.Mesh; if (!m.visible || (m.material as THREE.Material).transparent) continue;
+      const d = this.groupData.get(m); if (!d) continue; const first = (h.faceIndex ?? 0) * 3; let id = '';
+      for (let i = 0; i < d.ranges.length; i++) { const [s0, n] = d.ranges[i]; if (first >= s0 && first < s0 + n) { id = d.ids[i]; break; } }
+      if (ignore?.(id)) continue;
+      const normal = h.face ? h.face.normal.clone().transformDirection(m.matrixWorld) : new THREE.Vector3(0, 1, 0); if (d.back) normal.negate();
+      return { t, hit: { distance: h.distance, point: h.point.clone(), normal, id } };
+    }
+    return { t, hit: null };
+  }
+  /** A picture of how far away the visible faces are, one value per CSS pixel, redrawn when the view or the model changes:
+   *  telling whether a point is hidden is then a lookup instead of a raycast (milliseconds each on a big model). */
+  private depth: { cam: number[]; proj: number[]; w: number; h: number; model: unknown; vis: string; data: Uint8Array } | null = null;
+  private depthTarget: THREE.WebGLRenderTarget | null = null;
+  private depthMat = new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    vertexShader: 'varying float vDist; void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vDist = -mv.z; gl_Position = projectionMatrix * mv; }',
+    // the distance in tenths of a millimetre over three bytes (up to 1.6 km)
+    fragmentShader: 'varying float vDist; void main() { float u = clamp(floor(vDist * 10000.0 + 0.5), 0.0, 16777214.0); float r = floor(u / 65536.0); float g = floor((u - r * 65536.0) / 256.0); float b = u - r * 65536.0 - g * 256.0; gl_FragColor = vec4(r, g, b, 255.0) / 255.0; }',
+  });
+  private depthMap() {
+    const c = this.cam.camera; c.updateMatrixWorld(); const w = Math.max(1, Math.round(this.width)), h = Math.max(1, Math.round(this.height));
+    const solid = (m: THREE.Mesh) => m.visible && !(m.material as THREE.Material).transparent;
+    const vis = this.meshes.map(m => (solid(m) ? '1' : '0')).join('');
+    const same = (a: number[], b: ArrayLike<number>) => { for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return false; return true; };
+    const d = this.depth;
+    if (d && d.w === w && d.h === h && d.model === this.compiled && d.vis === vis && same(d.cam, c.matrixWorld.elements) && same(d.proj, c.projectionMatrix.elements)) return d;
+    if (!this.depthTarget || this.depthTarget.width !== w || this.depthTarget.height !== h) { this.depthTarget?.dispose(); this.depthTarget = new THREE.WebGLRenderTarget(w, h); }
+    const r = this.renderer; const prevTarget = r.getRenderTarget(); const prevColor = r.getClearColor(new THREE.Color()); const prevAlpha = r.getClearAlpha();
+    const meshes = new Set<THREE.Object3D>(this.meshes); const kids = this.modelGroup.children.map(k => [k, k.visible] as const);
+    const mats = this.meshes.map(m => [m, m.material, solid(m)] as const);
+    for (const [k] of kids) if (!meshes.has(k)) k.visible = false;
+    for (const [m, , sol] of mats) { m.material = this.depthMat; m.visible = sol; }
+    try {
+      r.setRenderTarget(this.depthTarget); r.setClearColor(0xffffff, 1); r.clear(true, true, true); r.render(this.modelGroup, c);
+      const data = new Uint8Array(w * h * 4); r.readRenderTargetPixels(this.depthTarget, 0, 0, w, h, data);
+      this.depth = { cam: [...c.matrixWorld.elements], proj: [...c.projectionMatrix.elements], w, h, model: this.compiled, vis, data };
+    } finally {
+      for (const [m, mat] of mats) m.material = mat; for (const [k, v] of kids) k.visible = v;
+      r.setRenderTarget(prevTarget); r.setClearColor(prevColor, prevAlpha);
+    }
+    return this.depth!;
+  }
+  /** Whether an opaque face hides the point from the camera (nothing hides in X-ray or wireframe). A point is seen when
+   *  it is no farther than the nearest face at its pixel or at one next to it (so the edges of a face stay seen). */
+  hidden(p: THREE.Vector3): boolean {
+    if (this.faceStyle === 'xray' || this.faceStyle === 'wireframe' || !this.meshes.length) return false;
+    const c = this.cam.camera; const ndc = p.clone().project(c); if (ndc.z < -1 || ndc.z > 1 || Math.abs(ndc.x) > 1 || Math.abs(ndc.y) > 1) return false;
+    const m = this.depthMap(); const x = Math.floor(((ndc.x + 1) / 2) * m.w), y = Math.floor(((ndc.y + 1) / 2) * m.h);
+    const dist = -p.clone().applyMatrix4(c.matrixWorldInverse).z; const tol = 1e-3 + Math.abs(dist) * 2e-4;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const X = x + dx, Y = y + dy; if (X < 0 || Y < 0 || X >= m.w || Y >= m.h) return false;
+      const i = (Y * m.w + X) * 4; const at = (m.data[i] * 65536 + m.data[i + 1] * 256 + m.data[i + 2]) / 10000;
+      if (at >= dist - tol) return false;
+    }
+    return true;
+  }
+  /** The normal of the visible face that holds this point (seen from the camera), if any. */
+  faceAt(p: THREE.Vector3): THREE.Vector3 | null {
+    const { t, hit } = this.sightHit(p); if (!hit) return null;
+    return Math.abs(hit.distance - t) < 1e-3 + Math.abs(t) * 2e-4 ? hit.normal : null;
+  }
+
   /** What is under the cursor: an edge within a few pixels wins over a face. */
   pick(ev: { clientX: number; clientY: number }, opts?: { ignore?: Set<string>; facesOnly?: boolean }): Pick | null {
     const rc = this.ray(ev);
@@ -380,26 +455,29 @@ export class Viewport {
     this.scr.key = key; return this.scr;
   }
   /** Closest model vertex within `r` pixels of the cursor. */
-  nearestVertex(cx: number, cy: number, r: number): { point: THREE.Vector3; d: number } | null {
-    const s = this.screenCache(); let best = -1, bd = r;
-    for (let i = 0; i < s.verts.length; i += 3) { const dx = s.verts[i] - cx; if (dx > r || dx < -r) continue; const dy = s.verts[i + 1] - cy; const d = Math.hypot(dx, dy); if (d < bd) { bd = d; best = i; } }
-    return best < 0 ? null : { point: new THREE.Vector3(this.vp[best], this.vp[best + 1], this.vp[best + 2]), d: bd };
+  nearestVertex(cx: number, cy: number, r: number, ok?: (p: THREE.Vector3) => boolean): { point: THREE.Vector3; d: number } | null {
+    const s = this.screenCache(); const cand: { i: number; d: number }[] = [];
+    for (let i = 0; i < s.verts.length; i += 3) { const dx = s.verts[i] - cx; if (dx > r || dx < -r) continue; const dy = s.verts[i + 1] - cy; const d = Math.hypot(dx, dy); if (d < r) cand.push({ i, d }); }
+    cand.sort((a, b) => a.d - b.d);
+    for (const { i, d } of cand) { const p = new THREE.Vector3(this.vp[i], this.vp[i + 1], this.vp[i + 2]); if (!ok || ok(p)) return { point: p, d }; }
+    return null;
   }
   /** Closest segment midpoint within `r` pixels. */
-  nearestMidpoint(cx: number, cy: number, r: number, ignore?: (id: string) => boolean): { point: THREE.Vector3; id: string; dir: THREE.Vector3; d: number } | null {
-    const s = this.screenCache(); let best = -1, bd = r;
+  nearestMidpoint(cx: number, cy: number, r: number, ignore?: (id: string) => boolean, ok?: (p: THREE.Vector3) => boolean): { point: THREE.Vector3; id: string; dir: THREE.Vector3; d: number } | null {
+    const s = this.screenCache(); const cand: { i: number; d: number }[] = [];
     for (let i = 0; i < s.segA.length; i += 3) {
       if (s.segA[i + 2] <= 0 || s.segB[i + 2] <= 0) continue;
       const mx = (s.segA[i] + s.segB[i]) / 2, my = (s.segA[i + 1] + s.segB[i + 1]) / 2; const dx = mx - cx; if (dx > r || dx < -r) continue;
-      const d = Math.hypot(dx, my - cy); if (d < bd && !ignore?.(this.segments[i / 3].id)) { bd = d; best = i; }
+      const d = Math.hypot(dx, my - cy); if (d < r && !ignore?.(this.segments[i / 3].id)) cand.push({ i, d });
     }
-    if (best < 0) return null; const sg = this.segments[best / 3];
-    return { point: sg.a.clone().lerp(sg.b, 0.5), id: sg.id, dir: sg.b.clone().sub(sg.a).normalize(), d: bd };
+    cand.sort((a, b) => a.d - b.d);
+    for (const { i, d } of cand) { const sg = this.segments[i / 3]; const p = sg.a.clone().lerp(sg.b, 0.5); if (!ok || ok(p)) return { point: p, id: sg.id, dir: sg.b.clone().sub(sg.a).normalize(), d }; }
+    return null;
   }
   /** Closest point on any segment within `r` pixels: 2D prefilter on the projected segment, exact 3D closest-point only for candidates. */
-  nearestEdge(ev: { clientX: number; clientY: number }, cx: number, cy: number, r: number, ignore?: (id: string) => boolean): { point: THREE.Vector3; id: string; dir: THREE.Vector3; d: number } | null {
-    const s = this.screenCache(); const rc = this.ray(ev); const ro = rc.ray.origin, rd = rc.ray.direction;
-    let best: { point: THREE.Vector3; id: string; dir: THREE.Vector3; d: number } | null = null; let bd = r;
+  nearestEdge(ev: { clientX: number; clientY: number }, cx: number, cy: number, r: number, ignore?: (id: string) => boolean, ok?: (p: THREE.Vector3) => boolean): { point: THREE.Vector3; id: string; dir: THREE.Vector3; d: number } | null {
+    const s = this.screenCache(); const rc = this.ray(ev); const ro = rc.ray.origin.clone(), rd = rc.ray.direction.clone();
+    const cand: { point: THREE.Vector3; id: string; dir: THREE.Vector3; d: number }[] = []; const bd = r;
     const u = new THREE.Vector3(), w0 = new THREE.Vector3(), p = new THREE.Vector3();
     for (let i = 0; i < s.segA.length; i += 3) {
       if (s.segA[i + 2] <= 0 || s.segB[i + 2] <= 0) continue;
@@ -413,13 +491,14 @@ export class Viewport {
       u.subVectors(sg.b, sg.a); w0.subVectors(sg.a, ro); const a = u.dot(u), b = u.dot(rd), d = u.dot(w0), e = rd.dot(w0);
       const den = a - b * b; if (den < 1e-9) continue; let t = (b * e - d) / den; t = Math.max(0, Math.min(1, t));
       p.copy(sg.a).addScaledVector(u, t);
-      bd = d2; best = { point: p.clone(), id: sg.id, dir: u.clone().normalize(), d: d2 };
+      cand.push({ point: p.clone(), id: sg.id, dir: u.clone().normalize(), d: d2 });
     }
-    return best;
+    cand.sort((a, b) => a.d - b.d);
+    return cand.find(c => !ok || ok(c.point)) ?? null;
   }
 
   /** Where the infinite line (p, d) crosses a model edge within `r` pixels of the cursor: the "Intersection" inference. */
-  lineEdgeHit(p: THREE.Vector3, d: THREE.Vector3, cx: number, cy: number, r: number, ignore?: (id: string) => boolean): { point: THREE.Vector3; id: string; d: number } | null {
+  lineEdgeHit(p: THREE.Vector3, d: THREE.Vector3, cx: number, cy: number, r: number, ignore?: (id: string) => boolean, ok?: (p: THREE.Vector3) => boolean): { point: THREE.Vector3; id: string; d: number } | null {
     const s = this.screenCache(); let best: { point: THREE.Vector3; id: string; d: number } | null = null; let bd = r;
     const u = new THREE.Vector3(), w0 = new THREE.Vector3(), P = new THREE.Vector3(), Q = new THREE.Vector3();
     for (let i = 0; i < s.segA.length; i += 3) {
@@ -434,7 +513,7 @@ export class Viewport {
       if (t < -1e-6 || t > L + 1e-6) continue;
       P.copy(p).addScaledVector(d, sp); Q.copy(sg.a).addScaledVector(u, t); if (P.distanceTo(Q) > 1e-4) continue;
       const dpx = this.screenPoint(P).distanceTo(new THREE.Vector2(cx, cy));
-      if (dpx < bd) { bd = dpx; best = { point: P.clone(), id: sg.id, d: dpx }; }
+      if (dpx < bd && (!ok || ok(P))) { bd = dpx; best = { point: P.clone(), id: sg.id, d: dpx }; }
     }
     return best;
   }
