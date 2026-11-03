@@ -137,7 +137,7 @@ export class Viewport {
   applyTheme() {
     const css = getComputedStyle(document.documentElement); const dark = css.getPropertyValue('--dark').trim() === '1';
     (this.ground.material as THREE.MeshLambertMaterial).color.set(css.getPropertyValue('--ground').trim() || '#e9e5da');
-    const g = this.grid.material as THREE.LineBasicMaterial; g.color.set(dark ? '#4a4e56' : '#cfcbbf'); g.opacity = dark ? 0.55 : 0.7;
+    const g = this.grid.material as THREE.LineBasicMaterial; g.color.set(css.getPropertyValue('--grid-3d').trim() || (dark ? '#27405f' : '#c3d2e6')); g.opacity = dark ? 0.75 : 0.8;
     // dark edges in both themes: they read on the lit faces and still show against the dark sky
     this.edgeColor = dark ? 0x101216 : COLOR.ink;
     if (this.edgeLines) (this.edgeLines.material as THREE.LineBasicMaterial).color.set(this.edgeColor);

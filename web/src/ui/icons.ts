@@ -59,6 +59,6 @@ export const ICONS: Record<string, string> = {
   place: wrap('<path d="M12 21s-6-5.3-6-10a6 6 0 0 1 12 0c0 4.7-6 10-6 10z" fill="#e8f0fb"/><path d="M9 9h6v4H9z" fill="#fff"/>'),
   chevron: wrap('<path d="M9 6l6 6-6 6"/>'),
   plugin: wrap('<path d="M9 3v3H6a2 2 0 0 0-2 2v3h3a2 2 0 0 1 0 4H4v3a2 2 0 0 0 2 2h3v-3a2 2 0 0 1 4 0v3h3a2 2 0 0 0 2-2v-3h3a2 2 0 0 0 0-4h-3V8a2 2 0 0 0-2-2h-3V3a2 2 0 0 0-4 0z" fill="#e8f0fb"/>'),
-  logo: `<svg viewBox="0 0 32 32" fill="none"><rect x="2" y="2" width="28" height="28" rx="7" fill="#2f5f8f"/><path d="M9 23V9h7a4.5 4.5 0 0 1 0 9H9" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 23l4-4" stroke="#f2b705" stroke-width="2.8" stroke-linecap="round"/></svg>`,
+  logo: `<svg viewBox="0 0 32 32" fill="none"><rect x="3" y="3" width="26" height="26" rx="3" stroke="currentColor" stroke-width="2.2"/><path d="M11.5 22V10h5a3.5 3.5 0 0 1 0 7h-5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 22l4-4" stroke="var(--amber, #f2b544)" stroke-width="2.6" stroke-linecap="round"/></svg>`,
 };
 export const icon = (name: string, cls = '') => `<span class="icon ${cls}">${ICONS[name] ?? ICONS.plugin}</span>`;
