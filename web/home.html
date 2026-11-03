@@ -42,8 +42,10 @@
   nav.links a:not(.btn):hover { color: var(--accent); }
   .theme-btn { background: none; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--muted); width: 34px; height: 34px; cursor: pointer; font-size: 16px; line-height: 1; }
   .theme-btn:hover { color: var(--accent); border-color: var(--accent); }
-  .hero { display: grid; grid-template-columns: 1.05fr 1fr; gap: 40px; align-items: center; padding: 40px 0 56px; }
-  .hero h1 { font-size: clamp(32px, 5vw, 50px); line-height: 1.1; margin: 0 0 16px; letter-spacing: -0.01em; font-weight: 600; }
+  .hero { display: grid; grid-template-columns: 1fr; gap: 36px; padding: 44px 0 56px; }
+  .hero > div:first-child { max-width: 46em; }
+  .hero .shot { box-shadow: 0 4px 14px rgba(0, 0, 0, .18), 0 30px 70px -30px rgba(0, 0, 0, .55); }
+  .hero h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.1; margin: 0 0 16px; letter-spacing: -0.01em; font-weight: 600; }
   .hero p.lead { font-size: 18px; color: var(--muted); margin: 0 0 28px; max-width: 34em; }
   .cta { display: flex; gap: 12px; flex-wrap: wrap; }
   .btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: var(--radius-sm); font-weight: 600; text-decoration: none; border: 1px solid var(--line-strong); color: var(--ink); background: transparent; transition: border-color .12s, background .12s; }
@@ -52,7 +54,7 @@
   .btn.primary:hover { background: var(--accent-strong); }
   .btn.coffee { background: var(--coffee); color: var(--coffee-ink); border-color: transparent; }
   .btn.coffee:hover { filter: brightness(1.08); background: var(--coffee); }
-  .shot { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line-strong); background: var(--surface); aspect-ratio: 4 / 3; }
+  .shot { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line-strong); background: var(--surface); aspect-ratio: 16 / 10; }
   .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
   section { padding: 48px 0; border-top: 1px solid var(--line); }
   section h2 { font-size: 26px; margin: 0 0 8px; font-weight: 600; }
@@ -108,7 +110,7 @@
         <a class="btn coffee" data-coffee href="#">☕ Buy me a coffee</a>
       </div>
     </div>
-    <div class="shot"><img src="/home/hero.png" alt="A small brick house modelled in Plannr, with a tiled timber roof" loading="eager"></div>
+    <div class="shot"><img src="/home/hero.jpg" alt="Plannr with the example house: a brick house with tiled roofs in the 3D view, the kitchen selected and its walls listed in Entity Info" loading="eager"></div>
   </div>
 
   <section id="features">
@@ -128,8 +130,10 @@
     <h2>A look inside</h2>
     <p class="sub">Every picture below is a live model in Plannr.</p>
     <div class="gallery">
-      <figure><div class="shot"><img src="/home/section.png" alt="Section through a brick house with its roof structure" loading="lazy"></div><figcaption>Section through cavity walls and a purlin roof.</figcaption></figure>
-      <figure><div class="shot"><img src="/home/roofs.png" alt="A row of small sheds with different timber roof types" loading="lazy"></div><figcaption>Every timber roof type, framed on the same shed.</figcaption></figure>
+      <figure><div class="shot"><img src="/home/dollhouse.jpg" alt="The ground floor isolated: rooms, cavity walls and the beam-and-block floor seen from above, with Model Info showing the material areas" loading="lazy"></div><figcaption>Isolate a storey for a dollhouse view: cavity walls, beam-and-block floors and the material takeoff in Model Info.</figcaption></figure>
+      <figure><div class="shot"><img src="/home/roofs.jpg" alt="A row of framed sheds, each with a different timber roof: fink and howe trusses, hip rafters, a mono-pitch, a gambrel and scissor trusses" loading="lazy"></div><figcaption>Every timber roof type, framed on the same shed by the framing plugin.</figcaption></figure>
+      <figure><div class="shot"><img src="/home/electrical.jpg" alt="The electrical plugin's situation plan for the ground floor: every point as an IEC symbol, numbered and coloured per circuit, with dashed conduits and a legend" loading="lazy"></div><figcaption>The situation plan the electrical plugin draws: points as IEC symbols, numbered per circuit, conduits dashed.</figcaption></figure>
+      <figure><div class="shot"><img src="/home/light.jpg" alt="The same house in the light theme: blue lines on white paper" loading="lazy"></div><figcaption>The same model in the light theme; the choice follows your system or the Display tray.</figcaption></figure>
     </div>
   </section>
 

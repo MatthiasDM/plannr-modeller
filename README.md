@@ -7,6 +7,8 @@ operation; the browser is a viewport with the familiar tool set; and the same op
 over **MCP**, so an AI can draw, push/pull, move, measure, paint, annotate, change the camera and take
 screenshots of what it made. The core is generic — domain tools (houses, rooms, pipes…) come as plugins.
 
+![Plannr with the example house: a brick house with tiled roofs in the 3D view, the kitchen selected and its walls listed in Entity Info](web/public/home/hero.jpg)
+
 ```
 crates/plannr-core     document model, ops kernel (draw / push-pull / offset / move / rotate / scale / …), undo history,
                        tessellation + section cuts, metrics, GLB export, plugin trait
@@ -17,6 +19,15 @@ docs/CONTRACT.md       the document / ops / REST / WebSocket / MCP contract
 docs/PLUGINS.md        how to write engine and browser plugins
 docs/CONSTRUCTION.md   the construction plugin's entities and ops
 ```
+
+## A look inside
+
+| | |
+|---|---|
+| ![The ground floor isolated: rooms, cavity walls and the beam-and-block floor seen from above](web/public/home/dollhouse.jpg) | ![A row of framed sheds, each with a different timber roof type](web/public/home/roofs.jpg) |
+| Isolate a storey for a dollhouse view: cavity walls, beam-and-block floors and the material takeoff in Model Info. | Every timber roof type, framed on the same shed by the framing plugin. |
+| ![The electrical plugin's situation plan for the ground floor: every point as an IEC symbol, numbered and coloured per circuit, with dashed conduits and a legend](web/public/home/electrical.jpg) | ![The same house in the light theme](web/public/home/light.jpg) |
+| The situation plan the electrical plugin draws: points as IEC symbols, numbered per circuit, conduits dashed. | The same model in the light theme. |
 
 ## Public instance mode
 
