@@ -22,6 +22,8 @@ export interface SnapOptions {
   from?: THREE.Vector3;
   lock?: AxisLock;
   ignore?: Set<string>;
+  /** Keep to the work plane: inference lines across it (along its normal) are left out. */
+  inPlane?: boolean;
   /** Snap onto faces (the "on face" inference). */
   faces?: boolean;
   /** Leave out entities by compiled id, e.g. geometry that only exists in the current preview. */
@@ -50,6 +52,9 @@ export interface ToolContext {
   prompt(label: string, value?: string): Promise<string | null>;
   confirm(text: string, okLabel?: string, danger?: boolean): Promise<boolean>;
   lock: AxisLock;
+  /** Normal of the face under the cursor (its visible side), or null over empty space. With `at`, a face
+   *  that contains that point wins, also one just beside the cursor (a corner or an edge snapped from outside). */
+  faceNormal(ev: { clientX: number; clientY: number }, at?: THREE.Vector3): THREE.Vector3 | null;
 }
 
 export interface Tool {
@@ -64,6 +69,8 @@ export interface Tool {
   onKey?(ev: KeyboardEvent, ctx: ToolContext): boolean;
   /** Text entered in the Measurements box. */
   onVCB?(value: string, ctx: ToolContext): void;
+  /** The arrow keys set the drawing plane (the shape faces that axis) instead of locking a direction. */
+  planeLock?: boolean;
   /** Called when the axis lock changes (arrow keys). */
   onLock?(ctx: ToolContext): void;
   /** True while the tool is in the middle of an operation (first point placed, dragging…). Modifier-hold shortcuts stay out of the way then. */
@@ -118,3 +125,46 @@ export function planeFromSnap(s: Snap, fallback: Plane): Plane {
 }
 export const GROUND: Plane = { origin: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0) };
 export const arr = (p: THREE.Vector3): [number, number, number] => [+p.x.toFixed(5), +p.y.toFixed(5), +p.z.toFixed(5)];
+
+/** The plane a shape is drawn on, SketchUp-style: the face under the first point, also when that point
+ *  snapped to a corner, an edge or a circle centre on it; the ground over empty space. */
+export function surfacePlane(ctx: ToolContext, ev: { clientX: number; clientY: number }, s: Snap): Plane {
+  const origin = s.point.clone();
+  if (s.normal) return { origin, normal: s.normal.clone().normalize() };
+  const n = ctx.faceNormal(ev, origin); return { origin, normal: n ? n.normalize() : GROUND.normal.clone() };
+}
+/** That plane, or the one facing the locked axis (arrow keys) through the same point, turned towards the camera. */
+export function withLock(ctx: ToolContext, p: Plane): Plane {
+  if (!ctx.lock) return p;
+  const n = AXIS[ctx.lock].clone(); if (ctx.lock !== 'y' && n.dot(ctx.scene.cam.camera.position.clone().sub(p.origin)) < 0) n.negate();
+  return { origin: p.origin.clone(), normal: n };
+}
+export const toPlane = (p: THREE.Vector3, pl: Plane) => p.clone().sub(pl.normal.clone().multiplyScalar(p.clone().sub(pl.origin).dot(pl.normal)));
+/** The colour of the axis a plane faces (red, blue or green), magenta for a sloped plane. */
+export function planeColor(pl: Plane): number {
+  const n = pl.normal; for (const ax of ['x', 'y', 'z'] as const) if (Math.abs(n.dot(AXIS[ax])) > 0.999) return AXIS_COLOR[ax];
+  return MAGENTA;
+}
+/** A small ring or square lying in the plane at its origin: shows which way the shape will face before the first click. */
+export function drawPlaneCursor(ctx: ToolContext, pl: Plane, shape: 'ring' | 'square') {
+  const n = pl.normal.clone().normalize(); let u = AXIS.x.clone().sub(n.clone().multiplyScalar(AXIS.x.dot(n)));
+  if (u.lengthSq() < 1e-6) u = AXIS.z.clone().sub(n.clone().multiplyScalar(AXIS.z.dot(n)));
+  u.normalize(); const w = n.clone().cross(u).normalize(); const r = ctx.scene.pixelSize(pl.origin) * 26; const c = pl.origin;
+  const pts: THREE.Vector3[] = [];
+  if (shape === 'ring') for (let i = 0; i < 32; i++) { const a = (i / 32) * Math.PI * 2; pts.push(c.clone().addScaledVector(u, Math.cos(a) * r).addScaledVector(w, Math.sin(a) * r)); }
+  else for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) pts.push(c.clone().addScaledVector(u, a * r * 0.8).addScaledVector(w, b * r * 0.8));
+  const col = planeColor(pl); ctx.scene.addLine([...pts, pts[0]], col, false, 2); ctx.scene.addFace(pts, col, 0.12);
+}
+/** The plane-picking part shared by the shape tools: before the first point it follows the face under
+ *  the cursor; once the first point is down it stays, and the arrow keys turn it to face an axis. */
+export class DrawPlane {
+  /** The plane found under the first point (without the arrow-key lock). */
+  auto: Plane = GROUND; plane: Plane = GROUND;
+  /** Before the first point: the plane under the cursor, with a cursor showing it. */
+  hover(ctx: ToolContext, ev: { clientX: number; clientY: number }, s: Snap, shape: 'ring' | 'square') { const p = withLock(ctx, surfacePlane(ctx, ev, s)); drawPlaneCursor(ctx, p, shape); return p; }
+  /** The first point: fix the plane there. */
+  start(ctx: ToolContext, ev: { clientX: number; clientY: number }, s: Snap) { this.auto = surfacePlane(ctx, ev, s); this.plane = withLock(ctx, this.auto); return this.plane; }
+  /** The arrow keys changed: turn the plane about the first point. */
+  relock(ctx: ToolContext) { this.plane = withLock(ctx, this.auto); return this.plane; }
+  on(p: THREE.Vector3) { return toPlane(p, this.plane); }
+}

@@ -399,8 +399,8 @@ export class App {
   setTool(id: string) {
     const t = this.tools.find(t => t.id === id); if (!t) return;
     if (this.embed && !EMBED_TOOLS.has(id)) return;
-    this.tool.deactivate?.(this.ctx); this.scene.clearOverlay(); this.scene.setSnapMarker(null); this.setLock(null);
-    this.tool = t; t.activate?.(this.ctx);
+    this.tool.deactivate?.(this.ctx); this.scene.clearOverlay(); this.scene.setSnapMarker(null); this.lock = null; this.shiftLock = null;
+    this.tool = t; t.activate?.(this.ctx); this.updateLockBadge();
     this.scene.renderer.domElement.style.cursor = t.cursor;
     renderToolbar(this, this.els.toolbar); renderToolOptions(this, this.els['tool-options']); this.emit('tool', t.id); this.sendState(); this.updateTouchBar();
   }
@@ -424,8 +424,24 @@ export class App {
     if (this.tools.includes(prev)) this.setTool(prev.id); else this.setTool('select');
   }
   setLock(l: AxisLock) {
-    this.lock = this.lock === l ? null : l; this.shiftLock = null; this.updateLockBadge();
-    this.tool.onLock?.(this.ctx);
+    this.lock = this.lock === l ? null : l; this.shiftLock = null;
+    this.tool.onLock?.(this.ctx); this.updateLockBadge();
+    // show the new plane or axis at once, without waiting for the mouse to move
+    if (this.lastMove && this.tool.planeLock) this.replayMove(this.lastMove);
+  }
+  /** The last pointer move over the viewport, to redraw a tool's preview after a key changed it. */
+  private lastMove: PointerEvent | null = null;
+  private replayMove(e: PointerEvent) {
+    this.snapAsked = false; this.tool.onMove?.(e, this.ctx);
+    if (this.snapAsked && this.lastSnap) { const sn = this.lastSnap; this.scene.setSnapMarker(sn, snapColor(sn), snapLabel(sn)); } else this.scene.setSnapMarker(null);
+  }
+  /** The face a shape tool draws on: under the cursor, or (for a snapped corner or edge) one around it that holds the point. */
+  private faceNormal(ev: { clientX: number; clientY: number }, at?: THREE.Vector3): THREE.Vector3 | null {
+    const hit = (x: number, y: number) => { const pk = this.scene.pick({ clientX: x, clientY: y }, { facesOnly: true }); return pk ? { n: pk.back ? pk.normal.clone().negate() : pk.normal.clone(), p: pk.point } : null; };
+    const holds = (h: { n: THREE.Vector3; p: THREE.Vector3 }) => !at || Math.abs(h.n.dot(at.clone().sub(h.p))) < 1e-3;
+    const under = hit(ev.clientX, ev.clientY); if (under && holds(under)) return under.n.normalize();
+    if (at) for (const r of [6, 12]) for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; const h = hit(ev.clientX + Math.cos(a) * r, ev.clientY + Math.sin(a) * r); if (h && holds(h)) return h.n.normalize(); }
+    return under ? under.n.normalize() : null;
   }
   private makeContext(): ToolContext {
     const app = this;
@@ -438,6 +454,7 @@ export class App {
       snap: (ev, opts) => app.snap(ev, opts), setTool: (id) => app.setTool(id),
       options: this.options, toast: (t) => app.toast(t), prompt: (l, v) => app.promptText(l, v), confirm: (t, ok, danger) => app.confirm(t, ok, danger),
       get lock() { return app.lock; }, set lock(v: AxisLock) { app.lock = v; },
+      faceNormal: (ev, at) => app.faceNormal(ev, at),
       enterGroup: (id: string) => app.enterGroup(app.resolve(id) === id ? id : app.resolve(id)),
     } as ToolContext;
   }
@@ -515,6 +532,8 @@ export class App {
     }
     for (const r of this.refPoints) { if (from && r.distanceTo(from) < 1e-6) continue; for (const ax of ['x', 'y', 'z'] as const) rays.push({ p: r, d: AXIS[ax], kind: 'from', axis: ax, color: AXIS_COLOR[ax], ref: r }); }
     for (const g of guides) if (g.direction && !isIgnored(g.id)) rays.push({ p: V(g.point), d: V(g.direction).normalize(), kind: 'guide', color: COLOR.cyan, id: g.id });
+    // a shape keeps to its plane: a line along the plane's normal would only lead off it
+    if (opts.inPlane) for (let i = rays.length - 1; i >= 0; i--) if (Math.abs(rays[i].d.dot(plane.normal)) > 0.999) rays.splice(i, 1);
     const notFrom = (p: THREE.Vector3) => !from || p.distanceTo(from) > 1e-3;
     const refOf = (r: Ray) => (r.ref ? [{ from: r.ref, color: r.color }] : []);
     // 1. points: endpoint, guide point, midpoint, origin
@@ -599,7 +618,8 @@ export class App {
   private releaseInference() { if (!this.shiftLock) return; this.shiftLock = null; this.updateLockBadge(); this.tool.onLock?.(this.ctx); }
   private updateLockBadge() {
     const b = this.els['lock-badge']; const sl = this.shiftLock;
-    const text = this.lock ? `Locked to ${({ x: 'red', y: 'blue', z: 'green' })[this.lock]} axis` : sl?.label ?? ''; const color = this.lock ? AXIS_COLOR[this.lock] : sl?.color ?? 0x888888;
+    const axis = this.lock ? ({ x: 'red', y: 'blue', z: 'green' })[this.lock] : '';
+    const text = this.lock ? (this.tool.planeLock ? `Drawing plane faces the ${axis} axis` : `Locked to ${axis} axis`) : sl?.label ?? ''; const color = this.lock ? AXIS_COLOR[this.lock] : sl?.color ?? 0x888888;
     b.classList.toggle('show', !!text); if (text) { b.textContent = text; b.style.background = `#${color.toString(16).padStart(6, '0')}`; }
   }
 
@@ -710,10 +730,8 @@ export class App {
       }
       if (this.camCtl?.onPointerMove?.(e)) return;
       if (mid) { mid.pan || e.shiftKey ? this.scene.cam.pan(e.clientX - mid.x, e.clientY - mid.y, this.scene.height) : this.scene.cam.orbit(e.clientX - mid.x, e.clientY - mid.y); mid.x = e.clientX; mid.y = e.clientY; return; }
-      this.snapAsked = false;
-      this.tool.onMove?.(e, this.ctx);
       // every tool that asked for a snap gets a visible marker, also before its first click
-      if (this.snapAsked && this.lastSnap) { const sn = this.lastSnap; this.scene.setSnapMarker(sn, snapColor(sn), snapLabel(sn)); } else this.scene.setSnapMarker(null);
+      this.lastMove = e; this.replayMove(e);
     });
     canvas.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch') this.scene.setSnapMarker(null); });
     canvas.addEventListener('pointerup', e => {

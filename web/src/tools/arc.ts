@@ -1,7 +1,7 @@
 // Arc tools (centre, three-point, two-point, pie), Rotated Rectangle, Protractor and Zoom Window.
 import * as THREE from 'three';
 import type { Tool, ToolContext, Plane, Snap } from './base';
-import { parseNumbers, drawSnap, planeFromSnap, GROUND, arr, INK, MAGENTA, lineColor } from './base';
+import { parseNumbers, drawSnap, GROUND, arr, INK, MAGENTA, lineColor, DrawPlane } from './base';
 import { fmtM, fmtDeg } from '../model';
 import { planeBasis } from './draw';
 
@@ -19,28 +19,28 @@ const segsFor = (sweep: number) => Math.max(1, Math.min(200, Math.ceil((12 * swe
 
 /** Centre arc: centre, start, then the end angle. Pie variant closes with the radii. */
 export class ArcTool implements Tool {
-  id: string; label: string; hint = 'Click the centre, the start of the arc, then its end. Type a radius or an angle (e.g. 90°).'; cursor = 'crosshair'; shortcut?: string;
-  private c: THREE.Vector3 | null = null; private a: THREE.Vector3 | null = null; private plane: Plane = GROUND; private cur: Snap | null = null;
+  id: string; label: string; hint = 'Click the centre, the start of the arc, then its end. Type a radius or an angle (e.g. 90°). Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; shortcut?: string; planeLock = true;
+  private c: THREE.Vector3 | null = null; private a: THREE.Vector3 | null = null; private dp = new DrawPlane(); private get plane() { return this.dp.plane; } private cur: Snap | null = null;
   constructor(private pie = false) { this.id = pie ? 'pie' : 'arc'; this.label = pie ? 'Pie' : 'Arc'; if (!pie) this.shortcut = 'a'; }
   busy() { return !!this.c; }
   activate(ctx: ToolContext) { this.c = this.a = null; ctx.setHint(this.hint); ctx.setVCB('', 'Radius'); }
   deactivate(ctx: ToolContext) { this.c = this.a = null; ctx.scene.clearOverlay(); }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    const s = ctx.snap(ev, { plane: this.c ? this.plane : GROUND, faces: !this.c, from: this.c ?? undefined, lock: ctx.lock }); this.cur = s; ctx.scene.clearOverlay(); drawSnap(ctx, s);
-    if (!this.c) return;
-    if (!this.a) { ctx.scene.addLine([this.c, s.point], lineColor(this.c, s.point, s), true); ctx.scene.addLabel(this.c.clone().lerp(s.point, 0.5), `r ${fmtM(this.c.distanceTo(s.point))}`); ctx.setVCB(this.c.distanceTo(s.point).toFixed(3), 'Radius'); return; }
+    const s = ctx.snap(ev, { plane: this.c ? this.plane : GROUND, faces: !this.c, inPlane: !!this.c, from: this.c ?? undefined }); this.cur = s; ctx.scene.clearOverlay(); drawSnap(ctx, s);
+    if (!this.c) { this.dp.hover(ctx, ev, s, 'ring'); return; }
+    if (!this.a) { s.point.copy(this.onPlane(s.point)); ctx.scene.addLine([this.c, s.point], lineColor(this.c, s.point, s), true); ctx.scene.addLabel(this.c.clone().lerp(s.point, 0.5), `r ${fmtM(this.c.distanceTo(s.point))}`); ctx.setVCB(this.c.distanceTo(s.point).toFixed(3), 'Radius'); return; }
     const signed = shortSweep(this.c, this.plane.normal, this.a, s.point); const n = signed < 0 ? this.plane.normal.clone().negate() : this.plane.normal; const sweep = Math.abs(signed); const pts = polyArc(this.c, n, this.a, sweep, segsFor(sweep));
     ctx.scene.addLine(pts, INK, false, 2); ctx.scene.addLine([this.c, this.a], 0x888888, true); ctx.scene.addLine([this.c, pts[pts.length - 1]], 0x888888, true);
     if (this.pie) ctx.scene.addFace([this.c, ...pts]);
     ctx.scene.addLabel(pts[Math.floor(pts.length / 2)], fmtDeg((sweep * 180) / Math.PI)); ctx.setVCB(((sweep * 180) / Math.PI).toFixed(1), 'Angle');
   }
   onDown(ev: PointerEvent, ctx: ToolContext) {
-    if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.c ? this.plane : GROUND, faces: !this.c, from: this.c ?? undefined, lock: ctx.lock });
-    if (!this.c) { this.c = s.point.clone(); this.plane = planeFromSnap(s, GROUND); ctx.setHint('Click where the arc starts (sets the radius).'); return; }
+    if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.c ? this.plane : GROUND, faces: !this.c, inPlane: !!this.c, from: this.c ?? undefined });
+    if (!this.c) { this.c = s.point.clone(); this.dp.start(ctx, ev, s); ctx.setHint('Click where the arc starts (sets the radius).'); return; }
     if (!this.a) { if (s.point.distanceTo(this.c) < 0.005) return; this.a = this.onPlane(s.point); ctx.setHint('Click where the arc ends, or type the angle.'); return; }
     this.finish(ctx, shortSweep(this.c, this.plane.normal, this.a, this.onPlane(s.point)));
   }
-  private onPlane(p: THREE.Vector3) { const n = this.plane.normal; return p.clone().sub(n.clone().multiplyScalar(p.clone().sub(this.plane.origin).dot(n))); }
+  private onPlane(p: THREE.Vector3) { return this.dp.on(p); }
   private async finish(ctx: ToolContext, signed: number) {
     if (!this.c || !this.a || Math.abs(signed) < 0.001) return; const c = this.c, a = this.a; const n = signed < 0 ? this.plane.normal.clone().negate() : this.plane.normal.clone(); const sweep = Math.abs(signed);
     const end = a.clone().sub(c).applyAxisAngle(n, sweep).add(c); this.c = this.a = null; ctx.scene.clearOverlay(); ctx.setHint(this.hint);
@@ -51,13 +51,14 @@ export class ArcTool implements Tool {
     if (!this.a) { const dir = this.cur ? this.cur.point.clone().sub(this.c) : new THREE.Vector3(1, 0, 0); if (dir.lengthSq() < 1e-9) dir.set(1, 0, 0); this.a = this.onPlane(this.c.clone().addScaledVector(dir.normalize(), n[0])); ctx.setHint('Click where the arc ends, or type the angle.'); return; }
     this.finish(ctx, (n[0] * Math.PI) / 180);
   }
+  onLock(ctx: ToolContext) { if (this.c && !this.a) this.dp.relock(ctx); }
   onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.c) { this.c = this.a = null; ctx.scene.clearOverlay(); ctx.setHint(this.hint); return true; } return false; }
 }
 
 /** Three-point arc: start, a point on the arc, end. */
 export class ThreePointArcTool implements Tool {
-  id = 'arc3'; label = '3 Point Arc'; hint = 'Click the start, a point the arc passes through, then the end.'; cursor = 'crosshair';
-  private pts: THREE.Vector3[] = []; private plane: Plane = GROUND;
+  id = 'arc3'; label = '3 Point Arc'; hint = 'Click the start, a point the arc passes through, then the end. Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; planeLock = true;
+  private pts: THREE.Vector3[] = []; private dp = new DrawPlane(); private get plane() { return this.dp.plane; }
   busy() { return this.pts.length > 0; }
   activate(ctx: ToolContext) { this.pts = []; ctx.setHint(this.hint); ctx.setVCB('', 'Measurements'); }
   deactivate(ctx: ToolContext) { this.pts = []; ctx.scene.clearOverlay(); }
@@ -66,11 +67,18 @@ export class ThreePointArcTool implements Tool {
     const fit = circleThrough(a, b, p); if (!fit) { ctx.scene.addLine([a, b, p], INK); return; }
     const sweep = sweepTo(fit.c, fit.n, a, p); ctx.scene.addLine(polyArc(fit.c, fit.n, a, sweep, segsFor(sweep)), INK, false, 2); ctx.scene.addLabel(fit.c, `r ${fmtM(fit.r)}`, 'small');
   }
-  onMove(ev: PointerEvent, ctx: ToolContext) { const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, from: this.pts.at(-1), lock: ctx.lock }); ctx.scene.clearOverlay(); drawSnap(ctx, s); if (this.pts.length) this.preview(ctx, s.point); }
+  onMove(ev: PointerEvent, ctx: ToolContext) {
+    const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, inPlane: !!this.pts.length, from: this.pts.at(-1) }); ctx.scene.clearOverlay(); drawSnap(ctx, s);
+    if (!this.pts.length) { this.dp.hover(ctx, ev, s, 'ring'); return; }
+    this.preview(ctx, this.held(ctx, s.point));
+  }
+  /** With an arrow key down the arc lies in that plane; otherwise its three points set the plane. */
+  private held(ctx: ToolContext, p: THREE.Vector3) { return ctx.lock ? this.dp.on(p) : p; }
+  onLock(ctx: ToolContext) { if (this.pts.length === 1) this.dp.relock(ctx); }
   async onDown(ev: PointerEvent, ctx: ToolContext) {
-    if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, from: this.pts.at(-1), lock: ctx.lock });
-    if (!this.pts.length) this.plane = planeFromSnap(s, GROUND);
-    this.pts.push(s.point.clone());
+    if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, inPlane: !!this.pts.length, from: this.pts.at(-1) });
+    if (!this.pts.length) this.dp.start(ctx, ev, s);
+    this.pts.push(this.pts.length ? this.held(ctx, s.point) : s.point.clone());
     if (this.pts.length === 3) { const [a, b, c] = this.pts; this.pts = []; ctx.scene.clearOverlay(); await ctx.ops([{ op: 'draw_arc', through: [arr(a), arr(b), arr(c)], layer: ctx.options.layer }], '3 point arc'); }
     else ctx.setHint(this.pts.length === 1 ? 'Click a point the arc passes through.' : 'Click the end of the arc.');
   }
@@ -85,8 +93,8 @@ function circleThrough(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) {
 
 /** Two-point arc: chord endpoints, then the bulge. */
 export class TwoPointArcTool implements Tool {
-  id = 'arc2'; label = '2 Point Arc'; hint = 'Click both ends of the chord, then pull the bulge. Type a bulge distance.'; cursor = 'crosshair';
-  private pts: THREE.Vector3[] = []; private plane: Plane = GROUND; private bulge = 0;
+  id = 'arc2'; label = '2 Point Arc'; hint = 'Click both ends of the chord, then pull the bulge. Type a bulge distance. Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; planeLock = true;
+  private pts: THREE.Vector3[] = []; private dp = new DrawPlane(); private get plane() { return this.dp.plane; } private bulge = 0;
   busy() { return this.pts.length > 0; }
   activate(ctx: ToolContext) { this.pts = []; ctx.setHint(this.hint); ctx.setVCB('', 'Bulge'); }
   deactivate(ctx: ToolContext) { this.pts = []; ctx.scene.clearOverlay(); }
@@ -97,14 +105,16 @@ export class TwoPointArcTool implements Tool {
     const n = h > 0 ? this.plane.normal.clone() : this.plane.normal.clone().negate(); const sweep = sweepTo(c, n, a, b); ctx.scene.addLine(polyArc(c, n, a, sweep, segsFor(sweep)), INK, false, 2); ctx.scene.addLine([a, b], 0x888888, true); ctx.scene.addLabel(mid.clone().addScaledVector(perp, h), `bulge ${fmtM(Math.abs(h))}`);
   }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, from: this.pts.length === 1 ? this.pts[0] : undefined, lock: ctx.lock }); ctx.scene.clearOverlay(); drawSnap(ctx, s);
+    const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, inPlane: !!this.pts.length, from: this.pts.length === 1 ? this.pts[0] : undefined }); ctx.scene.clearOverlay(); drawSnap(ctx, s);
+    if (!this.pts.length) { this.dp.hover(ctx, ev, s, 'ring'); return; }
+    s.point.copy(this.dp.on(s.point));
     if (this.pts.length === 1) { ctx.scene.addLine([this.pts[0], s.point], lineColor(this.pts[0], s.point, s), true); ctx.setVCB(this.pts[0].distanceTo(s.point).toFixed(3), 'Length'); }
     if (this.pts.length === 2) { this.bulge = this.bulgeAt(s.point); this.preview(ctx); ctx.setVCB(this.bulge.toFixed(3), 'Bulge'); }
   }
   onDown(ev: PointerEvent, ctx: ToolContext) {
-    if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, from: this.pts.length === 1 ? this.pts[0] : undefined, lock: ctx.lock });
-    if (!this.pts.length) this.plane = planeFromSnap(s, GROUND);
-    if (this.pts.length < 2) { this.pts.push(s.point.clone()); ctx.setHint(this.pts.length === 1 ? 'Click the other end of the chord.' : 'Pull the bulge and click, or type it.'); return; }
+    if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, inPlane: !!this.pts.length, from: this.pts.length === 1 ? this.pts[0] : undefined });
+    if (!this.pts.length) this.dp.start(ctx, ev, s);
+    if (this.pts.length < 2) { this.pts.push(this.dp.on(s.point)); ctx.setHint(this.pts.length === 1 ? 'Click the other end of the chord.' : 'Pull the bulge and click, or type it.'); return; }
     this.finish(ctx, this.bulgeAt(s.point));
   }
   private async finish(ctx: ToolContext, bulge: number) {
@@ -112,26 +122,29 @@ export class TwoPointArcTool implements Tool {
     await ctx.ops([{ op: 'draw_arc', from: arr(a), to: arr(b), bulge: +bulge.toFixed(5), normal: arr(this.plane.normal), layer: ctx.options.layer }], '2 point arc');
   }
   onVCB(v: string, ctx: ToolContext) { const n = parseNumbers(v); if (n.length && this.pts.length === 2) this.finish(ctx, Math.sign(this.bulge || 1) * n[0]); }
+  onLock(ctx: ToolContext) { if (this.pts.length === 1) this.dp.relock(ctx); }
   onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.pts.length) { this.pts = []; ctx.scene.clearOverlay(); return true; } return false; }
 }
 
 /** Rotated rectangle: first edge (two clicks), then the width. */
 export class RotatedRectangleTool implements Tool {
-  id = 'rotrect'; label = 'Rotated Rectangle'; hint = 'Click the two ends of the first edge, then set the width.'; cursor = 'crosshair';
-  private pts: THREE.Vector3[] = []; private plane: Plane = GROUND; private last: THREE.Vector3 | null = null;
+  id = 'rotrect'; label = 'Rotated Rectangle'; hint = 'Click the two ends of the first edge, then set the width. Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; planeLock = true;
+  private pts: THREE.Vector3[] = []; private dp = new DrawPlane(); private get plane() { return this.dp.plane; } private last: THREE.Vector3 | null = null;
   busy() { return this.pts.length > 0; }
   activate(ctx: ToolContext) { this.pts = []; ctx.setHint(this.hint); ctx.setVCB('', 'Length'); }
   deactivate(ctx: ToolContext) { this.pts = []; ctx.scene.clearOverlay(); }
   private corners(p: THREE.Vector3) { const [a, b] = this.pts; const u = b.clone().sub(a).normalize(); const w = this.plane.normal.clone().cross(u).normalize(); const h = p.clone().sub(b).dot(w); return { pts: [a, b, b.clone().addScaledVector(w, h), a.clone().addScaledVector(w, h)], u, h }; }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, from: this.pts.length === 1 ? this.pts[0] : undefined, lock: ctx.lock }); ctx.scene.clearOverlay(); drawSnap(ctx, s); this.last = s.point;
+    const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, inPlane: !!this.pts.length, from: this.pts.length === 1 ? this.pts[0] : undefined }); ctx.scene.clearOverlay(); drawSnap(ctx, s);
+    if (!this.pts.length) { this.dp.hover(ctx, ev, s, 'square'); return; }
+    s.point.copy(this.dp.on(s.point)); this.last = s.point;
     if (this.pts.length === 1) { ctx.scene.addLine([this.pts[0], s.point], lineColor(this.pts[0], s.point, s), false, 2); ctx.scene.addLabel(this.pts[0].clone().lerp(s.point, 0.5), fmtM(this.pts[0].distanceTo(s.point))); ctx.setVCB(this.pts[0].distanceTo(s.point).toFixed(3), 'Length'); }
     if (this.pts.length === 2) { const { pts, h } = this.corners(s.point); ctx.scene.addLine([...pts, pts[0]], INK, false, 2); ctx.scene.addFace(pts); ctx.scene.addLabel(pts[1].clone().lerp(pts[2], 0.5), fmtM(Math.abs(h))); ctx.setVCB(Math.abs(h).toFixed(3), 'Width'); }
   }
   onDown(ev: PointerEvent, ctx: ToolContext) {
-    if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, from: this.pts.length === 1 ? this.pts[0] : undefined, lock: ctx.lock });
-    if (!this.pts.length) this.plane = planeFromSnap(s, GROUND);
-    if (this.pts.length < 2) { if (this.pts.length === 1 && s.point.distanceTo(this.pts[0]) < 0.005) return; this.pts.push(s.point.clone()); ctx.setHint(this.pts.length === 1 ? 'Click the other end of the first edge.' : 'Click to set the width, or type it.'); return; }
+    if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, inPlane: !!this.pts.length, from: this.pts.length === 1 ? this.pts[0] : undefined });
+    if (!this.pts.length) this.dp.start(ctx, ev, s);
+    if (this.pts.length < 2) { const q = this.dp.on(s.point); if (this.pts.length === 1 && q.distanceTo(this.pts[0]) < 0.005) return; this.pts.push(q); ctx.setHint(this.pts.length === 1 ? 'Click the other end of the first edge.' : 'Click to set the width, or type it.'); return; }
     this.finish(ctx, this.corners(s.point).h);
   }
   private async finish(ctx: ToolContext, h: number) {
@@ -144,32 +157,34 @@ export class RotatedRectangleTool implements Tool {
     if (this.pts.length === 1 && this.last) { const d = this.last.clone().sub(this.pts[0]).normalize(); this.pts.push(this.pts[0].clone().addScaledVector(d, n[0])); ctx.setHint('Click to set the width, or type it.'); }
     else if (this.pts.length === 2) { const sign = this.last ? Math.sign(this.corners(this.last).h || 1) : 1; this.finish(ctx, sign * n[0]); }
   }
+  onLock(ctx: ToolContext) { if (this.pts.length === 1) this.dp.relock(ctx); }
   onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.pts.length) { this.pts = []; ctx.scene.clearOverlay(); return true; } return false; }
 }
 
 /** Protractor: angled guide lines. Centre, reference direction, angle. */
 export class ProtractorTool implements Tool {
-  id = 'protractor'; label = 'Protractor'; hint = 'Click the vertex, a reference direction, then the angle: a guide line is placed. Type degrees.'; cursor = 'crosshair';
-  private c: THREE.Vector3 | null = null; private ref: THREE.Vector3 | null = null; private plane: Plane = GROUND; private angle = 0;
+  id = 'protractor'; label = 'Protractor'; hint = 'Click the vertex, a reference direction, then the angle: a guide line is placed. Type degrees. Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; planeLock = true;
+  private c: THREE.Vector3 | null = null; private ref: THREE.Vector3 | null = null; private dp = new DrawPlane(); private get plane() { return this.dp.plane; } private angle = 0;
   busy() { return !!this.c; }
   activate(ctx: ToolContext) { this.c = this.ref = null; ctx.setHint(this.hint); ctx.setVCB('', 'Angle'); }
   deactivate(ctx: ToolContext) { this.c = this.ref = null; ctx.scene.clearOverlay(); }
   private dirAt(p: THREE.Vector3) { const a = this.ref!.clone().sub(this.c!); const n = this.plane.normal; a.sub(n.clone().multiplyScalar(a.dot(n))).normalize(); const b = p.clone().sub(this.c!); b.sub(n.clone().multiplyScalar(b.dot(n))); let ang = Math.atan2(a.clone().cross(b).dot(n), a.dot(b)); const snapped = Math.round(ang / (Math.PI / 12)) * (Math.PI / 12); if (Math.abs(ang - snapped) < 0.02) ang = snapped; return { ang, dir: a.clone().applyAxisAngle(n, ang) }; }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    const s = ctx.snap(ev, { plane: this.c ? this.plane : GROUND, faces: !this.c, from: this.c ?? undefined, lock: ctx.lock }); ctx.scene.clearOverlay(); drawSnap(ctx, s);
-    if (!this.c) return;
+    const s = ctx.snap(ev, { plane: this.c ? this.plane : GROUND, faces: !this.c, inPlane: !!this.c, from: this.c ?? undefined }); ctx.scene.clearOverlay(); drawSnap(ctx, s);
+    if (!this.c) { this.dp.hover(ctx, ev, s, 'ring'); return; }
     const { u, w } = planeBasis(this.plane.normal); const r = ctx.scene.pixelSize(this.c) * 60; const ring: THREE.Vector3[] = []; for (let i = 0; i <= 48; i++) { const a = (i / 48) * Math.PI * 2; ring.push(this.c.clone().addScaledVector(u, Math.cos(a) * r).addScaledVector(w, Math.sin(a) * r)); } ctx.scene.addLine(ring, 0x888888);
     if (!this.ref) { ctx.scene.addLine([this.c, s.point], 0x888888, true); return; }
     const { ang, dir } = this.dirAt(s.point); this.angle = ang; ctx.scene.addLine([this.c, this.ref], 0x888888, true); ctx.scene.addLine([this.c.clone().addScaledVector(dir, -200), this.c.clone().addScaledVector(dir, 200)], MAGENTA, true); ctx.scene.addLabel(s.point, fmtDeg((ang * 180) / Math.PI)); ctx.setVCB(((ang * 180) / Math.PI).toFixed(1), 'Angle');
   }
   onDown(ev: PointerEvent, ctx: ToolContext) {
-    if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.c ? this.plane : GROUND, faces: !this.c, from: this.c ?? undefined, lock: ctx.lock });
-    if (!this.c) { this.c = s.point.clone(); this.plane = planeFromSnap(s, GROUND); if (ctx.lock) this.plane = { origin: this.c, normal: new THREE.Vector3(ctx.lock === 'x' ? 1 : 0, ctx.lock === 'y' ? 1 : 0, ctx.lock === 'z' ? 1 : 0) }; ctx.setHint('Click the reference direction.'); return; }
+    if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.c ? this.plane : GROUND, faces: !this.c, inPlane: !!this.c, from: this.c ?? undefined });
+    if (!this.c) { this.c = s.point.clone(); this.dp.start(ctx, ev, s); ctx.setHint('Click the reference direction.'); return; }
     if (!this.ref) { this.ref = s.point.clone(); ctx.setHint('Click the angle, or type it.'); return; }
     this.finish(ctx, this.dirAt(s.point).dir);
   }
   private async finish(ctx: ToolContext, dir: THREE.Vector3) { const c = this.c!; this.c = this.ref = null; ctx.scene.clearOverlay(); ctx.setHint(this.hint); await ctx.ops([{ op: 'add_guide', point: arr(c), direction: arr(dir) }], 'Guide'); }
   onVCB(v: string, ctx: ToolContext) { const n = parseNumbers(v); if (!n.length || !this.c || !this.ref) return; const a = this.ref.clone().sub(this.c).normalize(); this.finish(ctx, a.applyAxisAngle(this.plane.normal, (n[0] * Math.PI) / 180)); }
+  onLock(ctx: ToolContext) { if (this.c) this.dp.relock(ctx); }
   onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.c) { this.c = this.ref = null; ctx.scene.clearOverlay(); return true; } return false; }
 }
 
