@@ -233,6 +233,12 @@ pub fn check(doc: &Document) -> Value {
                     } else {
                         f.push("info", id, "Ridge board", "A ridge board carries no load: the ceiling joists act as rafter ties — nail them to the rafters at every bearing.".into(), None, None);
                     }
+                    for (oi, o) in rf.openings.iter().enumerate() {
+                        // rule of thumb: doubled trimmers and headers carry up to two cut rafters without a calculation
+                        let cut = ((o.width + rf.spacing - 1e-6) / rf.spacing).floor().max(0.0) as usize;
+                        if cut > 2 { f.push("warning", id, &format!("Roof opening {} cuts {cut} rafters", oi + 1), format!("{:.2} m along the ridge at {:.0} mm spacing: more than two rafters land on the headers — have the doubled trimmers and headers checked, or add a third ply / use a beam.", o.width, rf.spacing * 1000.0), Some(cut as f64), Some(2.0)); }
+                        else { f.push("ok", id, &format!("Roof opening {}", oi + 1), format!("{:.2} × {:.2} m: at most two cut rafters on doubled headers between doubled trimmers.", o.width, o.depth), Some(cut as f64), Some(2.0)); }
+                    }
                 } else {
                     if rf.spacing > 0.61 { f.push("warning", id, "Truss spacing", format!("{:.0} mm: trusses are normally 600 mm apart or less; wider spacing needs heavier sheathing and battens.", rf.spacing * 1000.0), Some(rf.spacing), Some(0.6)); }
                     if span > 12.0 { f.push("info", id, "Long-span trusses", format!("{span:.1} m span: get the trusses designed by the manufacturer."), Some(span), Some(12.0)); }

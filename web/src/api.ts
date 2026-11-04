@@ -21,7 +21,7 @@ export interface CompiledScene {
   metrics: { faces: number; edges: number; groups: number; area: number; areaByMaterial: Record<string, number>; edgeLength: number };
 }
 export interface OpsResponse { version: number; results: OpResult[] }
-export interface PluginInfo { id: string; name: string; entityTypes: string[]; ops: { name: string; description: string }[]; script?: string | null }
+export interface PluginInfo { id: string; name: string; entityTypes: string[]; ops: { name: string; description: string }[]; script?: string | null; enabled?: boolean; source?: 'builtIn' | 'installed'; version?: string; description?: string }
 
 /** This browser's key: on a public instance it owns the projects made here (private instances ignore it). */
 export const owner: string = (() => {
@@ -59,7 +59,9 @@ export const api = {
   deleteProject: (id: string) => req<void>('DELETE', `/projects/${id}`),
   duplicateProject: (id: string) => req<ProjectSummary>('POST', `/projects/${id}/duplicate`),
   ops: (id: string, ops: Op[], label?: string) => req<OpsResponse>('POST', `/projects/${id}/ops`, { ops, label }),
-  preview: (id: string, ops: Op[], hidden = false) => req<CompiledScene>('POST', `/projects/${id}/preview${hidden ? '?hidden=1' : ''}`, { ops }),
+  /** `partial`: the reply holds only what the ops change (`partial: true`, `dirty`: the top-level ids it replaces),
+   *  or the whole scene when the engine can't tell. */
+  preview: (id: string, ops: Op[], hidden = false, partial = false) => req<CompiledScene & { partial?: boolean; dirty?: string[] }>('POST', `/projects/${id}/preview${hidden ? '?hidden=1' : ''}`, { ops, partial }),
   undo: (id: string) => req<{ version: number; label: string }>('POST', `/projects/${id}/undo`),
   redo: (id: string) => req<{ version: number; label: string }>('POST', `/projects/${id}/redo`),
   history: (id: string) => req<{ version: number; label: string; at: string }[]>('GET', `/projects/${id}/history`),

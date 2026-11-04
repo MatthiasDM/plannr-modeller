@@ -15,9 +15,11 @@ crates/plannr-core     document model, ops kernel (draw / push-pull / offset / m
 crates/plannr-server   Axum REST API + WebSocket + MCP endpoint + SQLite + static hosting (port 8795)
 web/                   Vite + TypeScript + three.js frontend (SketchUp-style UI)
 plugins/construction   the reference plugin: storeys, rooms, walls, openings, roofs, fixtures, runs (engine + browser)
+plugins/electrical     circuits, conduits, AREI checks and schematics · plugins/framing  wood framing · plugins/plumbing  pipes, fittings, brackets
 docs/CONTRACT.md       the document / ops / REST / WebSocket / MCP contract
 docs/PLUGINS.md        how to write engine and browser plugins
 docs/CONSTRUCTION.md   the construction plugin's entities and ops
+docs/PLUMBING.md       the plumbing plugin: pipes, fittings, brackets, checks, takeoff
 ```
 
 ## A look inside
@@ -43,7 +45,10 @@ cd web && npm install && npm run build && cd ..   # builds web/dist
 cargo run --release -p plannr-server              # http://localhost:8795
 ```
 
-The server prints an MCP token at startup (or set `PLANNR_TOKEN`). Connect Claude Code with:
+The server prints an MCP token at startup (or set `PLANNR_TOKEN`). In the app, **Help → Connect an AI (MCP)…**
+opens a panel that stays open: it shows the endpoint and the running server's token (when the browser is on the
+same machine), lets you test it, and hands you the
+command below and a JSON config for other MCP clients with the token filled in. Connect Claude Code with:
 
 ```bash
 claude mcp add --transport http plannr http://localhost:8795/mcp --header "Authorization: Bearer <token>"
@@ -56,7 +61,7 @@ Tests: `cargo test`. Type-check: `cd web && npx tsc --noEmit`.
 
 | Tool | Key | Notes |
 |---|---|---|
-| Select | Space | Shift adds, Ctrl toggles, drag a window (left→right) or crossing box (right→left), double-click enters a group, Esc leaves |
+| Select | Space | Shift adds, Ctrl toggles, drag a window (left→right) or crossing box (right→left), double-click enters a group or opens a plugin object (a construction wall or roof: select one face; a framed wall: single studs and plates), Esc leaves |
 | Eraser | E | Click or drag over edges, faces, objects |
 | Line | L | Chained edges; a closed coplanar loop becomes a face. Type a length. |
 | Rectangle | R | Two corners on the ground or on any face; type `w;h` |
@@ -66,9 +71,9 @@ Tests: `cargo test`. Type-check: `cd web && npx tsc --noEmit`.
 | Arc / Pie | A | Centre, start, end (type a radius, then an angle); Pie closes the sector into a face |
 | 3 Point Arc | — | Start, a point on the arc, end |
 | 2 Point Arc | — | Both chord ends, then pull the bulge |
-| Push/Pull | P | Extrude a face; type a distance; the height snaps to other geometry |
-| Offset | F | Offset a face's outline in or out |
-| Move | M | Move or (Ctrl) copy; type a distance |
+| Push/Pull | P | Extrude a face; type a distance; the height snaps to other geometry. With a face selected first, click anywhere to pull it |
+| Offset | F | Offset a face's outline in or out (the selected face, when there is one) |
+| Move | M | Move or (Ctrl) copy; type a distance. With a selection, that is what moves, wherever you grab |
 | Rotate | Q | Protractor: centre (on a face = its plane), reference, angle; type degrees |
 | Scale | S | Green handles on the selection's box: corners uniform, side handles one axis, edge handles two; Ctrl scales about the centre; type a factor or `sx;sy;sz` |
 | Follow Me | — | Select the path (edges, or a face whose outline is the path), then click the profile face to sweep it |
@@ -91,7 +96,7 @@ Inference as in SketchUp: green endpoint, cyan midpoint, red on-edge, blue on-fa
 intersection crosses, axis-coloured lines, magenta parallel/perpendicular to an edge you rested the
 cursor on, dotted **from point** lines from points you rested on or clicked, guide points and lines,
 the centres of circles, arcs and polygons, and the origin. The **arrow keys lock an axis** (→ red x, ← green z, ↑ blue y) and **Shift holds the
-inference under the cursor** (a direction, or a face's plane). Lengths along inferred lines snap to
+inference under the cursor** (a direction, a face's plane, or the axis a snapped point lies on): while it is down the point stays on that line and other geometry only projects onto it. Held, the point follows the cursor along the line and stops only where it meets an edge or inference line, or level with a corner right under the cursor. In Push/Pull, Shift keeps strictly to the face normal; without it the height is taken only from a corner, midpoint or centre right under the cursor. Points hidden behind faces never snap, also while moving. Lengths along inferred lines snap to
 1 cm. Numbers typed while a tool is active go into the **Measurements** box.
 
 Trays: Entity Info, Tags (layers), Materials, Outliner, Scenes, Section Planes, Display, Model Info,
@@ -168,6 +173,29 @@ tables (EN 338 C18/C24/C30 or SPF/DF-L No.2, snow and floor loads), **wall eleva
 as SVG, "Frame room" from the construction plugin, and a cut list with stock lengths, panel counts,
 hardware and CSV export. See [docs/FRAMING.md](docs/FRAMING.md).
 
+The **plumbing** plugin lays the pipework the way an installer does. **Pipes** are drawn corner by corner
+in Alupex (16×2, 20×2, 26×3, 32×3), PEX, copper, PVC or PE drain pipe or threaded steel, at a typed
+height, with exact leg lengths typed in the Measurements box or edited later per leg; corners become
+**bends** at the material's minimum radius (Alupex 5 × dn) or **elbow fittings** of the pipe's joint
+type. Ends that touch something are joined by themselves: a **coupling, reducer or elbow** between two
+pipe ends (both cut back to the fitting), a **tee** cut into a pipe you start from, a **wall plate**
+(muurplaat ½") at a tap. Press fittings (stainless sleeve, black indicator ring), clamp/screw fittings
+(brass with hex nuts), push-fit, solder, compression, glued PVC sockets, welded PE and threaded steel are
+all in the catalogue, as are stop, ball and check valves, pressure reducers, filters, water meters,
+angle stop valves, radiator valves, wall / thermostatic / basin **mixer taps**, **manifolds** with their
+outlets, traps and access pieces. **Brackets** (clips, clamps with rod) are placed by hand or
+automatically at the material's spacing on the nearest wall, ceiling or floor. Checks report open ends,
+diameter mismatches, bends too tight, missing fall on drains and brackets too far apart; the
+**material list** totals pipe per diameter, every fitting and bracket, with CSV export. See
+[docs/PLUMBING.md](docs/PLUMBING.md).
+
+**Installable plugins.** **Plugins → Manage plugins…** switches any plugin on and off and installs
+packaged ones: a `.plannr-plugin` file, its engine running as WebAssembly in a sandbox inside the server.
+Packaged plugins live in [plannr-plugins](https://github.com/MatthiasDM/plannr-plugins), each with its own
+release to download: **3D Print** (3MF / STL for slicers, watertight check and repair, plate layout) and
+**Car Track** (printable 1:64 die-cast track: straights, curves, ramps, loops, connectors, supports, a
+test drive). See [docs/PLUGINS.md](docs/PLUGINS.md#installable-plugins-packages).
+
 The construction plugin builds everything as **masonry**, the way it's built in Belgium. Exterior
 walls are **cavity walls** (spouwmuren): an outer facing-brick leaf, a cavity (empty, fully filled or
 with boards) with stainless ties, an inner leaf of snelbouw or blocks and interior plaster; inner walls
@@ -191,4 +219,3 @@ One JSON document per project: layers, materials, entities (`face`, `edge`, `gro
 ## License
 
 MIT — see [LICENSE](LICENSE).
-

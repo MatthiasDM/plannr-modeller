@@ -9,7 +9,7 @@ import type { Tool, ToolContext, Snap, SnapKind, SnapOptions, AxisLock, Plane } 
 import { AXIS, AXIS_COLOR, GROUND, MAGENTA, snapColor, snapLabel } from './tools/base';
 import { Tray } from './ui/tray';
 import { renderMenubar, renderToolbar, renderHud, renderToolOptions, renderWelcome, layoutToolbar } from './ui/chrome';
-import { registerPlugin, getPlugins, onPlugin, type PluginHost, type CameraController } from './plugins';
+import { registerPlugin, getPlugins, partsFor, onPlugin, type PluginHost, type CameraController } from './plugins';
 import { promptText, confirmDialog, installTooltips } from './ui/dialog';
 
 /** The page itself never zooms: pinches and double-taps belong to the 3D view (which handles its own
@@ -65,6 +65,10 @@ export class App {
   async toggleHidden(id: string) { const e = findEntity(this.doc, id); if (e) await this.commitOps([{ op: 'set_hidden', ids: [id], hidden: e.hidden !== true }], e.hidden === true ? 'Unhide' : 'Hide'); }
   /** Viewer mode (`?embed=1`): no menus or trays, the looking/measuring tools only, driven by the page that embeds it over postMessage. */
   readonly embed = new URLSearchParams(location.search).has('embed');
+  /** Plugins whose tools and panels a viewer keeps (`?embed=1&plugins=plumbing,electrical`): the embedding app lets its users draw pipes or conduits around the house. */
+  readonly embedPlugins = new Set((new URLSearchParams(location.search).get('plugins') ?? '').split(',').map(s => s.trim()).filter(Boolean));
+  /** May this tool be used here? A viewer keeps the looking / measuring tools and the tools of the plugins it was asked for. */
+  toolAllowed(id: string): boolean { return !this.embed || EMBED_TOOLS.has(id) || this.embedPlugins.has(getPlugins().find(p => p.tools?.some(t => t.id === id))?.id ?? ''); }
   /** Viewport commands added by plugins (see PluginHost.registerCommand). */
   private commands = new Map<string, (args: any) => any>();
   /** Light or dark chrome and viewport; 'system' follows the OS. Kept in localStorage (index.html applies it before the first paint). */
@@ -85,7 +89,7 @@ export class App {
   ctx: ToolContext; tray: Tray;
   private live: Live | null = null;
   private els: Record<string, HTMLElement> = {};
-  private online = false; private previewTimer: any = null; private previewSeq = 0; private compileSeq = 0;
+  private online = false; private previewSeq = 0; private compileSeq = 0;
   private listeners: Record<string, Set<(d: any) => void>> = { changed: new Set(), selection: new Set(), tool: new Set(), xray: new Set() };
   private hover: string | null = null;
   private camCtl: CameraController | null = null;
@@ -203,12 +207,13 @@ export class App {
 
   constructor(root: HTMLElement) {
     if (this.embed) root.classList.add('embed');
+    if (this.embed && this.embedPlugins.size) root.classList.add('embed-tools');
     root.innerHTML = `<div class="menubar"></div><div class="toolbar"></div>
       <div class="toolbar-resizer" title="Drag to resize the tools · double-click to reset"></div><div class="dock-preview"></div>
-      <div class="viewport"><div class="labels"></div><div class="view-hud"></div><div class="tool-options"></div><div class="lock-badge"></div><div class="toast"></div><div class="touch-bar"></div></div>
+      <div class="viewport"><div class="labels"></div><div class="view-hud"></div><div class="tool-options"></div><div class="lock-badge"></div><div class="toast"></div><div class="touch-bar"></div><div class="embed-panel"></div></div>
       <div class="tray"></div><div class="tray-resizer" title="Drag to resize · double-click to reset"></div>
       <div class="statusbar"><span class="conn" title="Server connection"></span><span class="hint"></span><div class="vcb"><label>Measurements</label><input type="text" spellcheck="false"></div></div><div class="welcome-host"></div>`;
-    for (const k of ['menubar', 'toolbar', 'viewport', 'labels', 'view-hud', 'tool-options', 'lock-badge', 'toast', 'touch-bar', 'tray', 'statusbar', 'welcome-host']) this.els[k] = root.querySelector(`.${k}`)!;
+    for (const k of ['menubar', 'toolbar', 'viewport', 'labels', 'view-hud', 'tool-options', 'lock-badge', 'toast', 'touch-bar', 'embed-panel', 'tray', 'statusbar', 'welcome-host']) this.els[k] = root.querySelector(`.${k}`)!;
     this.scene = new Viewport(this.els.viewport, this.els.labels);
     this.tray = new Tray(this, this.els.tray);
     this.installTrayResizer(root);
@@ -282,7 +287,9 @@ export class App {
       this.doc = p.document; this.projectName = p.name; this.historyList = h;
       const cur = h.findIndex(x => x.version === this.doc.version); this.canUndo = h.length > 0; this.canRedo = h.length > 0; void cur;
       this.applyCompiled(c);
-      for (const id of [...this.selection]) if (!findEntity(this.doc, id)) this.selection.delete(id);
+      const compiledIds = [...this.selection].some(id => id.includes('#')) ? new Set(c.groups.flatMap(g => g.ids)) : null; // a selected part stays while it is still generated
+      for (const id of [...this.selection]) if (id.includes('#') ? !compiledIds!.has(id) : !findEntity(this.doc, id)) this.selection.delete(id);
+      if (this.enteredGroup && !findEntity(this.doc, this.enteredGroup)) this.enteredGroup = null;
       this.scene.highlight(this.selection); this.saveState = `v${this.doc.version}`; this.online = true; this.setConn(true);
       if (notice) this.toast(notice);
     } catch (e: any) { this.online = false; this.setConn(false); this.toast(`Engine unavailable: ${e.message}`); }
@@ -312,28 +319,56 @@ export class App {
   // ---- ops / undo ------------------------------------------------------------------
   async commitOps(ops: Op[], label: string): Promise<OpResult[]> {
     if (!this.projectId || !ops.length) return [];
-    this.clearPreview();
+    this.previewNext = null; this.previewWanted = false; this.previewSeq++; this.previewFull = false; // the preview stays on screen until the refreshed scene replaces it (no flash of the old state)
     try {
       const r = await api.ops(this.projectId, ops, label);
       await this.refresh();
       return r.results;
     } catch (e: any) { this.toast(e.message); await this.refresh(); return []; }
   }
+  /** Live result of a tool. One request at a time, always for the newest ops: a slow engine reply never piles
+   *  up behind others. The engine sends only the changed objects, drawn over the model (nothing else is rebuilt). */
   preview(ops: Op[]) {
     if (!this.projectId) return;
-    clearTimeout(this.previewTimer);
     if (!ops.length) { this.clearPreview(); return; }
-    this.previewTimer = setTimeout(async () => {
-      const seq = ++this.previewSeq;
-      try { const c = await api.preview(this.projectId!, ops, this.hiddenGeometry); if (seq === this.previewSeq && this.previewSeq > 0) this.applyCompiled(c); } catch { /* invalid intermediate state: ignore */ }
-    }, 30);
+    this.previewNext = ops; this.previewWanted = true;
+    if (!this.previewBusy) void this.pumpPreview();
   }
-  private clearPreview() { clearTimeout(this.previewTimer); if (this.previewSeq > 0) { this.previewSeq = 0; if (this.projectId) api.compile(this.projectId, this.hiddenGeometry).then(c => { if (this.previewSeq === 0) this.applyCompiled(c); }).catch(() => {}); } }
+  private previewNext: Op[] | null = null; private previewBusy = false; private previewWanted = false; private previewFull = false;
+  private async pumpPreview() {
+    this.previewBusy = true;
+    while (this.previewNext && this.projectId) {
+      const ops = this.previewNext; this.previewNext = null; const seq = ++this.previewSeq;
+      try {
+        const c = await api.preview(this.projectId, ops, this.hiddenGeometry, true);
+        if (seq !== this.previewSeq || !this.previewWanted) continue;
+        if (c.partial) { if (this.previewFull) { this.previewFull = false; } this.scene.setPreview(c, c.dirty ?? []); }
+        else { this.previewFull = true; this.applyCompiled(c); } // the engine could not tell what changed: the whole scene
+      } catch { /* invalid intermediate state: ignore */ }
+    }
+    this.previewBusy = false;
+  }
+  private clearPreview() {
+    this.previewNext = null; this.previewWanted = false; this.previewSeq++;
+    this.scene.setPreview(null);
+    if (this.previewFull && this.projectId) { this.previewFull = false; const seq = this.previewSeq; api.compile(this.projectId, this.hiddenGeometry).then(c => { if (seq === this.previewSeq && !this.previewWanted) this.applyCompiled(c); }).catch(() => {}); }
+  }
   async undo() { if (!this.projectId) return; try { const r = await api.undo(this.projectId); this.toast(`Undo ${r.label}`); await this.refresh(); } catch (e: any) { this.toast(e.message); } }
   async redo() { if (!this.projectId) return; try { const r = await api.redo(this.projectId); this.toast(`Redo ${r.label}`); await this.refresh(); } catch (e: any) { this.toast(e.message); } }
 
   // ---- selection / groups -------------------------------------------------------------
+  private docIds: { doc: Document | null; ids: Set<string> } = { doc: null, ids: new Set() };
+  /** Is this (compiled) id an entity of the document, not geometry that only the current preview has? */
+  inDocument(id: string): boolean {
+    if (this.docIds.doc !== this.doc) { const ids = new Set<string>(); for (const { entity } of walk(this.doc.entities)) ids.add(entity.id); this.docIds = { doc: this.doc, ids }; }
+    return this.docIds.ids.has(id.split('#')[0]);
+  }
+  /** The open entity is a plugin's parts-built entity (a framed wall), not a group. */
+  get enteredParts(): boolean { return !!this.enteredGroup && !!partsFor(findEntity(this.doc, this.enteredGroup)); }
+  /** What the top bar says while something is open. */
+  get enteredLabel(): string { const e = this.enteredGroup ? findEntity(this.doc, this.enteredGroup) : undefined; const pp = partsFor(e); return pp && e?.kind === 'custom' ? pp.label?.(e) ?? e.type : 'group'; }
   resolve(id: string): string {
+    if (this.enteredGroup && id.startsWith(`${this.enteredGroup}#`) && this.enteredParts) return id; // inside a framed wall: the single member
     id = id.split('#')[0]; // expanded plugin geometry carries `<entityId>#<faceKey>`
     if (!this.enteredGroup) return topLevelId(this.doc, id);
     // inside a group: resolve to the direct child of the entered group
@@ -345,10 +380,29 @@ export class App {
     for (const id of ids) { if (mode === 'toggle' && this.selection.has(id)) this.selection.delete(id); else this.selection.add(id); }
     this.scene.highlight(this.selection); this.tray.render(); renderMenubar(this, this.els.menubar); this.emit('selection', [...this.selection]); this.sendState();
   }
-  selectAll() { this.select((this.enteredGroup ? (findEntity(this.doc, this.enteredGroup) as any)?.entities ?? [] : this.doc.entities).map((e: any) => e.id)); }
-  enterGroup(id: string) { const e = findEntity(this.doc, id); const g = e?.kind === 'group' ? e : null; if (!g) return; this.enteredGroup = g.id; this.select([]); this.toast(`Editing group “${g.name}” — Esc to close`); this.refreshUI(); }
+  selectAll() { if (this.enteredParts) { const pre = `${this.enteredGroup}#`; return this.select([...new Set((this.scene.compiled?.groups ?? []).flatMap(g => g.ids).filter(id => id.startsWith(pre)))]); } this.select((this.enteredGroup ? (findEntity(this.doc, this.enteredGroup) as any)?.entities ?? [] : this.doc.entities).map((e: any) => e.id)); }
+  enterGroup(id: string) {
+    const e = findEntity(this.doc, id);
+    const pp = partsFor(e); if (pp && e?.kind === 'custom') { this.enteredGroup = e.id; this.select([]); this.toast(`Editing ${pp.label?.(e) ?? e.type}: click a part to select it. Esc closes`); this.refreshUI(); return; }
+    const g = e?.kind === 'group' ? e : null; if (!g) return; this.enteredGroup = g.id; this.select([]); this.toast(`Editing group “${g.name}” — Esc to close`); this.refreshUI(); }
   exitGroup() { if (!this.enteredGroup) return; this.enteredGroup = null; this.select([]); this.refreshUI(); }
-  async deleteSelection() { if (!this.selection.size) return; const ids = [...this.selection]; if (this.embed && ids.some(id => findEntity(this.doc, id)?.kind !== 'section')) return; /* a viewer only erases its own section planes */ this.selection.clear(); await this.commitOps([{ op: 'erase', ids }], 'Erase'); }
+  async deleteSelection() {
+    if (!this.selection.size) return;
+    if ([...this.selection].some(id => id.includes('#'))) return this.erasePartsAndRest();
+    const ids = [...this.selection]; if (this.embed && ids.some(id => { const e = findEntity(this.doc, id); return e?.kind !== 'section' && !(e?.kind === 'custom' && this.embedPlugins.has(e.type.split('.')[0])); })) return; /* a viewer only erases its own section planes and the entities of the plugins it was given */ this.selection.clear(); await this.commitOps([{ op: 'erase', ids }], 'Erase'); }
+  /** Delete with parts of a parts-built entity selected: the plugin takes the parts out, the rest is erased. */
+  private async erasePartsAndRest() {
+    const ops: Op[] = []; const byEntity = new Map<string, string[]>(); const whole: string[] = [];
+    for (const id of this.selection) { const i = id.indexOf('#'); if (i < 0) { whole.push(id); continue; } const b = id.slice(0, i); byEntity.set(b, [...(byEntity.get(b) ?? []), id.slice(i + 1)]); }
+    for (const [b, keys] of byEntity) {
+      const e = findEntity(this.doc, b); const pp = partsFor(e); const o = pp && e?.kind === 'custom' ? pp.erase?.(this.ctx, e, keys) ?? null : null;
+      if (!o) { this.toast('These parts can\'t be removed on their own'); return; }
+      if (this.embed && !this.embedPlugins.has((e as any).type.split('.')[0])) return;
+      ops.push(...o);
+    }
+    if (whole.length) { if (this.embed) return; ops.push({ op: 'erase', ids: whole }); }
+    this.selection.clear(); await this.commitOps(ops, byEntity.size && !whole.length ? 'Remove members' : 'Erase');
+  }
   /** A 2D slice: the model's cut lines at section plane `id`, as a new group of edges in the plane. */
   async sliceSection(id: string) {
     try {
@@ -398,7 +452,7 @@ export class App {
   // ---- tools ---------------------------------------------------------------------------------
   setTool(id: string) {
     const t = this.tools.find(t => t.id === id); if (!t) return;
-    if (this.embed && !EMBED_TOOLS.has(id)) return;
+    if (!this.toolAllowed(id)) return;
     this.tool.deactivate?.(this.ctx); this.scene.clearOverlay(); this.scene.setSnapMarker(null); this.lock = null; this.shiftLock = null;
     this.tool = t; t.activate?.(this.ctx); this.updateLockBadge();
     this.scene.renderer.domElement.style.cursor = t.cursor;
@@ -455,6 +509,12 @@ export class App {
       options: this.options, toast: (t) => app.toast(t), prompt: (l, v) => app.promptText(l, v), confirm: (t, ok, danger) => app.confirm(t, ok, danger),
       get lock() { return app.lock; }, set lock(v: AxisLock) { app.lock = v; },
       faceNormal: (ev, at) => app.faceNormal(ev, at),
+      targets: (accept) => [...app.selection].filter(id => !accept || accept(id)),
+      pickTarget: (ev, opts) => {
+        const t = new Set(opts?.anywhere ? [] : [...app.selection].filter(id => !opts?.accept || opts.accept(id)));
+        return app.scene.pick(ev, { facesOnly: opts?.facesOnly, only: (id) => app.inDocument(id) && (!t.size || t.has(app.resolve(id))) });
+      },
+      inDocument: (id) => app.inDocument(id),
       enterGroup: (id: string) => app.enterGroup(app.resolve(id) === id ? id : app.resolve(id)),
     } as ToolContext;
   }
@@ -482,7 +542,8 @@ export class App {
   private dwell: { point: THREE.Vector3; id?: string; since: number } | null = null;
   /** The inference held with Shift: a line (direction through an origin) or a plane. */
   private shiftLock: { kind: SnapKind; label: string; color: number; origin?: THREE.Vector3; dir?: THREE.Vector3; axis?: 'x' | 'y' | 'z'; plane?: Plane } | null = null;
-  snap(ev: { clientX: number; clientY: number }, opts: SnapOptions = {}): Snap { const r = this.snapInner(ev, opts); this.lastSnap = r; this.snapAsked = true; this.encourage(r); return r; }
+  private lastFrom: THREE.Vector3 | null = null;
+  snap(ev: { clientX: number; clientY: number }, opts: SnapOptions = {}): Snap { const r = this.snapInner(ev, opts); this.lastSnap = r; this.lastFrom = opts.from?.clone() ?? null; this.snapAsked = true; this.encourage(r); return r; }
   /** A point or edge the cursor rests on for a moment becomes an inference reference (SketchUp's "encouraging" an inference). */
   private encourage(s: Snap) {
     const pointy = ['vertex', 'midpoint', 'center', 'intersection', 'origin'].includes(s.kind) || (s.kind === 'guide' && !s.dir);
@@ -504,7 +565,7 @@ export class App {
     const from = opts.from; const sl = this.shiftLock;
     const plane = sl?.plane ?? opts.plane ?? GROUND; this.lastPlane = plane;
     // a fingertip is far less precise than a mouse: snap from further away
-    const k = (ev as { pointerType?: string }).pointerType === 'touch' ? 2.4 : 1;
+    const k = ((ev as { pointerType?: string }).pointerType === 'touch' ? 2.4 : 1) * (opts.reach ?? 1);
     const step = () => (sc.cam.distance > 60 ? 0.1 : 0.01);
     type Ray = { p: THREE.Vector3; d: THREE.Vector3; kind: SnapKind; axis?: 'x' | 'y' | 'z'; color: number; ref?: THREE.Vector3; id?: string };
     // the line the point is held on: an axis (arrow keys) or the inference Shift holds
@@ -539,7 +600,9 @@ export class App {
     let underHit: ScenePick | null | undefined;
     const under = () => (underHit === undefined ? (underHit = sc.pickFace(ev)) : underHit);
     // (not while something is left out, such as the geometry being moved: it is still in the depth picture)
-    const occlude = !ignore.size && !opts.ignoreIf; const seen = (p: THREE.Vector3) => !occlude || !sc.hidden(p);
+    // also while moving or pulling: the moved object still stands at its old place in the depth picture, which only
+    // hides what is right behind it; without this every corner behind a wall would grab the point
+    const seen = (p: THREE.Vector3) => !sc.hidden(p);
     const refOf = (r: Ray) => (r.ref ? [{ from: r.ref, color: r.color }] : []);
     // 1. points: endpoint, guide point, midpoint, origin
     let best: Snap | null = null;
@@ -549,16 +612,21 @@ export class App {
     if (!best) for (const c of sc.compiled?.centers ?? []) { const p = V(c.point); if (px(p) < 9 * k && !isIgnored(c.id) && seen(p)) { best = { point: p, kind: 'center', id: c.id, normal: V(c.normal) }; break; } }
     if (!best && px(new THREE.Vector3()) < 8 * k) best = { point: new THREE.Vector3(), kind: 'origin' };
     if (held) {
-      // held on a line: its crossings with inference lines and edges, else what the cursor rests on projected onto it
-      let bd = 8 * k; let hit: Snap | null = null;
+      // held on a line (an arrow-key axis or the inference Shift holds): the point follows the cursor along the line,
+      // smoothly. It only stops where the line meets an inference line or an edge, or level with a corner, midpoint or
+      // centre right under the cursor (dotted line from it). Faces and nearby edges don't pull it about.
+      let bd = 7 * k; let hit: Snap | null = null;
       for (const r of rays) { const X = lineLine(held, r); if (!X || !notFrom(X)) continue; const d = px(X); if (d < bd) { bd = d; hit = { point: X, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, refs: refOf(r) }; } }
       const h = sc.lineEdgeHit(held.p, held.d, cursor.x, cursor.y, bd, isIgnored, seen); if (h && notFrom(h.point)) hit = { point: h.point, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, id: h.id };
       if (hit) return hit;
-      if (!best) { const e = sc.nearestEdge(ev, cursor.x, cursor.y, 7 * k, isIgnored, seen); if (e) best = { point: e.point, kind: 'edge', id: e.id, dir: e.dir }; }
-      if (!best && opts.faces !== false) { const pk = under(); if (pk && !isIgnored(pk.id)) best = { point: pk.point.clone(), kind: 'face', id: pk.id }; }
-      if (best) { const q = onHeld(best.point); if (notFrom(q)) return { point: q, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, refs: q.distanceTo(best.point) > 1e-6 ? [{ from: best.point, color: held.color }] : undefined }; }
-      // vertices whose projection onto the line is under the cursor
-      for (const vt of sc.vertices) { const q = onHeld(vt); if (px(q) < 8 * k && vt.distanceTo(q) < sc.pixelSize(q) * 8 * k && notFrom(q)) return { point: q, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, refs: [{ from: vt, color: held.color }] }; }
+      const near = (): THREE.Vector3 | null => {
+        const v = sc.nearestVertex(cursor.x, cursor.y, 6 * k, seen); if (v) return v.point;
+        const m = sc.nearestMidpoint(cursor.x, cursor.y, 6 * k, isIgnored, seen); if (m) return m.point;
+        for (const c of sc.compiled?.centers ?? []) { const p = V(c.point); if (px(p) < 6 * k && !isIgnored(c.id) && seen(p)) return p; }
+        return null;
+      };
+      const pt = near();
+      if (pt) { const q = onHeld(pt); if (notFrom(q)) return { point: q, kind: held.kind, axis: held.axis, dir: held.d, origin: held.p, refs: q.distanceTo(pt) > 1e-6 ? [{ from: pt, color: held.color }] : undefined }; }
       // free along the line, the length rounded to the grid step
       let q = sc.linePoint(ev, held.p, held.d);
       if (this.options.gridSnap && from) { const g = step(); const L = Math.round(q.clone().sub(from).dot(held.d) / g) * g; q = from.clone().addScaledVector(held.d, L); }
@@ -611,7 +679,19 @@ export class App {
   }
   /** Shift: hold the inference under the cursor — a direction (axis, edge, parallel, guide, from point) or a face's plane. */
   private holdInference(): boolean {
-    const s = this.lastSnap; if (!s || !this.snapAsked || this.lock || this.shiftLock) return false;
+    if (this.lock || this.shiftLock) return false;
+    const own = this.tool.onShiftHold?.(this.ctx) ?? null;
+    if (own) { this.shiftLock = { kind: 'axis', color: 0xc8169a, label: own }; this.updateLockBadge(); return true; }
+    const s = this.lastSnap; if (!s || !this.snapAsked) return false;
+    // a point or crossing that lies on an axis through the start point: hold that axis (SketchUp keeps the axis the line is on)
+    const from = this.lastFrom; const axisOf = (): 'x' | 'y' | 'z' | null => {
+      if (!from) return null; if (s.axis && ['intersection', 'vertex', 'midpoint', 'center'].includes(s.kind)) return s.axis;
+      const d = s.point.clone().sub(from); const L = d.length(); if (L < 1e-4) return null;
+      for (const ax of ['x', 'y', 'z'] as const) if (Math.abs(d.clone().divideScalar(L).dot(AXIS[ax])) > 0.99985) return ax; // within 1°
+      return null;
+    };
+    const ax = ['axis', 'from', 'parallel', 'perpendicular', 'edge', 'guide'].includes(s.kind) && s.dir ? null : axisOf();
+    if (ax && from) { this.shiftLock = { kind: 'axis', axis: ax, dir: AXIS[ax].clone(), origin: from.clone(), color: AXIS_COLOR[ax], label: `Holding: ${snapLabel({ point: s.point, kind: 'axis', axis: ax })}` }; this.updateLockBadge(); this.tool.onLock?.(this.ctx); return true; }
     if (['axis', 'from', 'parallel', 'perpendicular', 'edge', 'guide'].includes(s.kind) && s.dir) this.shiftLock = { kind: s.kind, axis: s.axis, dir: s.dir.clone().normalize(), origin: (s.origin ?? s.point).clone(), color: snapColor(s), label: `Holding: ${snapLabel(s)}` };
     else if (s.kind === 'face' && s.normal) this.shiftLock = { kind: 'face', plane: { origin: s.point.clone(), normal: s.normal.clone() }, color: snapColor(s), label: 'Holding the face plane' };
     else if (s.kind === 'plane' || s.kind === 'grid') this.shiftLock = { kind: 'plane', plane: { origin: this.lastPlane.origin.clone(), normal: this.lastPlane.normal.clone() }, color: 0x6b7280, label: 'Holding the work plane' };
@@ -809,7 +889,7 @@ export class App {
   }
 
   // ---- ui -----------------------------------------------------------------------------------------------
-  refreshUI() { renderMenubar(this, this.els.menubar); renderToolbar(this, this.els.toolbar); renderHud(this, this.els['view-hud']); renderToolOptions(this, this.els['tool-options']); this.tray.render(); }
+  refreshUI() { renderMenubar(this, this.els.menubar); renderToolbar(this, this.els.toolbar); renderHud(this, this.els['view-hud']); renderToolOptions(this, this.els['tool-options']); this.tray.render(); if (this.embed && this.embedPlugins.size) this.tray.renderFloating(this.els['embed-panel'], this.embedPlugins); }
   private toastTimer: any = null;
   toast(text: string, ms = 2600) { const t = this.els.toast; t.textContent = text; t.classList.add('show'); clearTimeout(this.toastTimer); this.toastTimer = setTimeout(() => t.classList.remove('show'), ms); }
   promptText(label: string, value = ''): Promise<string | null> { return promptText(label, value); }

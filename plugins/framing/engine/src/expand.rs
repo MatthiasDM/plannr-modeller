@@ -372,7 +372,32 @@ pub fn expand_any(c: &plannr_core::model::Custom, house: &House, layer: &str) ->
 }
 
 /// Expansion of one framing entity without the connectors `hardware::attach` adds.
-pub fn expand_element(c: &plannr_core::model::Custom, house: &House, layer: &str) -> Expansion {
+pub fn expand_element(c: &plannr_core::model::Custom, house: &House, layer: &str) -> Expansion { without_removed(expand_raw(c, house, layer), &c.data) }
+
+/// Centre of a member's box.
+pub fn member_centre(m: &Member) -> P3 { let c = |i: usize| (m.r[i][0] + m.r[i][1]) / 2.0; add(add(add(m.origin, scale(m.ex, c(0))), scale(m.ey, c(1))), scale(m.ez, c(2))) }
+/// Members the user removed (`removed: [{ key, category, at }]` in the element's data) are left out, faces and
+/// takeoff alike. They are matched by category and centre, not by key: when the layout changes (an opening is
+/// added, the spacing changes) the studs renumber, and an entry that no longer matches just stops applying
+/// instead of taking out a different member.
+pub fn without_removed(mut ex: Expansion, data: &serde_json::Value) -> Expansion {
+    let Some(list) = data.get("removed").and_then(|v| v.as_array()) else { return ex };
+    let removed: Vec<(String, P3)> = list.iter().filter_map(|r| {
+        let cat = r.get("category")?.as_str()?.to_string(); let a = r.get("at")?.as_array()?;
+        Some((cat, [a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?]))
+    }).collect();
+    if removed.is_empty() { return ex; }
+    let gone: std::collections::HashSet<String> = ex.members.iter()
+        .filter(|m| { let c = member_centre(m); removed.iter().any(|(cat, at)| cat == m.category && plannr_core::geom::dist(c, *at) < 0.03) })
+        .map(|m| m.key.clone()).collect();
+    if gone.is_empty() { return ex; }
+    ex.members.retain(|m| !gone.contains(&m.key));
+    ex.faces.retain(|f| f.id().split_once('#').map(|(_, k)| !gone.contains(k)).unwrap_or(true));
+    ex
+}
+
+/// Expansion of one framing entity as its data describes it, before removed members are left out.
+pub fn expand_raw(c: &plannr_core::model::Custom, house: &House, layer: &str) -> Expansion {
     match c.type_.as_str() {
         T_BEAM => serde_json::from_value::<Beam>(c.data.clone()).map(|b| crate::beam::expand_beam(&c.id, &b, house, layer)).unwrap_or_default(),
         T_STAIR => serde_json::from_value::<Stair>(c.data.clone()).map(|s| crate::stair::expand_stair(&c.id, &s, house, layer)).unwrap_or_default(),

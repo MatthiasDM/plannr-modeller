@@ -91,6 +91,40 @@ pub fn apply(name: &str, data: Value, doc: &mut Document) -> Result<OpResult, Op
             set_data(doc, &wid, serde_json::to_value(w).unwrap());
             Ok(OpResult { created: vec![oid], modified: vec![wid], ..Default::default() })
         }
+        "members" => {
+            let id = st(&data, "id").ok_or_else(|| OpError("id is required".into()))?;
+            let c = find_custom(doc, &id).ok_or_else(|| OpError(format!("no framing entity {id}")))?;
+            let ex = expand_element(c, &House::read(doc), "");
+            let r3 = |p: plannr_core::geom::P3| p.map(|x| (x * 1000.0).round() / 1000.0);
+            let list: Vec<Value> = ex.members.iter().map(|m| json!({ "key": m.key, "category": m.category, "size": m.size_label, "length_m": (m.length * 1000.0).round() / 1000.0, "material": m.material, "centre": r3(member_centre(m)) })).collect();
+            let removed = c.data.get("removed").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            Ok(data_result("members", json!({ "id": id, "members": list, "removed": removed })))
+        }
+        "remove_members" => {
+            let id = st(&data, "id").ok_or_else(|| OpError("id is required".into()))?;
+            let keys: Vec<String> = data.get("keys").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|k| k.as_str().map(String::from)).collect()).unwrap_or_default();
+            if keys.is_empty() { return err("keys is required (member keys, e.g. \"stud.3\")"); }
+            let c = find_custom(doc, &id).ok_or_else(|| OpError(format!("no framing entity {id}")))?;
+            let ex = expand_element(c, &House::read(doc), "");
+            let mut v = c.data.clone(); let mut list = v.get("removed").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+            for k in &keys {
+                let m = ex.members.iter().find(|m| &m.key == k).ok_or_else(|| OpError(format!("no member {k} in {id}")))?;
+                let at = member_centre(m).map(|x| (x * 1000.0).round() / 1000.0);
+                list.push(json!({ "key": m.key, "category": m.category, "at": at }));
+            }
+            v["removed"] = Value::Array(list); set_data(doc, &id, v);
+            Ok(OpResult { modified: vec![id], ..Default::default() })
+        }
+        "restore_members" => {
+            let id = st(&data, "id").ok_or_else(|| OpError("id is required".into()))?;
+            let c = find_custom(doc, &id).ok_or_else(|| OpError(format!("no framing entity {id}")))?;
+            let keys: Option<Vec<String>> = data.get("keys").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|k| k.as_str().map(String::from)).collect());
+            let mut v = c.data.clone();
+            let list: Vec<Value> = match &keys { None => vec![], Some(k) => v.get("removed").and_then(|x| x.as_array()).cloned().unwrap_or_default().into_iter().filter(|r| !r.get("key").and_then(|x| x.as_str()).map(|x| k.iter().any(|y| y == x)).unwrap_or(false)).collect() };
+            if list.is_empty() { if let Some(o) = v.as_object_mut() { o.remove("removed"); } } else { v["removed"] = Value::Array(list); }
+            set_data(doc, &id, v);
+            Ok(OpResult { modified: vec![id], ..Default::default() })
+        }
         "remove_opening" => {
             let wid = st(&data, "wall").ok_or_else(|| OpError("wall is required".into()))?; let oid = st(&data, "opening").ok_or_else(|| OpError("opening is required".into()))?;
             let c = find_custom(doc, &wid).filter(|c| c.type_ == T_WALL).ok_or_else(|| OpError(format!("no framing wall {wid}")))?;
@@ -98,6 +132,25 @@ pub fn apply(name: &str, data: Value, doc: &mut Document) -> Result<OpResult, Op
             let n = w.openings.len(); w.openings.retain(|o| o.id != oid); if w.openings.len() == n { return err(format!("no opening {oid}")); }
             set_data(doc, &wid, serde_json::to_value(w).unwrap());
             Ok(OpResult { removed: vec![oid], modified: vec![wid], ..Default::default() })
+        }
+        "add_roof_opening" => {
+            let rid = st(&data, "roof").ok_or_else(|| OpError("roof is required".into()))?;
+            let c = find_custom(doc, &rid).filter(|c| c.type_ == T_ROOF).ok_or_else(|| OpError(format!("no framing roof {rid}")))?;
+            let mut r: Roof = serde_json::from_value(c.data.clone()).map_err(|e| OpError(e.to_string()))?;
+            let mut ov = data.clone(); if let Value::Object(m) = &mut ov { m.remove("roof"); }
+            let o: RoofOpening = serde_json::from_value(ov).map_err(|e| OpError(format!("opening: {e}")))?;
+            let oid = o.id.clone(); r.openings.push(o);
+            crate::roof::validate(&r)?;
+            set_data(doc, &rid, serde_json::to_value(r).unwrap());
+            Ok(OpResult { created: vec![oid], modified: vec![rid], ..Default::default() })
+        }
+        "remove_roof_opening" => {
+            let rid = st(&data, "roof").ok_or_else(|| OpError("roof is required".into()))?; let oid = st(&data, "opening").ok_or_else(|| OpError("opening is required".into()))?;
+            let c = find_custom(doc, &rid).filter(|c| c.type_ == T_ROOF).ok_or_else(|| OpError(format!("no framing roof {rid}")))?;
+            let mut r: Roof = serde_json::from_value(c.data.clone()).map_err(|e| OpError(e.to_string()))?;
+            let n = r.openings.len(); r.openings.retain(|o| o.id != oid); if r.openings.len() == n { return err(format!("no opening {oid}")); }
+            set_data(doc, &rid, serde_json::to_value(r).unwrap());
+            Ok(OpResult { removed: vec![oid], modified: vec![rid], ..Default::default() })
         }
         "add_floor" => {
             let points = polygon_of(&data)?;
@@ -309,11 +362,11 @@ pub fn summary(doc: &Document) -> Value {
         let Entity::Custom(c) = e else { continue };
         match c.type_.as_str() {
             T_WALL => if let Ok(w) = serde_json::from_value::<Wall>(c.data.clone()) {
-                let ex = expand_wall(&c.id, &w, &house, "");
+                let ex = without_removed(expand_wall(&c.id, &w, &house, ""), &c.data);
                 walls.push(json!({ "id": c.id, "level": w.level, "length_m": (w.length() * 100.0).round() / 100.0, "height_m": w.height, "studSize": w.stud_size, "studSpacing": w.stud_spacing, "studs": ex.members.iter().filter(|m| m.category == "studs").count(), "openings": w.openings.len(), "lumber_m": (ex.lumber_length() * 100.0).round() / 100.0, "room": w.room, "edge": w.edge }));
             },
-            T_FLOOR => if let Ok(f) = serde_json::from_value::<Floor>(c.data.clone()) { let ex = expand_floor(&c.id, &f, &house, ""); floors.push(json!({ "id": c.id, "level": f.level, "joistSize": f.joist_size, "joists": ex.members.iter().filter(|m| m.category == "joists").count(), "area_m2": (plan_area(&f.points).abs() * 100.0).round() / 100.0 })); },
-            T_ROOF => if let Ok(r) = serde_json::from_value::<Roof>(c.data.clone()) { let ex = expand_roof(&c.id, &r, &house, ""); let trusses = crate::roof::truss_count(&ex); roofs.push(json!({ "id": c.id, "type": r.type_, "shape": r.shape, "dormers": r.dormers.len(), "hips": ex.members.iter().filter(|m| m.category == "hips").count(), "jacks": ex.members.iter().filter(|m| m.category == "jacks").count(), "pitch": r.pitch, "span_m": if r.ridge_along_x { (r.max[1] - r.min[1]).abs() } else { (r.max[0] - r.min[0]).abs() }, "trusses": trusses, "rafters": ex.members.iter().filter(|m| m.category == "rafters").count() })); },
+            T_FLOOR => if let Ok(f) = serde_json::from_value::<Floor>(c.data.clone()) { let ex = without_removed(expand_floor(&c.id, &f, &house, ""), &c.data); floors.push(json!({ "id": c.id, "level": f.level, "joistSize": f.joist_size, "joists": ex.members.iter().filter(|m| m.category == "joists").count(), "area_m2": (plan_area(&f.points).abs() * 100.0).round() / 100.0 })); },
+            T_ROOF => if let Ok(r) = serde_json::from_value::<Roof>(c.data.clone()) { let ex = without_removed(expand_roof(&c.id, &r, &house, ""), &c.data); let trusses = crate::roof::truss_count(&ex); roofs.push(json!({ "id": c.id, "type": r.type_, "shape": r.shape, "dormers": r.dormers.len(), "openings": r.openings.len(), "hips": ex.members.iter().filter(|m| m.category == "hips").count(), "jacks": ex.members.iter().filter(|m| m.category == "jacks").count(), "pitch": r.pitch, "span_m": if r.ridge_along_x { (r.max[1] - r.min[1]).abs() } else { (r.max[0] - r.min[0]).abs() }, "trusses": trusses, "rafters": ex.members.iter().filter(|m| m.category == "rafters").count() })); },
             T_FOUNDATION => if let Ok(f) = serde_json::from_value::<Foundation>(c.data.clone()) { let ex = expand_foundation(&c.id, &f, &house, ""); foundations.push(json!({ "id": c.id, "type": f.type_, "concrete_m3": (ex.concrete.iter().map(|k| k.volume).sum::<f64>() * 1000.0).round() / 1000.0 })); },
             T_BEAM => if let Ok(b) = serde_json::from_value::<Beam>(c.data.clone()) { let [w, h] = b.section(); beams.push(json!({ "id": c.id, "level": b.level, "length_m": (b.length() * 100.0).round() / 100.0, "material": b.material, "section_mm": [(w * 1000.0).round(), (h * 1000.0).round()], "posts": if b.posts { b.supports().len() } else { 0 } })); },
             T_STAIR => if let Ok(s) = serde_json::from_value::<Stair>(c.data.clone()) { let (n, r) = s.risers_of(&house); stairs.push(json!({ "id": c.id, "level": s.level, "risers": n, "riserHeight_m": (r * 1000.0).round() / 1000.0, "treadDepth_m": s.tread_depth, "stringers": s.stringers })); },

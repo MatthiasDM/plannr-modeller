@@ -33,7 +33,7 @@ The default document has one layer `Layer0` and one material `Default` (`#F4F2EE
 
 | kind | fields | notes |
 |---|---|---|
-| `face` | `outer: [[x,y,z]…]`, `holes: [[[x,y,z]…]…]`, `material?`, `backMaterial?` | planar polygon, counter-clockwise seen from the front (normal side) |
+| `face` | `outer: [[x,y,z]…]`, `holes: [[[x,y,z]…]…]`, `material?`, `backMaterial?`, `soft?: [i…]` | planar polygon, counter-clockwise seen from the front (normal side); `soft` lists outer-loop edges (edge i runs from corner i to i+1) left out of the drawn edges, like SketchUp's softened edges (plugin sweeps use it so curved surfaces show no seams) |
 | `edge` | `a`, `b` | a line segment; faces also own their outline implicitly, edges are the "loose" lines |
 | `group` | `name`, `transform: [16 numbers, column-major]`, `entities: [Entity…]` | children in local coordinates |
 | `guide` | `point`, `direction?` | guide point, or an infinite guide line when `direction` is set |
@@ -133,6 +133,7 @@ black-edge look needs no extra work in the browser.
 | Method | Path | Body → Response |
 |---|---|---|
 | GET | `/api/health` | `{ ok, version, name: "plannr" }` |
+| GET | `/api/mcp-token` | `{ token, endpoint }` — private instance only, only to a loopback peer and same-origin (the app's "Connect an AI" panel); 404 / 403 otherwise |
 | GET | `/api/projects` | `[{ id, name, createdAt, updatedAt, version, entityCount }]` |
 | POST | `/api/projects` | `{ name, document? }` → summary |
 | GET | `/api/projects/:id` | `{ id, name, createdAt, updatedAt, document }` |
@@ -141,14 +142,18 @@ black-edge look needs no extra work in the browser.
 | DELETE | `/api/projects/:id` | 204 |
 | POST | `/api/projects/:id/duplicate` | → summary |
 | POST | `/api/projects/:id/ops` | see Ops |
-| POST | `/api/projects/:id/preview` | `{ ops }` → CompiledScene |
+| POST | `/api/projects/:id/preview` | `{ ops, partial? }` → CompiledScene; with `partial: true` only the top-level entities the ops create, modify or remove, plus `partial: true` and `dirty` (those ids), or the whole scene when the results don't say what changed |
 | POST | `/api/projects/:id/undo`, `/redo` | → `{ version, label }` |
 | GET | `/api/projects/:id/history` | `[{ version, label, at }]` |
 | GET | `/api/projects/:id/compile` | → CompiledScene |
 | POST | `/api/compile` | `{ document }` → CompiledScene |
 | GET | `/api/projects/:id/entities?kind=&layer=` | `[Entity]` (flattened, with `path` of group ids; `kind=instance` lists placed components) |
 | GET | `/api/projects/:id/export.glb` / `export.json` | downloads |
-| GET | `/api/plugins` | `[{ id, name, entityTypes: [], ops: [] }]` registered Rust plugins |
+| GET | `/api/plugins` | `[{ id, name, entityTypes, ops, enabled, source: builtIn\|installed, engine, script, version?, description?, homepage?, exports? }]` every plugin, built in or installed; `script` is null when it is off |
+| POST | `/api/plugins/install` | body: a `.plannr-plugin` package → `{ installed: manifest }` (replaces an older version) |
+| POST | `/api/plugins/:id/enabled` | `{ enabled }` switch any plugin on or off (kept in `data/plugins/state.json`) |
+| DELETE | `/api/plugins/:id` | uninstall a package (built-in plugins can only be switched off) |
+| GET | `/plugins/:id.js` | a plugin's browser bundle (an installed package's, else the app's) |
 | POST | `/api/sample` | creates a demo project (a few boxes, a circle, a pushed-pulled L-shape, a dimension, a text, a group, two materials) |
 | GET | `/ws/projects/:id` | WebSocket, see below |
 | POST | `/mcp` | MCP Streamable HTTP (JSON-RPC), see below |

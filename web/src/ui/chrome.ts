@@ -2,6 +2,8 @@ import { THEMES, type App, type Theme } from '../main';
 import { FACE_STYLES } from '../scene';
 const THEME_LABEL: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
 import { icon } from './icons';
+import { mcpDialog, pluginsDialog } from './dialog';
+import { owner } from '../api';
 import { TOOLBAR, EMBED_TOOLS } from '../tools';
 import { getPlugins } from '../plugins';
 import type { ProjectSummary } from '../api';
@@ -51,19 +53,20 @@ export function renderMenubar(app: App, el: HTMLElement) {
     ['Draw', () => tools.filter(t => ['line', 'rectangle', 'rotrect', 'circle', 'polygon', 'arc', 'arc3', 'arc2', 'pie'].includes(t.id)).map(t => ({ label: t.label, key: t.shortcut?.toUpperCase(), act: () => app.setTool(t.id) }))],
     ['Tools', () => tools.filter(t => !['line', 'rectangle', 'rotrect', 'circle', 'polygon', 'arc', 'arc3', 'arc2', 'pie'].includes(t.id) && !getPlugins().some(p => p.tools?.includes(t))).map(t => ({ label: t.label, key: t.shortcut?.trim() ? t.shortcut.toUpperCase() : t.id === 'select' ? 'Space' : undefined, act: () => app.setTool(t.id) }))],
     ['Plugins', () => {
+      const manage: MenuItem[] = [{ label: 'Manage plugins…', act: () => pluginsDialog(owner, t => app.toast(t)) }, 'sep'];
       const items: MenuItem[] = getPlugins().flatMap(p => [{ label: `● ${p.name}`, act: () => {}, disabled: true }, ...(p.tools ?? []).map(t => ({ label: `   ${t.label}`, key: t.shortcut?.toUpperCase(), act: () => app.setTool(t.id) }))]);
-      return items.length ? items : [{ label: 'No plugins loaded', act: () => {}, disabled: true }, { label: 'How to write one (docs/PLUGINS.md)', act: () => app.toast('Browser: window.plannr.registerPlugin({ id, name, tools, panels }). Engine: implement plannr_core::plugin::Plugin and register it in plannr-server/src/plugins.rs.', 7000) }];
+      return items.length ? [...manage, ...items] : [...manage, { label: 'No plugins loaded', act: () => {}, disabled: true }, { label: 'How to write one (docs/PLUGINS.md)', act: () => app.toast('Browser: window.plannr.registerPlugin({ id, name, tools, panels }). Engine: implement plannr_core::plugin::Plugin and register it in plannr-server/src/plugins.rs.', 7000) }];
     }],
     ['Help', () => [
       { label: 'Keyboard shortcuts', act: () => app.toast('Space Select · E Eraser · L Line · R Rectangle · C Circle · N Polygon · P Push/Pull · F Offset · M Move · Q Rotate · S Scale · T Tape · D Dimension · X Text · B Paint · O Orbit · H Pan · Z Zoom · ⇧Z Extents · G Group · arrows lock axis · ⌘Z undo', 8000) },
       { label: 'Mouse: middle-drag orbits, Shift+middle pans, wheel zooms', act: () => {} },
-      { label: 'Connect an AI (MCP)', act: () => app.toast(`MCP endpoint: ${location.origin}/mcp — the token is printed by plannr-server at startup. Run: claude mcp add --transport http plannr ${location.origin}/mcp --header "Authorization: Bearer <token>"`, 9000) },
+      { label: 'Connect an AI (MCP)…', act: () => mcpDialog(t => app.toast(t)) },
       { label: 'About Plannr', act: () => app.toast('Plannr · generic 3D modeller · Rust geometry engine + three.js viewport · every tool is also an MCP tool', 5000) },
     ]],
   ];
   el.innerHTML = `<div class="brand">${icon('logo')}<span>Plannr</span></div>` +
     menus.map(([name]) => `<div class="menu" data-menu="${name}"><button>${name}</button><div class="dropdown"></div></div>`).join('') +
-    `<div class="spacer"></div><button class="panels-toggle" title="Show or hide the panels">${icon('panels')}</button>${app.enteredGroup ? `<span class="muted" style="margin-right:8px">editing group · Esc closes</span>` : ''}<input class="project-name" value="${esc(app.projectName)}" title="Project name"><span class="save-state">${app.saveState}</span>`;
+    `<div class="spacer"></div><button class="panels-toggle" title="Show or hide the panels">${icon('panels')}</button>${app.enteredGroup ? `<span class="muted" style="margin-right:8px">editing ${esc(app.enteredLabel)} · Esc closes</span>` : ''}<input class="project-name" value="${esc(app.projectName)}" title="Project name"><span class="save-state">${app.saveState}</span>`;
   const closeAll = () => el.querySelectorAll('.menu.open').forEach(m => m.classList.remove('open'));
   el.querySelectorAll<HTMLElement>('.menu').forEach(m => {
     const name = m.dataset.menu!; const btn = m.querySelector('button')!; const dd = m.querySelector('.dropdown')!;
@@ -87,8 +90,8 @@ export function renderMenubar(app: App, el: HTMLElement) {
 const holdName: Record<string, string> = { Control: 'Ctrl', Alt: '⌥', Shift: '⇧', Meta: '⌘' };
 
 export function renderToolbar(app: App, el: HTMLElement) {
-  let groups: { ids: string[]; plugin?: { name: string; accent: string } }[] = [...TOOLBAR.map(ids => ({ ids })), ...getPlugins().flatMap(p => (p.toolbar ?? (p.tools?.length ? [p.tools.map(t => t.id)] : [])).map(ids => ({ ids, plugin: { name: p.name, accent: p.accent ?? '#8e44ad' } })))];
-  if (app.embed) groups = groups.filter(g => !g.plugin).map(g => ({ ids: g.ids.filter(id => EMBED_TOOLS.has(id)) })).filter(g => g.ids.length);
+  let groups: { ids: string[]; plugin?: { id: string; name: string; accent: string } }[] = [...TOOLBAR.map(ids => ({ ids })), ...getPlugins().flatMap(p => (p.toolbar ?? (p.tools?.length ? [p.tools.map(t => t.id)] : [])).map(ids => ({ ids, plugin: { id: p.id, name: p.name, accent: p.accent ?? '#8e44ad' } })))];
+  if (app.embed) groups = groups.filter(g => !g.plugin || app.embedPlugins.has(g.plugin.id)).map(g => ({ ...g, ids: g.ids.filter(id => g.plugin ? true : EMBED_TOOLS.has(id)) })).filter(g => g.ids.length);
   const top = document.getElementById('app')?.classList.contains('dock-top');
   el.innerHTML = `<button class="toolbar-grip" title="Drag to move the tools to the ${top ? 'left' : 'top'} · tap to switch">${top ? '⋮' : '⋯'}</button><div class="groups">` + groups.map(g => `<div class="group ${g.plugin ? 'plugin' : ''}" style="--n:${g.ids.length};${g.plugin ? `--plugin-accent:${g.plugin.accent}` : ''}" ${g.plugin ? `title="${esc(g.plugin.name)} plugin"` : ''}>${g.ids.map(id => {
     const t = app.tools.find(t => t.id === id);
@@ -145,6 +148,7 @@ export function renderWelcome(app: App, el: HTMLElement, projects: ProjectSummar
   const date = (s: string) => new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   el.innerHTML = `<div class="welcome"><div class="card">
     <div class="side">${icon('logo')}<h1>Plannr</h1><p>A SketchUp-style 3D modeller. Draw lines, rectangles and circles, push/pull them into solids, move, rotate, scale, offset, measure and annotate — every tool backed by a Rust engine and usable by an AI over MCP.</p>
+      <p><a class="side-link" data-mcp>Connect an AI over MCP →</a></p>
       <p class="ver">${online ? 'Connected to plannr-server' : 'Server offline — start plannr-server on port 8795'}</p></div>
     <div class="main">
       <h2>Start</h2>
@@ -161,4 +165,5 @@ export function renderWelcome(app: App, el: HTMLElement, projects: ProjectSummar
   el.querySelectorAll<HTMLElement>('[data-open]').forEach(r => r.onclick = (e) => { if ((e.target as HTMLElement).closest('button')) return; app.openProject(r.dataset.open!); });
   el.querySelectorAll<HTMLElement>('[data-del]').forEach(b => b.onclick = () => app.deleteProject(b.dataset.del!));
   el.querySelector<HTMLElement>('[data-close]')?.addEventListener('click', () => app.hideWelcome());
+  el.querySelector<HTMLElement>('[data-mcp]')?.addEventListener('click', () => mcpDialog(t => app.toast(t)));
 }

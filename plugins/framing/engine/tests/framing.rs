@@ -240,3 +240,33 @@ fn set_defaults_feed_new_walls_and_summary_lists_elements() {
     let s = data_of(&fr(&mut d, "summary", json!({})).unwrap());
     assert_eq!(s["walls"].as_array().unwrap().len(), 1); assert_eq!(s["walls"][0]["studs"], 6); assert!(s["totals"]["lumber_m"].as_f64().unwrap() > 0.0);
 }
+
+#[test]
+fn removed_members_leave_the_wall_and_come_back() {
+    let mut d = doc();
+    let id = fr(&mut d, "add_wall", json!({ "level": 0, "a": [0, 0], "b": [4, 0] })).unwrap().created[0].clone();
+    let before = expansion(&d, &id);
+    let n = before.members.len(); let lumber = before.lumber_length();
+    let list = data_of(&fr(&mut d, "members", json!({ "id": id })).unwrap());
+    assert_eq!(list["members"].as_array().unwrap().len(), n);
+    let stud = before.members.iter().find(|m| m.category == "studs" && m.key.starts_with("stud.") && m.key != "stud.0").unwrap().clone();
+    fr(&mut d, "remove_members", json!({ "id": id, "keys": [stud.key] })).unwrap();
+    let after = expansion(&d, &id);
+    assert_eq!(after.members.len(), n - 1);
+    assert!(after.lumber_length() < lumber - stud.length + 1e-6);
+    assert!(!after.faces.iter().any(|f| f.id() == format!("{id}#{}", stud.key)), "the stud's faces are gone");
+    // a layout change renumbers the studs: the removal follows the position, it never takes out another member
+    fr(&mut d, "update", json!({ "id": id, "patch": { "studSpacing": 0.6 } })).unwrap();
+    let respaced = expansion(&d, &id);
+    let fresh = { let mut d2 = doc(); let i2 = fr(&mut d2, "add_wall", json!({ "level": 0, "a": [0, 0], "b": [4, 0], "studSpacing": 0.6 })).unwrap().created[0].clone(); expansion(&d2, &i2).members.len() };
+    let c = member_centre(&stud);
+    let still_there = respaced.members.iter().any(|m| m.category == stud.category && plannr_core::geom::dist(member_centre(m), c) < 0.03);
+    // a stud still at the removed spot stays removed; if none is there any more, nothing else goes
+    let at_spot = { let mut d2 = doc(); let i2 = fr(&mut d2, "add_wall", json!({ "level": 0, "a": [0, 0], "b": [4, 0], "studSpacing": 0.6 })).unwrap().created[0].clone(); expansion(&d2, &i2).members.iter().any(|m| m.category == stud.category && plannr_core::geom::dist(member_centre(m), c) < 0.03) };
+    assert!(!still_there);
+    assert_eq!(respaced.members.len(), fresh - usize::from(at_spot));
+    assert!(fr(&mut d, "remove_members", json!({ "id": id, "keys": ["nope.9"] })).is_err());
+    fr(&mut d, "restore_members", json!({ "id": id })).unwrap();
+    assert_eq!(expansion(&d, &id).members.len(), fresh);
+    assert!(custom(&d, &id).data.get("removed").is_none());
+}

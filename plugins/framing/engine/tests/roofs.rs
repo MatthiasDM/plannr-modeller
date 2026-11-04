@@ -175,3 +175,47 @@ fn update_validates_roof_fields_and_summary_reports_shape() {
     assert_eq!(s["roofs"][0]["shape"], "hip");
     assert!(s["roofs"][0]["hips"].as_u64().unwrap() == 4);
 }
+
+#[test]
+fn roof_openings_cut_rafters_add_trimmers_headers_curb_and_a_hole() {
+    let mut d = doc();
+    // gable, rafters @ 0.6 along a 6 m run: a 1.0 × 1.0 opening on the left slope cuts two rafters
+    let id = roof(&mut d, json!({ "min": [0, 0], "max": [6, 4], "type": "rafters", "spacing": 0.6, "sheathing": { "enabled": true },
+                                 "openings": [{ "side": "l", "offset": 2.5, "width": 1.0, "start": 0.5, "depth": 1.0, "curbHeight": 0.15 }] }));
+    let ex = expansion(&d, &id);
+    assert_eq!(count(&ex, "opening.0.trimmer.l."), 2); assert_eq!(count(&ex, "opening.0.trimmer.r."), 2);
+    assert_eq!(count(&ex, "opening.0.header.bottom."), 2); assert_eq!(count(&ex, "opening.0.header.top."), 2);
+    assert_eq!(count(&ex, "opening.0.curb."), 4);
+    // the rafters at 3.0 and 3.6 cross the opening (2.5..3.5): cut into a tail + an upper piece
+    assert!(ex.members.iter().any(|m| m.key == "rafter.5.l.upper"), "rafter at 3.0 cut");
+    let tail = get(&ex, "rafter.5.l"); let full = get(&ex, "rafter.5.r");
+    assert!(tail.length < full.length * 0.6, "tail {} vs full {}", tail.length, full.length);
+    // headers span the clear width and sit outside it; the sheathing has the hole
+    let hb = get(&ex, "opening.0.header.bottom.0"); assert!((hb.length - 1.0).abs() < 1e-6, "{}", hb.length);
+    let plane = ex.panels.iter().find(|p| p.key == "sheathing.l").unwrap();
+    let plain_id = roof(&mut d, json!({ "min": [0, 0], "max": [6, 4], "type": "rafters", "spacing": 0.6, "sheathing": { "enabled": true } }));
+    let plain = expansion(&d, &plain_id);
+    let plain_plane = plain.panels.iter().find(|p| p.key == "sheathing.l").unwrap();
+    assert!(plain_plane.area - plane.area > 0.9, "hole area {}", plain_plane.area - plane.area);
+    // the opening must not cross a truss; between two trusses it is headed off without trimmers
+    let bad = fr(&mut d, "add_roof", json!({ "min": [0, 0], "max": [6, 4], "type": "fink", "spacing": 0.6, "openings": [{ "offset": 2.5, "width": 1.0, "start": 0.5, "depth": 1.0 }] }));
+    assert!(bad.is_err(), "a truss would be cut");
+    let tr = roof(&mut d, json!({ "min": [0, 0], "max": [6, 4], "type": "fink", "spacing": 0.6, "openings": [{ "offset": 2.45, "width": 0.5, "start": 0.5, "depth": 1.0 }] }));
+    let ex = expansion(&d, &tr);
+    assert_eq!(count(&ex, "opening.0.trimmer."), 0); assert_eq!(count(&ex, "opening.0.header."), 4);
+    let h = get(&ex, "opening.0.header.top.0"); assert!((h.length - (0.6 - 0.038)).abs() < 1e-6, "between the trusses: {}", h.length);
+    // shed roof: start is measured from the low wall; add / remove through the ops
+    let sh = roof(&mut d, json!({ "min": [0, 0], "max": [5, 4], "shape": "shed", "type": "rafters", "pitchDeg": 3, "highSide": "min", "spacing": 0.6 }));
+    let r = fr(&mut d, "add_roof_opening", json!({ "roof": sh, "offset": 3.0, "width": 1.0, "start": 1.5, "depth": 1.0 })).unwrap();
+    let oid = r.created[0].clone();
+    let ex = expansion(&d, &sh);
+    assert_eq!(count(&ex, "opening.0.trimmer."), 4); assert_eq!(count(&ex, "opening.0.header."), 4);
+    assert!(ex.members.iter().any(|m| m.key.ends_with(".upper")), "a shed rafter is cut");
+    // the clear opening sits at z 1.5..2.5 (low wall at z = 4): header plan positions
+    let hb = get(&ex, "opening.0.header.bottom.1"); let ht = get(&ex, "opening.0.header.top.0");
+    let zb = hb.origin[2] + hb.ez[2] * hb.r[2][1]; let zt = ht.origin[2] + ht.ez[2] * ht.r[2][0];
+    assert!((zb - 2.5).abs() < 1e-6 && (zt - 1.5).abs() < 1e-6, "headers at z {zb} / {zt}");
+    assert!(fr(&mut d, "remove_roof_opening", json!({ "roof": sh, "opening": oid })).is_ok());
+    assert_eq!(count(&expansion(&d, &sh), "opening."), 0);
+    assert!(fr(&mut d, "add_roof_opening", json!({ "roof": sh, "offset": 4.5, "width": 1.0, "start": 1.5, "depth": 1.0 })).is_err(), "does not fit along the run");
+}

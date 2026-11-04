@@ -101,6 +101,23 @@ pub fn validate(rf: &Roof) -> Result<(), OpError> {
     if lumber(&rf.fascia.size).is_none() { return e(format!("unknown fascia size `{}`", rf.fascia.size)); }
     if !rf.dormers.is_empty() && rf.shape != "gable" { return e("dormers are only supported on gable roofs".into()); }
     let run = if rf.ridge_along_x { (rf.max[0] - rf.min[0]).abs() } else { (rf.max[1] - rf.min[1]).abs() };
+    let span = if rf.ridge_along_x { (rf.max[1] - rf.min[1]).abs() } else { (rf.max[0] - rf.min[0]).abs() };
+    if !rf.openings.is_empty() && !["gable", "shed"].contains(&rf.shape.as_str()) { return e("roof openings are supported on gable and shed roofs".into()); }
+    let across = if rf.shape == "gable" { span / 2.0 } else { span };
+    let ct = lumber_or(&rf.chord_size, "2x4")[0];
+    for (i, o) in rf.openings.iter().enumerate() {
+        let n = i + 1;
+        if !["l", "r", "front", "back"].contains(&o.side.as_str()) { return e(format!("opening {n}: side must be l, r, front or back")); }
+        if o.width < 0.2 || o.depth < 0.2 { return e(format!("opening {n}: width and depth must be at least 0.2 m")); }
+        if o.offset < 0.0 || o.offset + o.width > run + 1e-6 { return e(format!("opening {n} does not fit along the ridge (run {run:.2} m)")); }
+        if o.start < 0.0 || o.start + o.depth > across + 1e-6 { return e(format!("opening {n} does not fit up the slope ({across:.2} m from the eave to the {})", if rf.shape == "gable" { "ridge" } else { "high wall" })); }
+        if !(0.0..=1.0).contains(&o.curb_height) { return e(format!("opening {n}: curbHeight must be between 0 and 1 m")); }
+        if rf.type_ != "rafters" {
+            // trusses are never cut on site: the opening has to sit between two of them
+            let hit = grid(run, rf.spacing).into_iter().map(|p| p.clamp(ct / 2.0, run - ct / 2.0)).any(|rr| rr + ct / 2.0 > o.offset + 1e-6 && rr - ct / 2.0 < o.offset + o.width - 1e-6);
+            if hit { return e(format!("opening {n} would cut a truss: keep it between two trusses ({:.0} mm apart) or frame the roof with rafters", rf.spacing * 1000.0)); }
+        }
+    }
     for d in &rf.dormers {
         if !["l", "r", "front", "back"].contains(&d.side.as_str()) { return e("dormer side must be l, r, front or back".into()); }
         if !["gable", "shed"].contains(&d.kind.as_str()) { return e("dormer kind must be gable or shed".into()); }
@@ -244,6 +261,89 @@ fn finish(ex: &mut Expansion, f: &mut Faces, id: &str, rf: &Roof, sh: &Shape, fa
     }
 }
 
+// ---- openings (skylights, hatches, chimneys) -----------------------------------------------------
+
+/// An opening resolved on a slope: `o..o+w` along the run, `s0..s1` up the slope (sg, plan distances).
+struct Ro { i: usize, side: usize, o: f64, w: f64, s0: f64, s1: f64, curb: f64 }
+
+/// `top_sg`: how far the slope runs from the eave line (half the span on a gable, the span on a shed);
+/// the top header (2 t) has to fit under the ridge / high wall.
+fn resolve_openings(c: &Ctx, top_sg: f64) -> Vec<Ro> {
+    let t = if c.trusses() { c.ct } else { c.rt };
+    c.rf.openings.iter().enumerate().map(|(i, o)| {
+        let side = if o.side == "r" || o.side == "back" { 1 } else { 0 };
+        let w = o.width.min(c.r - o.offset.max(0.0)).max(0.1);
+        let s1 = (o.start + o.depth).min(top_sg - 2.0 * t - 0.01);
+        let s0 = o.start.max(0.0).min(s1 - 0.1);
+        Ro { i, side, o: o.offset.max(0.0), w, s0, s1, curb: o.curb_height.max(0.0) }
+    }).collect()
+}
+
+enum RafterCut { Keep, Skip, Cut(f64, f64) }
+/// What an opening does to the rafter at `rr` (thickness `t`): skipped where the doubled trimmers
+/// take its place, cut into a tail and an upper piece at the headers' outer faces where it crosses
+/// the clear opening, untouched elsewhere.
+fn rafter_vs_openings(ros: &[Ro], side: usize, rr: f64, t: f64) -> RafterCut {
+    for ro in ros.iter().filter(|ro| ro.side == side) {
+        let (a, b) = (rr - t / 2.0 + 1e-6, rr + t / 2.0 - 1e-6);
+        let in_zone = |lo: f64, hi: f64| b > lo && a < hi;
+        if in_zone(ro.o - 2.0 * t, ro.o) || in_zone(ro.o + ro.w, ro.o + ro.w + 2.0 * t) { return RafterCut::Skip; }
+        if in_zone(ro.o, ro.o + ro.w) { return RafterCut::Cut(ro.s0 - 2.0 * t, ro.s1 + 2.0 * t); }
+    }
+    RafterCut::Keep
+}
+
+/// Trimmers, headers and curb of one opening, and its hole in the surface.
+/// `sx` maps sg to s, `inward` points up the slope, `tails` is the sg range of a full rafter on this
+/// slope (trimmers run the full length); `between` = the clear run between the two trusses that
+/// bracket the opening (trusses: no trimmers, the headers span between them).
+#[allow(clippy::too_many_arguments)]
+fn opening_frame(m: &mut Vec<Member>, c: &Ctx, ro: &Ro, sx: &dyn Fn(f64) -> f64, inward: P3, tails: (f64, f64), between: Option<(f64, f64)>) -> Vec<P3> {
+    let (fr, k, heel) = (c.fr, c.k, c.heel);
+    let (t, depth) = if c.trusses() { (c.ct, c.cd) } else { (c.rt, c.rd) };
+    let dv = c.dv(k);
+    let i = ro.i;
+    let p = |sg: f64, y: f64, r: f64| fr.at(sx(sg), y, r);
+    let main_top = |sg: f64| heel + k * sg + dv;
+    let (h0, h1) = match between { Some(b) => b, None => (ro.o, ro.o + ro.w) };
+    if between.is_none() {
+        // doubled trimmer rafters on both sides, full length, their inner faces on the opening's edges
+        for (lr, rs) in [("l", [ro.o - t / 2.0, ro.o - 1.5 * t]), ("r", [ro.o + ro.w + t / 2.0, ro.o + ro.w + 1.5 * t])] {
+            for (j, rr) in rs.iter().enumerate() {
+                bar3(m, format!("opening.{i}.trimmer.{lr}.{j}"), "trimmers", [t, depth], "lumber", p(tails.0, heel + k * tails.0, *rr), p(tails.1, heel + k * tails.1, *rr), UP, true);
+            }
+        }
+    }
+    // doubled headers outside the clear opening: below its lower edge and above its upper edge
+    for (name, sg, zs) in [("bottom", ro.s0, [[-2.0 * t, -t], [-t, 0.0]]), ("top", ro.s1, [[0.0, t], [t, 2.0 * t]])] {
+        for (j, z) in zs.iter().enumerate() {
+            member(m, format!("opening.{i}.header.{name}.{j}"), "headers", [t, depth], "header", p(sg, 0.0, h0), fr.er, UP, inward, [[0.0, h1 - h0], [main_top(sg) - depth, main_top(sg)], *z], 0);
+        }
+    }
+    // curb: 38 mm boards standing on the sheathing around the clear opening
+    if ro.curb > 0.005 {
+        let y_s = if c.rf.sheathing.enabled { c.rf.sheathing.thickness } else { 0.0 };
+        let b = 0.038;
+        for (name, sg, z) in [("bottom", ro.s0, [-b, 0.0]), ("top", ro.s1, [0.0, b])] {
+            member(m, format!("opening.{i}.curb.{name}"), "curbs", [b, ro.curb], "lumber", p(sg, 0.0, ro.o - b), fr.er, UP, inward, [[0.0, ro.w + 2.0 * b], [main_top(sg) + y_s, main_top(sg) + y_s + ro.curb], z], 0);
+        }
+        for (lr, rr) in [("l", ro.o - b / 2.0), ("r", ro.o + ro.w + b / 2.0)] {
+            bar3(m, format!("opening.{i}.curb.{lr}"), "curbs", [b, ro.curb], "lumber", p(ro.s0, main_top(ro.s0) + y_s, rr), p(ro.s1, main_top(ro.s1) + y_s, rr), UP, true);
+        }
+    }
+    vec![p(ro.s0, main_top(ro.s0), ro.o), p(ro.s0, main_top(ro.s0), ro.o + ro.w), p(ro.s1, main_top(ro.s1), ro.o + ro.w), p(ro.s1, main_top(ro.s1), ro.o)]
+}
+
+/// With trusses: the clear run between the two trusses that bracket the opening.
+fn between_trusses(c: &Ctx, positions: &[f64], ro: &Ro) -> (f64, f64) {
+    let rr = |p: f64| p.clamp(c.ct / 2.0, c.r - c.ct / 2.0);
+    let left = positions.iter().map(|&p| rr(p)).filter(|&q| q + c.ct / 2.0 <= ro.o + 1e-6).fold(f64::MIN, f64::max);
+    let right = positions.iter().map(|&p| rr(p)).filter(|&q| q - c.ct / 2.0 >= ro.o + ro.w - 1e-6).fold(f64::MAX, f64::min);
+    let a = if left > f64::MIN { left + c.ct / 2.0 } else { 0.0 };
+    let b = if right < f64::MAX { right - c.ct / 2.0 } else { c.r };
+    (a, b)
+}
+
 // ---- gable (and dormers) --------------------------------------------------------------------------
 
 /// A dormer resolved against the main roof (heights above the bearing, sg along its slope).
@@ -372,6 +472,7 @@ fn gable(m: &mut Vec<Member>, c: &Ctx) -> Shape {
     let (rf, fr, s, r, half, k, heel, oh) = (c.rf, c.fr, c.s, c.r, c.half, c.k, c.heel, c.oh);
     let positions = grid(r, rf.spacing);
     let dms = resolve_dormers(c);
+    let ros = resolve_openings(c, half);
     let t = if c.trusses() { c.ct } else { c.rt };
     if !c.trusses() {
         // the ridge board's top is flush with the rafters' top edges; its depth covers their plumb cut
@@ -383,7 +484,8 @@ fn gable(m: &mut Vec<Member>, c: &Ctx) -> Shape {
             for (side, lr) in ["l", "r"].iter().enumerate() {
                 let pt = |sg: f64| [if side == 0 { sg } else { s - sg }, heel + k * sg];
                 let top = half - c.bt / 2.0;
-                match cut_for(&dms, side, rr, t) {
+                let cut = match rafter_vs_openings(&ros, side, rr, t) { RafterCut::Skip => continue, RafterCut::Cut(lo, hi) => Some((lo, hi)), RafterCut::Keep => cut_for(&dms, side, rr, t) };
+                match cut {
                     None => fr.bar(m, format!("rafter.{i}.{lr}"), "rafters", [c.rt, c.rd], "lumber", pt(-oh), pt(top), rr, true),
                     Some((lo, hi)) => {
                         fr.bar(m, format!("rafter.{i}.{lr}"), "rafters", [c.rt, c.rd], "lumber", pt(-oh), pt(lo), rr, true);
@@ -406,10 +508,16 @@ fn gable(m: &mut Vec<Member>, c: &Ctx) -> Shape {
     let mut sh = Shape::default();
     for (side, lr) in ["l", "r"].iter().enumerate() {
         let sx = |sg: f64| if side == 0 { sg } else { s - sg };
-        let holes: Vec<Vec<P3>> = dms.iter().filter(|d| d.side == side).map(|d| {
+        let mut holes: Vec<Vec<P3>> = dms.iter().filter(|d| d.side == side).map(|d| {
             let y = |sg: f64| heel + k * sg + dv;
             vec![fr.at(sx(d.sb), y(d.sb), d.o), fr.at(sx(d.sb), y(d.sb), d.o + d.w), fr.at(sx(d.s_end), y(d.s_end), d.o + d.w), fr.at(sx(d.s_end), y(d.s_end), d.o)]
         }).collect();
+        let inward = if side == 0 { fr.es } else { scale(fr.es, -1.0) };
+        let tails = (-oh, if c.trusses() { half } else { half - c.bt / 2.0 });
+        for ro in ros.iter().filter(|ro| ro.side == side) {
+            let between = if c.trusses() { Some(between_trusses(c, &positions, ro)) } else { None };
+            holes.push(opening_frame(m, c, ro, &sx, inward, tails, between));
+        }
         sh.planes.push(Plane { key: lr.to_string(), pts: vec![fr.at(sx(-oh), ye, 0.0), fr.at(half, yp, 0.0), fr.at(half, yp, r), fr.at(sx(-oh), ye, r)], holes });
         let out = if side == 0 { scale(fr.es, -1.0) } else { fr.es };
         sh.eaves.push(Eave { a: fr.at(sx(-oh), ye, 0.0), b: fr.at(sx(-oh), ye, r), out, soffit: Some((vec![c.plan(sx(-oh), 0.0), c.plan(sx(-oh), r), c.plan(sx(0.0), r), c.plan(sx(0.0), 0.0)], fr.origin[1] + heel - k * oh)), gutter: true });
@@ -648,6 +756,7 @@ fn shed(m: &mut Vec<Member>, c: &Ctx) -> Shape {
     let sx = |sg: f64| if high_max { sg } else { s - sg };
     let pt = |sg: f64| [sx(sg), heel + k * sg];
     let positions = grid(r, rf.spacing);
+    let ros: Vec<Ro> = resolve_openings(c, s).into_iter().map(|mut ro| { ro.side = 0; ro }).collect();
     if c.trusses() {
         let chord = [c.ct, c.cd];
         for (i, &p) in positions.iter().enumerate() {
@@ -668,7 +777,14 @@ fn shed(m: &mut Vec<Member>, c: &Ctx) -> Shape {
     } else {
         for (i, &p) in positions.iter().enumerate() {
             let rr = p.clamp(c.rt / 2.0, r - c.rt / 2.0);
-            fr.bar(m, format!("rafter.{i}"), "rafters", [c.rt, c.rd], "lumber", pt(-oh), pt(s + oh), rr, true);
+            match rafter_vs_openings(&ros, 0, rr, c.rt) {
+                RafterCut::Skip => {}
+                RafterCut::Keep => fr.bar(m, format!("rafter.{i}"), "rafters", [c.rt, c.rd], "lumber", pt(-oh), pt(s + oh), rr, true),
+                RafterCut::Cut(lo, hi) => {
+                    fr.bar(m, format!("rafter.{i}"), "rafters", [c.rt, c.rd], "lumber", pt(-oh), pt(lo), rr, true);
+                    if s + oh - hi > 0.02 { fr.bar(m, format!("rafter.{i}.upper"), "rafters", [c.rt, c.rd], "lumber", pt(hi), pt(s + oh), rr, true); }
+                }
+            }
         }
         // the high end: rafters sit (birdsmouthed) on a pony wall built on the high wall's top plate —
         // its plate top meets the rafter underside at the wall's outer face — or hang on a ledger
@@ -695,7 +811,11 @@ fn shed(m: &mut Vec<Member>, c: &Ctx) -> Shape {
     let (ylo, yhi) = (heel - k * oh + dv, heel + k * (s + oh) + dv);
     let up_dir = if high_max { fr.es } else { scale(fr.es, -1.0) };
     let mut sh = Shape::default();
-    sh.planes.push(Plane { key: "main".into(), pts: vec![fr.at(sx(-oh), ylo, 0.0), fr.at(sx(s + oh), yhi, 0.0), fr.at(sx(s + oh), yhi, r), fr.at(sx(-oh), ylo, r)], holes: vec![] });
+    let holes: Vec<Vec<P3>> = ros.iter().map(|ro| {
+        let between = if c.trusses() { Some(between_trusses(c, &positions, ro)) } else { None };
+        opening_frame(m, c, ro, &sx, up_dir, (-oh, s + oh), between)
+    }).collect();
+    sh.planes.push(Plane { key: "main".into(), pts: vec![fr.at(sx(-oh), ylo, 0.0), fr.at(sx(s + oh), yhi, 0.0), fr.at(sx(s + oh), yhi, r), fr.at(sx(-oh), ylo, r)], holes });
     let y0 = fr.origin[1];
     sh.eaves.push(Eave { a: fr.at(sx(-oh), ylo, 0.0), b: fr.at(sx(-oh), ylo, r), out: scale(up_dir, -1.0), soffit: Some((vec![c.plan(sx(-oh), 0.0), c.plan(sx(-oh), r), c.plan(sx(0.0), r), c.plan(sx(0.0), 0.0)], y0 + heel - k * oh)), gutter: true });
     sh.eaves.push(Eave { a: fr.at(sx(s + oh), yhi, 0.0), b: fr.at(sx(s + oh), yhi, r), out: up_dir, soffit: Some((vec![c.plan(sx(s), 0.0), c.plan(sx(s), r), c.plan(sx(s + oh), r), c.plan(sx(s + oh), 0.0)], y0 + heel + k * s)), gutter: false });

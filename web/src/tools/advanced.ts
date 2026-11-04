@@ -1,7 +1,7 @@
 // Scale with handles, Follow Me, Flip (mirror) and Place Component.
 import * as THREE from 'three';
 import type { Tool, ToolContext } from './base';
-import { parseNumbers, drawSnap, arr, INK, MAGENTA, SELECT, AXIS } from './base';
+import { partsRefused, parseNumbers, drawSnap, arr, INK, MAGENTA, SELECT, AXIS } from './base';
 import { findEntity, fmt, type Vec3 } from '../model';
 
 /** Axis-aligned bounds of the selection from the compiled segments. */
@@ -32,7 +32,7 @@ export class ScaleTool implements Tool {
   }
   private handleAt(ev: PointerEvent, ctx: ToolContext) { const cur = new THREE.Vector2(ev.clientX - ctx.scene.container.getBoundingClientRect().left, ev.clientY - ctx.scene.container.getBoundingClientRect().top); let best = -1, bd = 12; this.handles.forEach((h, i) => { const d = ctx.scene.screenPoint(h.p).distanceTo(cur); if (d < bd) { bd = d; best = i; } }); return best; }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    if (!this.drag) { if (!this.handles.length && ctx.selection().size) this.rebuild(ctx); const h = this.handleAt(ev, ctx); if (h !== this.hover) { this.hover = h; this.draw(ctx); } if (h < 0) { const p = ctx.scene.pick(ev); ctx.scene.highlight(p ? new Set([ctx.resolve(p.id)]) : new Set(), true); } return; }
+    if (!this.drag) { if (!this.handles.length && ctx.selection().size) this.rebuild(ctx); const h = this.handleAt(ev, ctx); if (h !== this.hover) { this.hover = h; this.draw(ctx); } if (h < 0 && !ctx.selection().size) { const p = ctx.scene.pick(ev); ctx.scene.highlight(p ? new Set([ctx.resolve(p.id)]) : new Set(), true); } return; }
     const d = this.drag; const p = ctx.scene.linePoint(ev, d.origin, d.axis); const dist = p.clone().sub(d.origin).dot(d.axis); let f = Math.max(0.01, dist / d.d0);
     if (ctx.options.gridSnap) f = Math.round(f * 100) / 100;
     d.factors = d.h.mask.map(m => (m ? f : 1)) as Vec3;
@@ -43,7 +43,8 @@ export class ScaleTool implements Tool {
     if (ev.button !== 0) return;
     if (this.drag) return this.finish(ctx);
     const hi = this.handleAt(ev, ctx);
-    if (hi < 0) { const p = ctx.scene.pick(ev); if (p) { ctx.select([ctx.resolve(p.id)]); this.rebuild(ctx); this.draw(ctx); } return; }
+    if (hi < 0) { if (ctx.selection().size) return; /* the selection stays the one being scaled */ const p = ctx.scene.pick(ev); if (p) { ctx.select([ctx.resolve(p.id)]); this.rebuild(ctx); this.draw(ctx); } return; }
+    if (partsRefused(ctx)) return;
     const h = this.handles[hi]; const centre = this.box!.getCenter(new THREE.Vector3());
     const opposite = centre.clone().multiplyScalar(2).sub(h.p); const origin = ev.ctrlKey || ev.metaKey ? centre : opposite;
     const axis = h.p.clone().sub(origin); const d0 = axis.length(); if (d0 < 1e-6) return; axis.normalize();
@@ -99,6 +100,7 @@ export class FlipTool implements Tool {
   async onDown(ev: PointerEvent, ctx: ToolContext) {
     if (ev.button !== 0) return; const p = ctx.scene.pick(ev, { facesOnly: true });
     if (!ctx.selection().size) { if (p) { ctx.select([ctx.resolve(p.id)]); this.preview(ctx); } return; }
+    if (partsRefused(ctx)) return;
     const pl = this.plane(ctx, p); if (!pl) return; ctx.preview([]); ctx.scene.clearOverlay();
     const r = await ctx.ops([{ op: 'mirror', ids: pl.ids, origin: arr(pl.origin), normal: arr(pl.normal), copy: ev.ctrlKey || ev.metaKey }], ev.ctrlKey || ev.metaKey ? 'Mirror copy' : 'Flip');
     if (r[0]?.created?.length) ctx.select(r[0].created);

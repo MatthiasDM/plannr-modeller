@@ -1,7 +1,7 @@
 // Plugin API: window.plannr.registerPlugin({...}). Plugins add tools, tray panels and ops of their own;
 // the core knows nothing about what they model. See docs/PLUGINS.md.
 import type { Tool, ToolContext } from './tools/base';
-import type { Document, Entity, Op, OpResult, Vec3 } from './model';
+import type { CustomEntity, Document, Entity, Op, OpResult, Vec3 } from './model';
 
 export interface PluginPanel { id: string; title: string; render(ctx: ToolContext, el: HTMLElement): void }
 /** A plugin can take over camera input (walk-through, fly, turntable…). Return true from a handler to consume the event. */
@@ -25,8 +25,21 @@ export interface Plugin {
   beforeMove?(ids: string[], delta: Vec3, ctx: ToolContext): Op[] | null;
   /** Render Entity Info for one of this plugin's custom entities; return false to fall back to the default. */
   renderEntity?(ctx: ToolContext, entity: Entity, el: HTMLElement): boolean;
+  /** Custom entities built of generated parts (a framed wall's studs and plates). A double-click opens one like a
+   *  group; a click inside selects a single part, its compiled id `<entityId>#<key>`. */
+  parts?: PluginParts;
   /** Called once the app is ready. */
   activate?(api: PluginHost): void;
+}
+export interface PluginParts {
+  /** The custom types (`framing.wall`, …) that open this way. */
+  types: string[];
+  /** What the top bar says while one is open ("framed wall"). */
+  label?(entity: CustomEntity): string;
+  /** Ops that take these parts out (Delete key, Erase); null when they can't be removed. */
+  erase?(ctx: ToolContext, entity: CustomEntity, keys: string[]): Op[] | null;
+  /** Entity Info for selected parts of one entity. */
+  render?(ctx: ToolContext, entity: CustomEntity, keys: string[], el: HTMLElement): void;
 }
 export interface PluginHost {
   ctx: ToolContext;
@@ -61,4 +74,9 @@ export function registerPlugin(p: Plugin) {
   plugins.push(p); listeners.forEach(l => l(p));
 }
 export const getPlugins = () => plugins;
+/** Any plugin entity opens with a double-click (its faces are compiled `<id>#<key>`), so a single face of a
+ *  construction wall or roof can be selected; a plugin's own `parts` adds what its parts can do. */
+const GENERIC_PARTS: PluginParts = { types: [], label: e => (e.type.split('.')[1] ?? e.type).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() };
+/** The parts declaration that opens this entity: the plugin's own, else the generic one for any plugin entity. */
+export const partsFor = (e: Entity | undefined): PluginParts | null => (e?.kind === 'custom' ? plugins.find(p => p.parts?.types.includes(e.type))?.parts ?? GENERIC_PARTS : null);
 export const onPlugin = (l: (p: Plugin) => void) => { listeners.add(l); return () => listeners.delete(l); };

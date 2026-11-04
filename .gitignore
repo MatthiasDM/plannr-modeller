@@ -4,6 +4,7 @@ target/
 data/*.db
 data/*.db-*
 data/exports/
+data/plugins/
 # Frontend
 web/node_modules/
 web/dist/
@@ -12,3 +13,6 @@ web/dist/
 *.log
 .idea/
 .vscode/
+
+# local builds of plugin packages
+dist/

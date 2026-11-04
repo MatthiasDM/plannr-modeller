@@ -21,12 +21,13 @@ const CORNERS: [string, string][] = [['california', 'California corner'], ['thre
 const TEES: [string, string][] = [['twoStud', '2-stud channel'], ['ladder', 'Ladder blocking'], ['california', 'California T (flat stud)'], ['none', 'none']];
 const JOINS: [string, string][] = [['auto', 'auto'], ['through', 'runs through'], ['butt', 'butts'], ['none', 'no join']];
 const STUD_DEPTH: Record<string, number> = { '2x3': 0.064, '2x4': 0.089, '2x6': 0.14, '2x8': 0.184, '2x10': 0.235, '2x12': 0.286 };
-const state = { pendingCheck: false, findingsVersion: -1, roofShape: 'gable', findings: null as any[] | null, findingsCounts: '' as string, beamSize: '2x10', beamPlies: 2, stairWidth: 0.9, reference: 'exterior' as 'exterior' | 'center' | 'interior', openingKind: 'window' as 'window' | 'door', roofType: 'fink', pitch: 6, which: 'exterior' as 'exterior' | 'all', foundation: 'slab' as 'slab' | 'stemwall' };
+const state = { pendingCheck: false, findingsVersion: -1, roofShape: 'gable', findings: null as any[] | null, findingsCounts: '' as string, beamSize: '2x10', beamPlies: 2, stairWidth: 0.9, reference: 'exterior' as 'exterior' | 'center' | 'interior', openingKind: 'window' as 'window' | 'door', roofType: 'fink', pitch: 6, which: 'exterior' as 'exterior' | 'all', foundation: 'slab' as 'slab' | 'stemwall', roofCurb: 0.15 };
 let host: PluginHost;
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const fop = (type: string, data: unknown): Op => ({ op: 'custom', type: `framing.${type}`, data });
 const defaults = (doc: Document): any => (doc.extensions?.framing as any)?.defaults ?? { studSize: '2x4', studSpacing: 0.4, topPlates: 2, bottomPlates: 1, sheathing: { exterior: { enabled: true, thickness: 0.011 }, interior: { enabled: false, thickness: 0.0125 } } };
 const cext = (doc: Document): any => doc.extensions?.construction ?? { storeys: [{ height: 2.6 }], groundLevel: 0 };
+const storeyHeight = (doc: Document, level: number) => ((cext(doc).storeys ?? [])[level]?.height as number | undefined) ?? 2.6;
 const base = (doc: Document, level: number) => (cext(doc).groundLevel ?? 0) + (cext(doc).storeys ?? []).slice(0, level).reduce((s: number, f: any) => s + f.height, 0);
 const storeyH = (doc: Document, level: number) => cext(doc).storeys?.[level]?.height ?? 2.6;
 const activeLevel = () => { const fb = document.querySelector<HTMLElement>('.floor-bar button.active[data-lvl]'); return fb ? parseInt(fb.dataset.lvl!) : 0; };
@@ -94,21 +95,78 @@ async function placeWall(t: typeof wallTool, ctx: ToolContext, end: V3) {
   if (!t.start || t.start.distanceTo(end) < 0.1) return; const r = await ctx.ops([fop('add_wall', { level: activeLevel(), a: plan(t.start), b: plan(end), reference: state.reference })], 'Framed wall'); t.start = end.clone(); if (r[0]?.created?.[0]) ctx.select([r[0].created[0]]);
 }
 
+/** Show what a click would build (the engine applies the ops without committing); only when it changed. */
+let shown = '';
+function showResult(ctx: ToolContext, ops: Op[]) { const k = JSON.stringify(ops); if (k !== shown) { shown = k; ctx.preview(ops); } }
+async function commit(ctx: ToolContext, ops: Op[], label: string) { shown = ''; ctx.preview([]); return ctx.ops(ops, label); }
+const unpreview = (ctx: ToolContext) => { shown = ''; ctx.preview([]); };
+const openingOp = (h: NonNullable<ReturnType<typeof hitWall>>): Op => { const d = dims(); return fop('add_opening', { wall: h.wall.id, kind: state.openingKind, offset: +Math.max(0, h.along - d.w / 2).toFixed(3), width: d.w, height: d.h, sill: state.openingKind === 'door' ? 0 : 0.9 }); };
+
 const openingTool: Tool = {
   id: 'f-opening', label: 'Rough opening', hint: 'Hover a framed wall and click to add a window or door rough opening (king and jack studs, header, sill, cripples). Type width; height.', cursor: 'crosshair',
   icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3 4h18M3 20h18" stroke="#8c6d3f" stroke-width="2.2"/><path d="M6 4v16M18 4v16M8 4v16M16 4v16" stroke="#c9a46a"/><path d="M8 8h8" stroke="#8c6d3f" stroke-width="3"/><path d="M8 16h8" stroke="#c9a46a" stroke-width="2"/></svg>`,
-  activate(ctx) { ctx.setHint(this.hint); ctx.setVCB(state.openingKind === 'door' ? '0.9; 2.1' : '1.2; 1.2', 'Width; Height'); }, deactivate(ctx) { ctx.scene.clearOverlay(); },
-  onMove(ev, ctx) { ctx.scene.clearOverlay(); const h = hitWall(ev, ctx); if (!h) return; const d = dims(); const y0 = base(ctx.doc(), (h.wall.data as any).level) + (state.openingKind === 'door' ? 0 : 0.9); const c = new THREE.Vector3(h.pt[0], 0, h.pt[1]); const l = c.clone().addScaledVector(h.dir, -d.w / 2), r = c.clone().addScaledVector(h.dir, d.w / 2); ctx.scene.addLine([l.clone().setY(y0), r.clone().setY(y0), r.clone().setY(y0 + d.h), l.clone().setY(y0 + d.h), l.clone().setY(y0)], 0xc8169a, false, 2); ctx.scene.addLabel(c.clone().setY(y0 + d.h), `${state.openingKind} ${d.w}×${d.h} · offset ${fmtM(h.along - d.w / 2)}`); },
-  async onDown(ev, ctx) { if (ev.button !== 0) return; const h = hitWall(ev, ctx); if (!h) { ctx.toast('Hover a framed wall'); return; } const d = dims(); await ctx.ops([fop('add_opening', { wall: h.wall.id, kind: state.openingKind, offset: +Math.max(0, h.along - d.w / 2).toFixed(3), width: d.w, height: d.h, sill: state.openingKind === 'door' ? 0 : 0.9 })], 'Rough opening'); },
+  activate(ctx) { lastHit.wall = null; ctx.setHint(this.hint); ctx.setVCB(state.openingKind === 'door' ? '0.9; 2.1' : '1.2; 1.2', 'Width; Height'); }, deactivate(ctx) { unpreview(ctx); ctx.scene.clearOverlay(); },
+  onMove(ev, ctx) { ctx.scene.clearOverlay(); const h = hitWall(ev, ctx); showResult(ctx, h ? [openingOp(h)] : []); if (!h) return; const d = dims(); const y0 = base(ctx.doc(), (h.wall.data as any).level) + (state.openingKind === 'door' ? 0 : 0.9); const c = new THREE.Vector3(h.pt[0], 0, h.pt[1]); const l = c.clone().addScaledVector(h.dir, -d.w / 2), r = c.clone().addScaledVector(h.dir, d.w / 2); ctx.scene.addLine([l.clone().setY(y0), r.clone().setY(y0), r.clone().setY(y0 + d.h), l.clone().setY(y0 + d.h), l.clone().setY(y0)], 0xc8169a, false, 2); ctx.scene.addLabel(c.clone().setY(y0 + d.h), `${state.openingKind} ${d.w}×${d.h} · offset ${fmtM(h.along - d.w / 2)}`); },
+  async onDown(ev, ctx) { if (ev.button !== 0) return; const h = hitWall(ev, ctx); if (!h) { ctx.toast('Hover a framed wall'); return; } await commit(ctx, [openingOp(h)], 'Rough opening'); },
   onVCB(v, ctx) { const n = num(v); if (n.length) { OPEN[state.openingKind] = { w: n[0], h: n[1] ?? OPEN[state.openingKind].h }; ctx.setVCB(`${n[0]}; ${n[1] ?? OPEN[state.openingKind].h}`, 'Width; Height'); } },
 };
 const OPEN: Record<string, { w: number; h: number }> = { window: { w: 1.2, h: 1.2 }, door: { w: 0.9, h: 2.1 } };
+
+const ROOF_OPEN = { w: 1.0, d: 1.0 };
+/** The framing roof under the cursor (picked geometry first, else the plan rectangle under the ground point) and the point on it. */
+/** The wall / roof surface last hovered: a previewed opening is a hole under the cursor, so the cursor is read
+ *  on that surface while it is over the hole (else the preview would switch itself off). */
+const lastHit: { wall: { id: string; origin: V3; normal: V3 } | null; roof: { id: string; origin: V3; normal: V3 } | null } = { wall: null, roof: null };
+function hitRoof(ev: PointerEvent, ctx: ToolContext) {
+  const doc = ctx.doc(); const all = customs(doc, 'framing.roof'); const isRoof = (i: string) => all.some(r => r.id === i);
+  const sel = new Set(ctx.targets(isRoof)); const roofs = sel.size ? all.filter(r => sel.has(r.id)) : all; // a selected roof is the one worked on
+  const pk = ctx.pickTarget(ev, { accept: isRoof }); const id = pk ? ctx.resolve(pk.id) : null;
+  let roof = id ? roofs.find(r => r.id === id) : undefined; let p: Plan | null = pk && roof ? [pk.point.x, pk.point.z] : null; let y = pk && roof ? pk.point.y : 0;
+  if (pk && roof) lastHit.roof = { id: roof.id, origin: pk.point.clone(), normal: pk.normal.clone() };
+  else if (lastHit.roof) { const q = ctx.scene.planePoint(ev, lastHit.roof.origin, lastHit.roof.normal); const r = roofs.find(x => x.id === lastHit.roof!.id); const d: any = r?.data; if (q && r && q.x >= Math.min(d.min[0], d.max[0]) && q.x <= Math.max(d.min[0], d.max[0]) && q.z >= Math.min(d.min[1], d.max[1]) && q.z <= Math.max(d.min[1], d.max[1])) { roof = r; p = [q.x, q.z]; y = q.y; } } // over the previewed hole: the slope last hovered
+  if (!roof) { const g = ctx.scene.groundPoint(ev, base(doc, activeLevel())); if (!g) return null; p = [g.x, g.z]; roof = roofs.find(r => { const d: any = r.data; return g.x >= Math.min(d.min[0], d.max[0]) - 0.3 && g.x <= Math.max(d.min[0], d.max[0]) + 0.3 && g.z >= Math.min(d.min[1], d.max[1]) - 0.3 && g.z <= Math.max(d.min[1], d.max[1]) + 0.3; }); y = base(doc, activeLevel()) + storeyHeight(doc, activeLevel()) + 0.3; }
+  if (!roof || !p) return null;
+  const d: any = roof.data; const minx = Math.min(d.min[0], d.max[0]), minz = Math.min(d.min[1], d.max[1]), maxx = Math.max(d.min[0], d.max[0]), maxz = Math.max(d.min[1], d.max[1]);
+  const alongX = d.ridgeAlongX !== false; const run = alongX ? maxx - minx : maxz - minz; const span = alongX ? maxz - minz : maxx - minx;
+  const offset = alongX ? p[0] - minx : p[1] - minz; const across = alongX ? p[1] - minz : p[0] - minx;
+  let side = 'l'; let start = across;
+  if ((d.shape ?? 'gable') === 'gable') { if (across > span / 2) { side = 'r'; start = span - across; } }
+  else if ((d.highSide ?? 'max') === 'min') start = span - across; // shed: measured from the low wall
+  return { roof, p, y, run, span, offset, start, side, alongX, minx, minz };
+}
+function roofOpeningOp(h: NonNullable<ReturnType<typeof hitRoof>>): Op {
+  const { w, d } = ROOF_OPEN; const across = (h.roof.data as any).shape === 'gable' || !(h.roof.data as any).shape ? h.span / 2 : h.span;
+  const offset = Math.min(Math.max(0, h.offset - w / 2), Math.max(0, h.run - w)); const start = Math.min(Math.max(0, h.start - d / 2), Math.max(0, across - d - 0.1));
+  return fop('add_roof_opening', { roof: h.roof.id, side: h.side, offset: +offset.toFixed(3), width: w, start: +start.toFixed(3), depth: d, curbHeight: state.roofCurb });
+}
+const roofOpeningTool: Tool = {
+  id: 'f-roofopening', label: 'Roof opening', hint: 'Hover a framed roof and click to frame an opening (skylight / hatch): the rafters are cut and headed off with doubled headers between doubled trimmers, the sheathing gets the hole. Type width; depth.', cursor: 'crosshair',
+  icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M2 13 12 4l10 9" stroke="#8c6d3f" stroke-width="2.2"/><path d="M5 11v9h14v-9" stroke="#c9a46a"/><rect x="9" y="9" width="6" height="6" stroke="#c8169a" stroke-width="1.8"/></svg>`,
+  activate(ctx) { lastHit.roof = null; ctx.setHint(this.hint); ctx.setVCB(`${ROOF_OPEN.w}; ${ROOF_OPEN.d}`, 'Width; Depth'); }, deactivate(ctx) { unpreview(ctx); ctx.scene.clearOverlay(); },
+  onMove(ev, ctx) {
+    ctx.scene.clearOverlay(); const h = hitRoof(ev, ctx); showResult(ctx, h ? [roofOpeningOp(h)] : []); if (!h) return;
+    const { w, d } = ROOF_OPEN; const c = new THREE.Vector3(h.p[0], h.y + 0.03, h.p[1]); const u = h.alongX ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1); const v = h.alongX ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);
+    const q = (a: number, b: number) => c.clone().addScaledVector(u, a).addScaledVector(v, b);
+    ctx.scene.addLine([q(-w / 2, -d / 2), q(w / 2, -d / 2), q(w / 2, d / 2), q(-w / 2, d / 2), q(-w / 2, -d / 2)], 0xc8169a, false, 2);
+    ctx.scene.addLabel(c, `opening ${w}×${d} · ${(h.roof.data as any).shape === 'shed' ? '' : `${h.side} slope, `}offset ${Math.max(0, h.offset - w / 2).toFixed(2)}, ${Math.max(0, h.start - d / 2).toFixed(2)} up the slope`);
+  },
+  async onDown(ev, ctx) {
+    if (ev.button !== 0) return; const h = hitRoof(ev, ctx); if (!h) { ctx.toast('Hover a framed roof'); return; }
+    const r = await commit(ctx, [roofOpeningOp(h)], 'Roof opening');
+    if (r[0]?.modified?.[0]) ctx.select([r[0].modified[0]]);
+  },
+  onVCB(v, ctx) { const n = num(v); if (n.length) { ROOF_OPEN.w = n[0]; ROOF_OPEN.d = n[1] ?? ROOF_OPEN.d; ctx.setVCB(`${ROOF_OPEN.w}; ${ROOF_OPEN.d}`, 'Width; Depth'); } },
+};
 const dims = () => OPEN[state.openingKind];
 function hitWall(ev: PointerEvent, ctx: ToolContext) {
-  const doc = ctx.doc(); const pk = ctx.scene.pick(ev); const id = pk ? ctx.resolve(pk.id) : null; let wall = id ? customs(doc, 'framing.wall').find(w => w.id === id) : undefined;
+  const doc = ctx.doc(); const all = customs(doc, 'framing.wall'); const isWall = (i: string) => all.some(w => w.id === i);
+  const sel = new Set(ctx.targets(isWall)); const walls = sel.size ? all.filter(w => sel.has(w.id)) : all; // a selected wall is the one worked on
+  let pk: { point: V3; normal: V3; id: string } | null = ctx.pickTarget(ev, { accept: isWall }); const id = pk ? ctx.resolve(pk.id) : null; let wall = id ? walls.find(w => w.id === id) : undefined;
+  if (pk && wall) lastHit.wall = { id: wall.id, origin: pk.point.clone(), normal: pk.normal.clone() };
+  else if (lastHit.wall) { const q = ctx.scene.planePoint(ev, lastHit.wall.origin, lastHit.wall.normal); const w = walls.find(x => x.id === lastHit.wall!.id); const y0 = w ? base(doc, (w.data as any).level) : 0; if (q && w && q.y >= y0 && q.y <= y0 + storeyHeight(doc, (w.data as any).level)) { wall = w; pk = { point: q, normal: lastHit.wall.normal, id: w.id }; } } // over the previewed opening: the wall face last hovered
   const g = ctx.scene.groundPoint(ev, base(doc, activeLevel())); const p: Plan | null = pk && wall ? [pk.point.x, pk.point.z] : g ? [g.x, g.z] : null; if (!p) return null;
   let best: { wall: CustomEntity; t: number; d: number } | null = null;
-  for (const w of customs(doc, 'framing.wall')) { const a = (w.data as any).a as Plan, b = (w.data as any).b as Plan; const dx = b[0] - a[0], dz = b[1] - a[1]; const L2 = dx * dx + dz * dz || 1e-9; let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2; t = Math.max(0, Math.min(1, t)); const d = Math.hypot(a[0] + dx * t - p[0], a[1] + dz * t - p[1]); if (d < 0.6 && (!best || d < best.d)) best = { wall: w, t, d }; }
+  for (const w of walls) { const a = (w.data as any).a as Plan, b = (w.data as any).b as Plan; const dx = b[0] - a[0], dz = b[1] - a[1]; const L2 = dx * dx + dz * dz || 1e-9; let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / L2; t = Math.max(0, Math.min(1, t)); const d = Math.hypot(a[0] + dx * t - p[0], a[1] + dz * t - p[1]); if (d < 0.6 && (!best || d < best.d)) best = { wall: w, t, d }; }
   if (!best) return null; const a = (best.wall.data as any).a as Plan, b = (best.wall.data as any).b as Plan; const L = Math.hypot(b[0] - a[0], b[1] - a[1]); const dir = new THREE.Vector3(b[0] - a[0], 0, b[1] - a[1]).normalize();
   return { wall: best.wall, along: best.t * L, pt: [a[0] + (b[0] - a[0]) * best.t, a[1] + (b[1] - a[1]) * best.t] as Plan, dir, L };
 }
@@ -171,12 +229,13 @@ async function showSpanTable(ctx: ToolContext) {
   document.body.appendChild(el); const close = () => el.remove(); el.querySelector<HTMLElement>('[data-close]')!.onclick = close; el.addEventListener('pointerdown', e => { if (e.target === el) close(); });
 }
 
+const isRoom = (ctx: ToolContext) => (id: string) => customs(ctx.doc(), 'construction.room').some(r => r.id === id);
 const frameRoomTool: Tool = {
   id: 'f-frameroom', label: 'Frame room', hint: 'Click a room from the construction plugin: its walls (exterior, or all) are framed with the openings it has.', cursor: 'crosshair',
   icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 6h16v12H4z" fill="#e8f0fb"/><path d="M4 6v12M20 6v12" stroke="#8c6d3f" stroke-width="2.4"/><path d="M7 6v12M10 6v12M14 6v12M17 6v12" stroke="#c9a46a"/></svg>`,
-  activate(ctx) { ctx.setHint(this.hint); ctx.setVCB('', 'Measurements'); }, deactivate(ctx) { ctx.scene.highlight(new Set(), true); },
-  onMove(ev, ctx) { const pk = ctx.scene.pick(ev, { facesOnly: true }); const id = pk ? ctx.resolve(pk.id) : ''; const room = customs(ctx.doc(), 'construction.room').find(r => r.id === id); ctx.scene.highlight(room ? new Set([room.id]) : new Set(), true); },
-  async onDown(ev, ctx) { if (ev.button !== 0) return; const pk = ctx.scene.pick(ev, { facesOnly: true }); const id = pk ? ctx.resolve(pk.id) : ''; const room = customs(ctx.doc(), 'construction.room').find(r => r.id === id); if (!room) { ctx.toast('Click a construction room'); return; } const r = await ctx.ops([fop('frame_room', { room: room.id, which: state.which })], 'Frame room'); if (r[0]?.created?.length) { ctx.select(r[0].created); ctx.toast(`${r[0].created.length} framed walls`); } },
+  activate(ctx) { ctx.setHint(this.hint); ctx.setVCB('', 'Measurements'); }, deactivate(ctx) { unpreview(ctx); ctx.scene.highlight(new Set(), true); },
+  onMove(ev, ctx) { const pk = ctx.pickTarget(ev, { facesOnly: true, accept: isRoom(ctx) }); const id = pk ? ctx.resolve(pk.id) : ''; const room = customs(ctx.doc(), 'construction.room').find(r => r.id === id); ctx.scene.highlight(room ? new Set([room.id]) : new Set(), true); showResult(ctx, room ? [fop('frame_room', { room: room.id, which: state.which })] : []); },
+  async onDown(ev, ctx) { if (ev.button !== 0) return; const pk = ctx.pickTarget(ev, { facesOnly: true, accept: isRoom(ctx) }); const id = pk ? ctx.resolve(pk.id) : ''; const room = customs(ctx.doc(), 'construction.room').find(r => r.id === id); if (!room) { ctx.toast('Click a construction room'); return; } const r = await commit(ctx, [fop('frame_room', { room: room.id, which: state.which })], 'Frame room'); if (r[0]?.created?.length) { ctx.select(r[0].created); ctx.toast(`${r[0].created.length} framed walls`); } },
 };
 
 // ---- panel + editors -----------------------------------------------------------------------
@@ -237,6 +296,30 @@ async function showCutList(ctx: ToolContext) {
   el.querySelector<HTMLElement>('[data-csv]')!.onclick = () => { const csv = ['category,item,count,stock,length_m,area_m2,volume_m3', ...(est.items ?? []).map((it: any) => [it.category, `"${it.description}"`, it.count ?? '', it.stock ?? '', it.length_m ?? '', it.area_m2 ?? '', it.volume_m3 ?? ''].join(','))].join('\n'); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'cutlist.csv'; a.click(); };
 }
 
+/** The engine's member list of an element, kept per document version. */
+const memberCache = new Map<string, { version: number; list: any[]; removed: number }>();
+async function membersOf(ctx: ToolContext, id: string) {
+  const v = ctx.doc().version; const c = memberCache.get(id); if (c && c.version === v) return c;
+  const r = await ctx.ops([fop('members', { id })], 'Members'); const d: any = r[0]?.entities?.[0]?.data ?? {};
+  const out = { version: ctx.doc().version, list: d.members ?? [], removed: d.removed ?? 0 }; memberCache.set(id, out); return out;
+}
+const CATEGORY: Record<string, string> = { studs: 'Stud', plates: 'Plate', headers: 'Header', cripples: 'Cripple', sills: 'Sill', blocking: 'Blocking', joists: 'Joist', rim: 'Rim joist', rafters: 'Rafter', trusses: 'Truss', ridge: 'Ridge', beams: 'Beam', posts: 'Post', stringers: 'Stringer' };
+/** Entity Info for selected members of a framing element (opened with a double-click). */
+function renderMembers(ctx: ToolContext, e: CustomEntity, keys: string[], el: HTMLElement) {
+  el.innerHTML = `<div class="muted">Loading members…</div>`;
+  void membersOf(ctx, e.id).then(({ list, removed }) => {
+    const sel = list.filter((m: any) => keys.includes(m.key)); if (!el.isConnected) return;
+    const one = sel.length === 1 ? sel[0] : null; const kinds = [...new Set(sel.map((m: any) => CATEGORY[m.category] ?? m.category))];
+    const total = sel.reduce((s: number, m: any) => s + m.length_m, 0);
+    el.innerHTML = `<div class="kv"><label>Type</label><div><b>${one ? esc(CATEGORY[one.category] ?? one.category) : `${sel.length} members`}</b> <span class="muted">${one ? esc(one.key) : esc(kinds.join(', '))}</span></div>`
+      + (one ? `<label>Size</label><div>${esc(one.size)}</div><label>Length</label><div>${fmtM(one.length_m)}</div><label>Material</label><div>${esc(one.material)}</div>` : `<label>Total length</label><div>${fmtM(total)}</div>`)
+      + `<label>Part of</label><div>${esc(e.type.slice(8))} <span class="muted">${e.id.slice(0, 8)}</span></div></div>`
+      + `<div class="btn-row"><button class="btn" data-mrm>Remove ${one ? 'member' : 'members'}</button>${removed ? `<button class="btn" data-mrs>Restore removed (${removed})</button>` : ''}</div>`
+      + `<div class="muted" style="font-size:11px;margin-top:6px">Removed members stay out when the wall is regenerated; one that is no longer in the same place comes back.</div>`;
+    el.querySelector<HTMLElement>('[data-mrm]')!.onclick = async () => { await ctx.ops([fop('remove_members', { id: e.id, keys })], 'Remove members'); ctx.select([]); };
+    el.querySelector<HTMLElement>('[data-mrs]')?.addEventListener('click', () => ctx.ops([fop('restore_members', { id: e.id })], 'Restore members'));
+  }).catch(err => { el.textContent = `Members: ${err.message ?? err}`; });
+}
 function renderEntity(ctx: ToolContext, e: Entity, el: HTMLElement): boolean {
   if (e.kind !== 'custom' || !e.type.startsWith('framing.')) return false; const type = e.type.slice(8); const d: any = e.data;
   const n = (k: string, v: number | null | undefined, label: string, step = 0.01) => `<label>${label}</label><input type="number" step="${step}" data-f="${k}" value="${v ?? ''}" placeholder="auto">`;
@@ -259,7 +342,12 @@ function renderEntity(ctx: ToolContext, e: Entity, el: HTMLElement): boolean {
   if (type === 'roof' && (d.shape ?? 'gable') === 'gable') {
     const ds = d.dormers ?? []; body += `</div><div class="muted" style="margin:10px 0 4px;font-size:11px">Dormers (${ds.length})</div>` + ds.map((o: any, i: number) => `<div class="kv" style="border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><label>Dormer ${i + 1}</label><button class="icon-btn" data-dm-del="${o.id}" style="justify-self:end" title="Remove">✕</button>${sel(`dormers.${o.id}.side`, o.side ?? 'l', [['l', 'front slope (l)'], ['r', 'back slope (r)']], 'Slope')}${sel(`dormers.${o.id}.kind`, o.kind ?? 'gable', [['gable', 'Gable dormer'], ['shed', 'Shed dormer']], 'Kind')}${n(`dormers.${o.id}.offset`, o.offset, 'Offset')}${n(`dormers.${o.id}.width`, o.width, 'Width')}${n(`dormers.${o.id}.wallHeight`, o.wallHeight ?? 1, 'Wall height')}${n(`dormers.${o.id}.pitch`, o.pitch ?? 8, 'Pitch /12', 0.5)}${n(`dormers.${o.id}.setback`, o.setback ?? 0, 'Setback')}</div>`).join('') + `<div class="btn-row"><button class="btn" data-dm-add>+ Dormer</button></div><div class="kv">`;
   }
-  body += `</div><div class="btn-row">${type === 'wall' ? '<button class="btn" data-draw>Wall drawing</button>' : ''}<button class="btn" data-cut>Cut list</button><button class="btn" data-erase>Erase</button></div>`;
+  if (type === 'roof' && ['gable', 'shed'].includes(d.shape ?? 'gable')) {
+    const os = d.openings ?? []; const gable = (d.shape ?? 'gable') === 'gable';
+    body += `</div><div class="muted" style="margin:10px 0 4px;font-size:11px">Roof openings (${os.length})</div>` + os.map((o: any, i: number) => `<div class="kv" style="border-top:1px solid var(--line);padding-top:6px;margin-top:4px"><label>Opening ${i + 1}</label><button class="icon-btn" data-ro-del="${o.id}" style="justify-self:end" title="Remove">✕</button>${gable ? sel(`openings.${o.id}.side`, o.side ?? 'l', [['l', 'front slope (l)'], ['r', 'back slope (r)']], 'Slope') : ''}${n(`openings.${o.id}.offset`, o.offset, 'Offset')}${n(`openings.${o.id}.width`, o.width, 'Width')}${n(`openings.${o.id}.start`, o.start, gable ? 'From eave' : 'From low wall')}${n(`openings.${o.id}.depth`, o.depth, 'Depth')}${n(`openings.${o.id}.curbHeight`, o.curbHeight ?? 0, 'Curb height')}</div>`).join('') + `<div class="btn-row"><button class="btn" data-ro-add>+ Opening</button></div><div class="kv">`;
+  }
+  const removed = Array.isArray(d.removed) ? d.removed.length : 0;
+  body += `</div>${removed ? `<div class="muted" style="font-size:11px;margin-top:6px">${removed} member${removed > 1 ? 's' : ''} removed <button class="btn" data-mrs>Restore</button></div>` : ''}<div class="muted" style="font-size:11px;margin-top:6px">Double-click it to select single studs and plates.</div><div class="btn-row">${type === 'wall' ? '<button class="btn" data-draw>Wall drawing</button>' : ''}<button class="btn" data-cut>Cut list</button><button class="btn" data-erase>Erase</button></div>`;
   el.innerHTML = body;
   el.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-f]').forEach(inp => inp.onchange = () => {
     const key = inp.dataset.f!; const raw: any = inp.type === 'checkbox' ? (inp as HTMLInputElement).checked : inp.type === 'number' ? (inp.value === '' ? null : parseFloat(inp.value)) : ['topPlates', 'plies', 'stringers'].includes(key) ? parseInt(inp.value) : key.endsWith('Spacing') || key === 'spacing' ? parseFloat(inp.value) : (inp.value || null);
@@ -271,7 +359,10 @@ function renderEntity(ctx: ToolContext, e: Entity, el: HTMLElement): boolean {
   el.querySelectorAll<HTMLElement>('[data-dm-del]').forEach(b => b.onclick = () => ctx.ops([fop('update', { id: e.id, patch: { dormers: (d.dormers ?? []).filter((o: any) => o.id !== b.dataset.dmDel) } })], 'Remove dormer'));
   el.querySelector<HTMLElement>('[data-dm-add]')?.addEventListener('click', () => { const run = d.ridgeAlongX ? Math.abs(d.max[0] - d.min[0]) : Math.abs(d.max[1] - d.min[1]); const w = Math.min(1.6, run / 3); ctx.ops([fop('update', { id: e.id, patch: { dormers: [...(d.dormers ?? []), { id: crypto.randomUUID(), side: 'l', kind: 'gable', offset: +((run - w) / 2).toFixed(2), width: +w.toFixed(2), wallHeight: 1.0, pitch: 8 }] } })], 'Add dormer'); });
   el.querySelectorAll<HTMLElement>('[data-op-del]').forEach(b => b.onclick = () => ctx.ops([fop('remove_opening', { wall: e.id, opening: b.dataset.opDel })], 'Remove opening'));
+  el.querySelectorAll<HTMLElement>('[data-ro-del]').forEach(b => b.onclick = () => ctx.ops([fop('remove_roof_opening', { roof: e.id, opening: b.dataset.roDel })], 'Remove roof opening'));
+  el.querySelector<HTMLElement>('[data-ro-add]')?.addEventListener('click', () => { const run = d.ridgeAlongX !== false ? Math.abs(d.max[0] - d.min[0]) : Math.abs(d.max[1] - d.min[1]); const span = d.ridgeAlongX !== false ? Math.abs(d.max[1] - d.min[1]) : Math.abs(d.max[0] - d.min[0]); const across = (d.shape ?? 'gable') === 'gable' ? span / 2 : span; const w = Math.min(1.0, run / 2), dp = Math.min(1.0, across / 2); ctx.ops([fop('add_roof_opening', { roof: e.id, side: 'l', offset: +((run - w) / 2).toFixed(2), width: +w.toFixed(2), start: +((across - dp) / 2).toFixed(2), depth: +dp.toFixed(2), curbHeight: state.roofCurb })], 'Add roof opening'); });
   el.querySelector<HTMLElement>('[data-draw]')?.addEventListener('click', async () => { const r = await ctx.ops([fop('wall_svg', { wall: e.id })], 'Wall drawing'); const svg = (r[0]?.entities?.[0]?.data as any)?.svg; if (svg) showSvg('Wall framing elevation', svg, `wall-${e.id.slice(0, 8)}.svg`); });
+  el.querySelector<HTMLElement>('[data-mrs]')?.addEventListener('click', () => ctx.ops([fop('restore_members', { id: e.id })], 'Restore members'));
   el.querySelector<HTMLElement>('[data-cut]')!.onclick = () => { ctx.select([e.id]); showCutList(ctx); };
   el.querySelector<HTMLElement>('[data-erase]')!.onclick = () => ctx.ops([{ op: 'erase', ids: [e.id] }], 'Erase').then(() => ctx.select([]));
   return true;
@@ -279,8 +370,14 @@ function renderEntity(ctx: ToolContext, e: Entity, el: HTMLElement): boolean {
 
 P.registerPlugin({
   id: 'framing', name: 'Framing', version: '0.1.0', accent: ACCENT,
-  tools: [wallTool, openingTool, floorTool, roofTool, foundationTool, beamTool, stairTool, frameRoomTool], toolbar: [['f-wall', 'f-opening', 'f-floor', 'f-roof', 'f-foundation', 'f-beam', 'f-stair', 'f-frameroom']],
+  tools: [wallTool, openingTool, floorTool, roofTool, roofOpeningTool, foundationTool, beamTool, stairTool, frameRoomTool], toolbar: [['f-wall', 'f-opening', 'f-floor', 'f-roof', 'f-roofopening', 'f-foundation', 'f-beam', 'f-stair', 'f-frameroom']],
   panels: [{ id: 'main', title: 'Framing', render: panel }],
   renderEntity,
+  parts: {
+    types: ['framing.wall', 'framing.floor', 'framing.roof', 'framing.foundation', 'framing.beam', 'framing.stair'],
+    label: e => (({ wall: 'framed wall', floor: 'floor framing', roof: 'roof framing', foundation: 'foundation', beam: 'beam', stair: 'stair' } as any)[e.type.slice(8)] ?? e.type),
+    erase: (_ctx, e, keys) => [fop('remove_members', { id: e.id, keys })],
+    render: renderMembers,
+  },
   activate(h) { host = h; h.on('changed', () => { if (state.pendingCheck) { state.findingsVersion = h.document().version; return; } if (state.findings && state.findingsVersion !== h.document().version) { state.findings = null; } }); },
 });

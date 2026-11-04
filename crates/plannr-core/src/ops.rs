@@ -504,7 +504,11 @@ fn push_pull(doc: &mut Document, face_id: &str, distance: f64) -> OpResult2<OpRe
     if distance.abs() < 1e-9 { return err("distance must be non-zero"); }
     let (list, _) = doc.container_mut(face_id).ok_or_else(|| OpError(format!("no entity {face_id}")))?;
     let idx = list.iter().position(|e| e.id() == face_id).unwrap();
-    let Entity::Face(orig) = list[idx].clone() else { return err(format!("{face_id} is not a face")) };
+    let orig = match list[idx].clone() {
+        Entity::Face(f) => f,
+        Entity::Custom(c) => return err(format!("push/pull works on drawn faces; {face_id} is a {} (change its size in its settings)", c.type_)),
+        _ => return err(format!("{face_id} is not a face")),
+    };
     let n = normal(&orig.outer);
     let d = scale(n, distance);
     let shift = |l: &[P3]| l.iter().map(|p| add(*p, d)).collect::<Vec<_>>();

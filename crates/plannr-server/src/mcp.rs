@@ -53,6 +53,7 @@ fn tools(state: &Shared) -> Vec<ToolDef> {
         tool("history", "Undo history (version and label per step).", json!({}), &[], Kind::Builtin("history")),
         tool("apply_ops", &format!("Apply several ops as one undo step. Each op is an object with an `op` field naming one of the op tools (draw_line, push_pull, move, …) plus that tool's fields.{COORDS}"), json!({ "ops": { "type": "array", "items": { "type": "object" }, "description": "Op objects" }, "label": s("Undo label") }), &["ops"], Kind::Builtin("apply_ops")),
         tool("export_glb", "Export the model as a glTF binary file on the server; returns the path and download URL.", json!({ "path": s("File path to write (default data/exports/<project>.glb)") }), &[], Kind::Builtin("export_glb")),
+        tool("export_file", &format!("Export the model, or only some entities, as a file written by a plugin (3D printing: stl, 3mf). Writes data/exports/<project>.<format> (or `path`) and returns the path, download URL and the plugin's report (size, checks, warnings). Formats: {}.", state.registry.exports().iter().map(|(_, f)| format!("{} ({})", f.format, f.description)).collect::<Vec<_>>().join("; ")), json!({ "format": s("File format, e.g. stl or 3mf"), "ids": ids("Only these entities (default: everything visible)"), "options": { "type": "object", "description": "Format options (see list_plugins → exports.optionsSchema), e.g. { \"scale\": 0.01 }" }, "path": s("File path to write") }), &["format"], Kind::Builtin("export_file")),
         tool("list_plugins", "Registered Rust plugins with their entity types and ops.", json!({}), &[], Kind::Builtin("list_plugins")),
         tool("list_components", "Component definitions of the project with their entity and instance counts.", json!({}), &[], Kind::Builtin("list_components")),
         // ---- ops ------------------------------------------------------------------------
@@ -207,7 +208,7 @@ async fn call(s: &Shared, name: &str, args: Value) -> Result<Vec<Value>, String>
             *s.active_project.lock().unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
             Ok(text(json!(s.db.summary(&id).map_err(api)?)))
         }
-        Kind::Builtin("list_plugins") => Ok(text(json!(s.registry.list()))),
+        Kind::Builtin("list_plugins") => Ok(text(json!(s.registry.list().into_iter().map(|p| { let ex: Vec<_> = s.registry.exports().into_iter().filter(|(id, _)| *id == p.id).map(|(_, f)| f).collect(); let mut v = json!(p); if !ex.is_empty() { v["exports"] = json!(ex); } v }).collect::<Vec<_>>()))),
         Kind::Builtin(b) => {
             let id = s.resolve(project_ref.as_deref()).map_err(api)?;
             builtin(s, b, &id, &args).await
@@ -283,6 +284,17 @@ async fn builtin(s: &Shared, name: &str, id: &str, args: &Map<String, Value>) ->
             std::fs::write(&path, &bytes).map_err(|e| format!("cannot write {path}: {e}"))?;
             let abs = std::fs::canonicalize(&path).map(|p| p.display().to_string()).unwrap_or(path.clone());
             Ok(text(json!({ "path": abs, "bytes": bytes.len(), "url": format!("http://localhost:{}/api/projects/{}/export.glb", s.port, id) })))
+        }
+        "export_file" => {
+            let format = args.get("format").and_then(|v| v.as_str()).ok_or("format is required")?.trim_start_matches('.').to_lowercase();
+            let mut options = args.get("options").cloned().filter(|o| o.is_object()).unwrap_or(json!({}));
+            if let Some(ids) = args.get("ids") { options["ids"] = ids.clone(); }
+            let (file, fmt, name) = crate::routes::run_export(s, id, &format, options).map_err(api)?;
+            let path = args.get("path").and_then(|v| v.as_str()).map(|p| p.to_string()).unwrap_or_else(|| format!("data/exports/{name}"));
+            if let Some(dir) = std::path::Path::new(&path).parent() { std::fs::create_dir_all(dir).map_err(|e| e.to_string())?; }
+            std::fs::write(&path, &file.bytes).map_err(|e| format!("cannot write {path}: {e}"))?;
+            let abs = std::fs::canonicalize(&path).map(|p| p.display().to_string()).unwrap_or(path.clone());
+            Ok(text(json!({ "path": abs, "bytes": file.bytes.len(), "format": fmt.format, "url": format!("http://localhost:{}/api/projects/{}/export/{}", s.port, id, fmt.format), "report": file.report })))
         }
         _ => Err(format!("unknown builtin {name}")),
     }

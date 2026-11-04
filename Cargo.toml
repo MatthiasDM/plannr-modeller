@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/plannr-core", "crates/plannr-server", "plugins/construction/engine", "plugins/electrical/engine",
-    "plugins/framing/engine"]
+    "plugins/framing/engine", "plugins/plumbing/engine"]
 
 [workspace.package]
 version = "0.2.0"

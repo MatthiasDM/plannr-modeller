@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Viewport } from '../scene';
+import type { Viewport, Pick } from '../scene';
 import type { Document, Op, OpResult } from '../model';
 
 export type SnapKind = 'vertex' | 'midpoint' | 'center' | 'intersection' | 'edge' | 'face' | 'guide' | 'origin' | 'axis' | 'from' | 'parallel' | 'perpendicular' | 'square' | 'grid' | 'plane' | 'free';
@@ -28,6 +28,14 @@ export interface SnapOptions {
   faces?: boolean;
   /** Leave out entities by compiled id, e.g. geometry that only exists in the current preview. */
   ignoreIf?: (id: string) => boolean;
+  /** Scale the snap distances (1 = the usual ~10 px to a point; 0.5 for a tool that should only catch a point right under the cursor). */
+  reach?: number;
+}
+/** Parts of a generated object (a framed wall's members) are selected: they can't be moved, turned or scaled
+ *  on their own, only the whole object. Shows why and returns true. */
+export function partsRefused(ctx: ToolContext): boolean {
+  if (![...ctx.selection()].some(id => id.includes('#'))) return false;
+  ctx.toast('Members of a generated object move with it. Press Esc twice to close it, then move the whole object.'); return true;
 }
 /** A snap on a definite point (not a free point on a line, face or plane). */
 export const isPointSnap = (s: Snap) => ['vertex', 'midpoint', 'center', 'intersection', 'edge', 'guide', 'origin'].includes(s.kind);
@@ -55,6 +63,15 @@ export interface ToolContext {
   /** Normal of the face under the cursor (its visible side), or null over empty space. With `at`, a face
    *  that contains that point wins, also one just beside the cursor (a corner or an edge snapped from outside). */
   faceNormal(ev: { clientX: number; clientY: number }, at?: THREE.Vector3): THREE.Vector3 | null;
+  /** The selected entities a tool works on: the whole selection, or those `accept` takes (a plugin's own type). */
+  targets(accept?: (id: string) => boolean): string[];
+  /** What is under the cursor for a tool that works on an object. With targets selected (see `targets`) only
+   *  they can be hovered or picked, everything else is see-through; with none, anything under the cursor.
+   *  `anywhere`: ignore the selection. Geometry that only exists in the current preview is never picked. */
+  pickTarget(ev: { clientX: number; clientY: number }, opts?: { facesOnly?: boolean; accept?: (id: string) => boolean; anywhere?: boolean }): Pick | null;
+  /** False for geometry that exists only in the current preview (a tool's own previewed result). pickTarget
+   *  never returns such geometry; pass `!inDocument(id)` as a snap's `ignoreIf` to keep it out of inference. */
+  inDocument(id: string): boolean;
 }
 
 export interface Tool {
@@ -73,6 +90,9 @@ export interface Tool {
   planeLock?: boolean;
   /** Called when the axis lock changes (arrow keys). */
   onLock?(ctx: ToolContext): void;
+  /** Shift pressed: a tool that holds its own line (Push/Pull along the face normal) returns the badge text and
+   *  keeps to that line while Shift is down (`ev.shiftKey`); null leaves Shift to the snapping (hold the inference). */
+  onShiftHold?(ctx: ToolContext): string | null;
   /** True while the tool is in the middle of an operation (first point placed, dragging…). Modifier-hold shortcuts stay out of the way then. */
   busy?(): boolean;
 }

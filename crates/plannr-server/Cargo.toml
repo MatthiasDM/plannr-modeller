@@ -14,6 +14,7 @@ plannr-core = { path = "../plannr-core" }
 plannr-plugin-construction = { path = "../../plugins/construction/engine" }
 plannr-plugin-electrical = { path = "../../plugins/electrical/engine" }
 plannr-plugin-framing = { path = "../../plugins/framing/engine" }
+plannr-plugin-plumbing = { path = "../../plugins/plumbing/engine" }
 axum = { version = "0.8", features = ["json", "query", "macros", "ws"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "trace", "compression-gzip"] }
@@ -27,3 +28,7 @@ uuid.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
+# installed plugins: WebAssembly engines in a sandbox, packages are zip files
+wasmtime = { version = "48", default-features = false, features = ["anyhow", "cranelift", "runtime", "std", "parallel-compilation"] }
+wasmtime-wasi = { version = "48", default-features = false, features = ["p1"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }

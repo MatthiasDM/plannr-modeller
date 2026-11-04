@@ -92,6 +92,8 @@ pub struct CompileOptions {
     pub ignore_sections: bool,
     /// Draw hidden entities as ghosts (View → Hidden Geometry) instead of leaving them out.
     pub show_hidden: bool,
+    /// Compile only these top-level entities (a preview of what an op changed); the plugin metrics are left out.
+    pub only: Option<std::collections::HashSet<String>>,
 }
 
 const BACK_ID: &str = "back";
@@ -217,9 +219,20 @@ impl<'a> Builder<'a> {
         let back: Vec<[P3; 3]> = tris.iter().map(|t| [t[0], t[2], t[1]]).collect();
         let bi = self.group_index(f.back_material.as_deref(), true);
         self.push_triangles(bi, &f.id, &back, scale(n, -1.0));
-        // outline segments carry the face id
-        for lp in std::iter::once(&outer).chain(holes.iter()) {
-            for i in 0..lp.len() { self.push_segment(&f.id, lp[i], lp[(i + 1) % lp.len()]); }
+        // outline segments carry the face id; `soft` (outer-loop edge indices, edge i runs from corner i to i+1)
+        // leaves edges out of the drawing, as SketchUp's softened edges: a swept surface shows no seams
+        let soft: Vec<usize> = f.extra.get("soft").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|x| x as usize)).collect()).unwrap_or_default();
+        let flipped = mat_det3(m) < 0.0;
+        for (li, lp) in std::iter::once(&outer).chain(holes.iter()).enumerate() {
+            let n = lp.len();
+            for i in 0..n {
+                if li == 0 && !soft.is_empty() {
+                    // the loop was reversed for a mirroring transform: edge i is now edge n-2-i
+                    let orig = if flipped { (2 * n - 2 - i) % n } else { i };
+                    if soft.contains(&orig) { continue; }
+                }
+                self.push_segment(&f.id, lp[i], lp[(i + 1) % n]);
+            }
         }
     }
 
@@ -284,7 +297,7 @@ impl<'a> Builder<'a> {
 
 pub fn compile(doc: &Document, reg: &Registry, opts: &CompileOptions) -> CompiledScene {
     let original = doc;
-    let expanded = reg.expand_all(doc);
+    let expanded = match &opts.only { Some(keep) => reg.expand_some(doc, keep), None => reg.expand_all(doc) };
     let doc = &expanded;
     let hidden: Vec<String> = doc.layers.iter().filter(|l| !l.visible).map(|l| l.id.clone()).collect();
     // the active section planes (world coordinates); several combine, keeping what every one keeps
@@ -310,6 +323,6 @@ pub fn compile(doc: &Document, reg: &Registry, opts: &CompileOptions) -> Compile
     out.metrics.area = (out.metrics.area * 1e4).round() / 1e4;
     out.metrics.edge_length = (out.metrics.edge_length * 1e4).round() / 1e4;
     for v in out.metrics.area_by_material.values_mut() { *v = (*v * 1e4).round() / 1e4; }
-    out.metrics.plugins = reg.metrics(original);
+    if opts.only.is_none() { out.metrics.plugins = reg.metrics(original); }
     out
 }

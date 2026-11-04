@@ -3,7 +3,7 @@ import { MOD_LABEL, THEMES, type App, type ModKey, type Theme } from '../main';
 function loadCollapsed(): Set<string> { try { const v = JSON.parse(localStorage.getItem('plannr.trayCollapsed') ?? 'null'); if (v?.collapsed) return new Set([...v.collapsed, ...(v.known ?? []).filter((k: string) => !v.collapsed.includes(k)).map((k: string) => `!${k}`)]); } catch { /* ignore */ } return new Set(); }
 import { icon } from './icons';
 import { findEntity, materialOf, layerOf, walk, fmt, fmtM, fmtM2, KIND_LABEL, polygonNormal, type Entity, type FaceEntity, type Vec3 } from '../model';
-import { getPlugins } from '../plugins';
+import { getPlugins, partsFor } from '../plugins';
 
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const num = (k: string, v: number, label: string, step = 0.01) => `<label>${label}</label><input type="number" step="${step}" data-field="${k}" value="${+v.toFixed(4)}">`;
@@ -39,14 +39,41 @@ export class Tray {
     html += panel('plugins', 'Plugins', this.plugins(), `${getPlugins().length + a.serverPlugins.length}`);
     this.el.innerHTML = html;
     for (const p of getPlugins()) for (const pp of p.panels ?? []) { const host = this.el.querySelector<HTMLElement>(`[data-plugin-panel="${p.id}:${pp.id}"]`); if (host) try { pp.render(a.ctx, host); } catch (e) { host.textContent = `Panel error: ${(e as Error).message}`; } }
+    const pp = this.el.querySelector<HTMLElement>('[data-plugin-parts]');
+    if (pp) { const e = findEntity(a.doc, pp.dataset.pluginParts!); const parts = partsFor(e); if (parts?.render && e?.kind === 'custom') try { parts.render(a.ctx, e, [...a.selection].map(id => id.slice(id.indexOf('#') + 1)), pp); } catch (err) { pp.textContent = `Error: ${(err as Error).message}`; } }
     const pe = this.el.querySelector<HTMLElement>('[data-plugin-entity]');
     if (pe) { const p = getPlugins().find(p => p.id === pe.dataset.pluginEntity); const ent = findEntity(a.doc, [...a.selection][0]); if (p?.renderEntity && ent) try { if (!p.renderEntity(a.ctx, ent, pe)) pe.innerHTML = `<div class="muted">${ent.kind === 'custom' ? ent.type : ''}</div>`; } catch (err) { pe.textContent = `Error: ${(err as Error).message}`; } }
     this.bind();
   }
 
+  /** The floating panel of an embedded viewer that was given plugins (`?plugins=plumbing`): Entity Info for
+   *  a selected entity of one of them, and their panels. Everything else of the tray stays hidden. */
+  renderFloating(el: HTMLElement, pluginIds: Set<string>) {
+    const a = this.app; const ids = [...a.selection];
+    const sel = ids.length === 1 ? findEntity(a.doc, ids[0]) : undefined;
+    const selPlugin = sel?.kind === 'custom' ? getPlugins().find(p => p.id === sel.type.split('.')[0] && pluginIds.has(p.id) && p.renderEntity) : undefined;
+    const section = (id: string, title: string, body: string, accent?: string) => `<section class="panel ${accent ? 'plugin' : ''} ${this.collapsed.has(id) ? 'collapsed' : ''}" data-panel="${id}" ${accent ? `style="--plugin-accent:${accent}"` : ''}><header>${icon('chevron')}<span>${esc(title)}</span></header><div class="body">${body}</div></section>`;
+    let html = selPlugin ? section('embed:entity', 'Entity Info', `<div data-plugin-entity="${selPlugin.id}"></div>`) : '';
+    for (const p of getPlugins()) if (pluginIds.has(p.id)) for (const pp of p.panels ?? []) html += section(`embed:${p.id}:${pp.id}`, pp.title, `<div data-plugin-panel="${p.id}:${pp.id}"></div>`, p.accent ?? '#8e44ad');
+    el.innerHTML = html;
+    for (const p of getPlugins()) for (const pp of p.panels ?? []) { const host = el.querySelector<HTMLElement>(`[data-plugin-panel="${p.id}:${pp.id}"]`); if (host) try { pp.render(a.ctx, host); } catch (e) { host.textContent = `Panel error: ${(e as Error).message}`; } }
+    const pe = el.querySelector<HTMLElement>('[data-plugin-entity]');
+    if (pe && selPlugin && sel) try { if (!selPlugin.renderEntity!(a.ctx, sel, pe)) pe.innerHTML = `<div class="muted">${esc(sel.kind === 'custom' ? sel.type : sel.kind)}</div>`; } catch (err) { pe.textContent = `Error: ${(err as Error).message}`; }
+    el.querySelectorAll<HTMLElement>('.panel > header').forEach(hd => hd.onclick = () => { const id = hd.parentElement!.dataset.panel!; if (this.collapsed.has(id)) this.collapsed.delete(id); else this.collapsed.add(id); this.persist(); this.renderFloating(el, pluginIds); });
+  }
+
   private entityInfo(): string {
     const a = this.app; const ids = [...a.selection];
     if (!ids.length) return `<div class="empty">Nothing selected. Click something with the Select tool.</div>`;
+    if (ids.some(id => id.includes('#'))) { // parts of a parts-built entity (a framed wall's members)
+      const bases = new Set(ids.map(id => id.split('#')[0])); const e = bases.size === 1 ? findEntity(a.doc, [...bases][0]) : undefined;
+      const parts = partsFor(e);
+      if (parts?.render && ids.every(id => id.includes('#'))) return `<div data-plugin-parts="${esc(e!.id)}"></div>`;
+      const keys = ids.map(id => id.slice(id.indexOf('#') + 1)); const what = e?.kind === 'custom' ? parts?.label?.(e) ?? e.type : 'object';
+      return `<div class="kv"><label>Type</label><div><b>${keys.length === 1 ? 'Face' : `${keys.length} faces`}</b> <span class="muted">${esc(keys.slice(0, 3).join(', '))}${keys.length > 3 ? '…' : ''}</span></div><label>Part of</label><div>${esc(what)}</div></div>`
+        + `<div class="muted" style="font-size:11px;margin-top:6px">The Paint Bucket paints this face only. Its size follows the ${esc(what)}'s settings: Esc twice and edit it in Entity Info.</div>`
+        + (parts?.erase ? `<div class="btn-row"><button class="btn" data-act="delete">${icon('trash')} Remove</button></div>` : '');
+    }
     if (ids.length > 1) {
       const kinds = ids.map(id => findEntity(a.doc, id)?.kind ?? '?');
       return `<div>${ids.length} entities selected <span class="muted">(${[...new Set(kinds)].join(', ')})</span></div>

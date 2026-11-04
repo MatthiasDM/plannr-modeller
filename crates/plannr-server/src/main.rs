@@ -1,9 +1,11 @@
 mod db;
 mod error;
 mod mcp;
+mod packages;
 mod plugins;
 mod routes;
 mod state;
+mod wasm;
 mod ws;
 
 use std::collections::HashMap;
@@ -34,11 +36,20 @@ async fn main() -> anyhow::Result<()> {
 
     let public = matches!(std::env::var("PLANNR_PUBLIC").as_deref(), Ok("1") | Ok("true"));
     let db = db::Db::open(&db_path)?;
+    let registry = plugins::registry();
+    let mut builtin: std::collections::HashSet<String> = registry.statuses().into_iter().map(|p| p.info.id).collect();
+    if let Ok(dir) = std::fs::read_dir(web_dir.join("plugins")) {
+        builtin.extend(dir.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_string_lossy().strip_suffix(".js").map(|s| s.to_string())));
+    }
+    let plugins_dir = PathBuf::from(std::env::var("PLANNR_PLUGINS").unwrap_or_else(|_| "data/plugins".into()));
+    let packages = packages::Packages::open(plugins_dir, &registry);
     let state: state::Shared = Arc::new(state::AppState {
         db,
         web_dir: web_dir.clone(),
         projects: Mutex::new(HashMap::new()),
-        registry: plugins::registry(),
+        registry,
+        packages,
+        builtin,
         hub: Arc::new(ws::Hub::default()),
         active_project: Mutex::new(None),
         token: token.clone(),
@@ -63,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
         app = app.route("/mcp", axum::routing::post(mcp::handle).get(mcp::method_not_allowed));
     }
     let app = app
+        .route("/plugins/{file}", axum::routing::get(routes::plugin_script))
+        .route("/app/plugins/{file}", axum::routing::get(routes::plugin_script))
         .fallback_service(static_files)
         // HTML must not be heuristically cached: a rebuilt bundle has a new hash and the old page would miss it
         .layer(axum::middleware::from_fn(no_cache))
@@ -76,12 +89,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Plannr listening on http://localhost:{port}  (db: {}, web: {})", db_path.display(), web_dir.display());
     if public { tracing::info!("public instance: front page at /, modeller at /app, projects per browser, no MCP"); }
     tracing::info!("MCP token: {token}");
-    for p in state.registry.list() { tracing::info!("plugin {} ({}) — {} ops", p.id, p.name, p.ops.len()); }
+    for p in state.registry.statuses() { tracing::info!("plugin {} ({}) — {} ops{}", p.info.id, p.info.name, p.info.ops.len(), if p.enabled { "" } else { " — disabled" }); }
     tracing::info!("claude mcp add --transport http plannr http://localhost:{port}/mcp --header \"Authorization: Bearer {token}\"");
     if !web_dir.join("index.html").exists() {
         tracing::warn!("{} has no index.html — build the frontend (cd web && npm run build) or set PLANNR_WEB", web_dir.display());
     }
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
 }
 

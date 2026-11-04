@@ -19,5 +19,6 @@ pub fn registry() -> Registry {
     reg.register(Box::new(plannr_plugin_construction::ConstructionPlugin));
     reg.register(Box::new(plannr_plugin_electrical::ElectricalPlugin));
     reg.register(Box::new(plannr_plugin_framing::FramingPlugin));
+    reg.register(Box::new(plannr_plugin_plumbing::PlumbingPlugin));
     reg
 }

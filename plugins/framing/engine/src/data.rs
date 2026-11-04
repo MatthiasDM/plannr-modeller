@@ -230,6 +230,8 @@ pub struct Roof {
     #[serde(default)] pub cladding: Cladding,
     #[serde(default)] pub gutters: bool,
     #[serde(default)] pub dormers: Vec<Dormer>,
+    /// Framed openings in the slopes (skylights, hatches, chimneys).
+    #[serde(default)] pub openings: Vec<RoofOpening>,
     #[serde(flatten, default)] pub extra: Map<String, Value>,
 }
 fn d_gable() -> String { "gable".into() } fn d_max() -> String { "max".into() } fn d_lower_pitch() -> f64 { 18.0 } fn d_break() -> f64 { 0.25 } fn d_attic_h() -> f64 { 2.3 }
@@ -275,6 +277,28 @@ pub struct Dormer {
     #[serde(default)] pub setback: f64,
     #[serde(flatten, default)] pub extra: Map<String, Value>,
 }
+/// A framed opening in a roof slope (skylight, hatch, chimney): the rafters crossing it are cut and
+/// headed off with doubled headers between doubled trimmer rafters; with trusses the opening must
+/// fit between two trusses, which then carry the headers. Distances across the span are plan (horizontal).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RoofOpening {
+    #[serde(default = "new_id")] pub id: String,
+    /// Gable roofs: `l` / `r` slope (`front` = `l`, `back` = `r`); ignored on shed roofs.
+    #[serde(default = "d_side_l")] pub side: String,
+    /// Along the ridge from the roof's min end to the opening's edge (m).
+    pub offset: f64,
+    /// Clear width along the ridge (m).
+    pub width: f64,
+    /// Plan distance from the eave wall line (shed: the low wall) to the opening's lower edge (m).
+    pub start: f64,
+    /// Clear plan depth across the span (m).
+    pub depth: f64,
+    /// Height of a curb (upstand of 38 mm boards) around the opening on the sheathing (m); 0 = none.
+    #[serde(default)] pub curb_height: f64,
+    #[serde(flatten, default)] pub extra: Map<String, Value>,
+}
+
 fn d_side_l() -> String { "l".into() } fn d_dormer_wall() -> f64 { 1.0 } fn d_dormer_pitch() -> f64 { 8.0 }
 fn d_fink() -> String { "fink".into() } fn d_pitch() -> f64 { 6.0 } fn d_overhang() -> f64 { 0.45 } fn d_heel() -> f64 { 0.0 }
 fn d_pony() -> String { "ponyWall".into() } fn d_600() -> f64 { 0.6 } fn d_2x8() -> String { "2x8".into() }

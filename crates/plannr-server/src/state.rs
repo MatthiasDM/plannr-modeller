@@ -22,6 +22,10 @@ pub struct AppState {
     pub web_dir: std::path::PathBuf,
     pub projects: Mutex<HashMap<String, ProjectState>>,
     pub registry: Registry,
+    /// Installed packages and which plugins are switched off.
+    pub packages: crate::packages::Packages,
+    /// Ids of the plugins that ship with the server (engine or browser bundle): packages can't replace them.
+    pub builtin: std::collections::HashSet<String>,
     pub hub: Arc<Hub>,
     pub active_project: Mutex<Option<String>>,
     pub token: String,
@@ -79,6 +83,8 @@ impl AppState {
     }
 
     fn commit(&self, id: &str, p: &mut ProjectState, before: Document, label: &str, source: &str) -> ApiResult<u64> {
+        // read-only ops (checks, takeoffs, catalogues) leave no undo step behind
+        if before == p.doc { return Ok(p.doc.version); }
         p.history.push(before, label);
         p.doc.version += 1;
         self.db.save(id, &p.doc)?;
@@ -102,6 +108,28 @@ impl AppState {
             let mut doc = p.doc.clone();
             apply_many(&mut doc, ops, reg)?;
             Ok(compile(&doc, reg, opts))
+        })
+    }
+
+    /// A preview of only what the ops change: the top-level entities they create, modify or remove (`dirty`),
+    /// compiled as the ops leave them. The client keeps the rest of its scene and swaps just those. Falls back to
+    /// the whole scene (`None` for dirty) when the results don't say what changed.
+    pub fn preview_partial(&self, id: &str, ops: &[Op], opts: &CompileOptions) -> ApiResult<(CompiledScene, Option<Vec<String>>)> {
+        let reg = &self.registry;
+        self.with(id, |p| {
+            let mut doc = p.doc.clone();
+            let results = apply_many(&mut doc, ops, reg)?;
+            let (before, after) = (top_levels(&p.doc), top_levels(&doc));
+            let mut dirty: Vec<String> = vec![]; let mut known = true;
+            for r in &results {
+                for id in r.created.iter().chain(&r.modified).chain(&r.removed) {
+                    let bare = id.split('#').next().unwrap_or(id);
+                    match after.get(bare).or_else(|| before.get(bare)) { Some(t) => if !dirty.contains(t) { dirty.push(t.clone()) }, None => known = false }
+                }
+            }
+            if !known || dirty.is_empty() { return Ok((compile(&doc, reg, opts), None)); }
+            let only: std::collections::HashSet<String> = dirty.iter().filter(|t| after.contains_key(*t)).cloned().collect();
+            Ok((compile(&doc, reg, &CompileOptions { only: Some(only), ..opts.clone() }), Some(dirty)))
         })
     }
 
@@ -162,4 +190,15 @@ impl AppState {
         }
         self.db.summary(id)
     }
+}
+
+/// Every entity id (nested in groups too) → the id of its top-level entity.
+fn top_levels(doc: &plannr_core::model::Document) -> std::collections::HashMap<String, String> {
+    fn walk(e: &plannr_core::model::Entity, top: &str, m: &mut std::collections::HashMap<String, String>) {
+        m.insert(e.id().to_string(), top.to_string());
+        if let plannr_core::model::Entity::Group(g) = e { for c in &g.entities { walk(c, top, m); } }
+    }
+    let mut m = std::collections::HashMap::new();
+    for e in &doc.entities { walk(e, e.id(), &mut m); }
+    m
 }

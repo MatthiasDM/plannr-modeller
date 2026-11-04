@@ -3,6 +3,7 @@
 pub mod compile;
 pub mod geom;
 pub mod gltf;
+pub mod guest;
 pub mod history;
 pub mod model;
 pub mod ops;
@@ -17,7 +18,7 @@ pub use gltf::export_glb;
 pub use history::History;
 pub use model::{Document, Entity};
 pub use ops::{apply, apply_many, Op, OpResult};
-pub use plugin::{split_key, Plugin, PluginInfo, PluginOp, Registry, Side};
+pub use plugin::{split_key, ExportFile, ExportFormat, Plugin, PluginInfo, PluginOp, PluginStatus, Registry, Side, Source};
 pub use sample::sample_document;
 
 #[cfg(test)]

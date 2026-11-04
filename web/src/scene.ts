@@ -128,7 +128,7 @@ export class Viewport {
     const gm = this.grid.material as THREE.Material; gm.transparent = true; gm.opacity = 0.7; gm.depthWrite = false; this.scene.add(this.grid);
     this.axes = this.makeAxes(); this.scene.add(this.axes);
     this.figure = this.makeFigure(); this.scene.add(this.figure);
-    this.scene.add(this.modelGroup, this.overlay, this.snapGroup, this.selectionGroup, this.hoverGroup);
+    this.scene.add(this.modelGroup, this.previewGroup, this.overlay, this.snapGroup, this.selectionGroup, this.hoverGroup);
     this.resize(); new ResizeObserver(() => this.resize()).observe(container);
     this.applyTheme(); matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => this.applyTheme());
   }
@@ -210,18 +210,81 @@ export class Viewport {
     mesh.receiveShadow = style !== 'hiddenline' && !ghost;
   }
 
+  // ---- partial previews: only what an op changes is redrawn; the rest of the model stays as it is ----
+  previewGroup = new THREE.Group();
+  /** Base meshes / edges hidden while a preview shows (a copy without the changed objects stands in). */
+  private swapped = new Set<THREE.Object3D>(); private previewKey = ''; private previewHit: ((id: string) => boolean) | null = null;
+  private previewOwn: THREE.Object3D[] = []; private lastSelection = new Set<string>();
+  /** Show `c` (the changed objects as the ops leave them) in place of the current geometry of `dirty`
+   *  (top-level ids). Nothing else is rebuilt, so this keeps up with the mouse on a big model. `null` clears it. */
+  setPreview(c: CompiledScene | null, dirty: string[] = []) {
+    const key = c ? [...dirty].sort().join(',') : '';
+    if (key !== this.previewKey) this.dropPreview();
+    else this.dropPreviewOwn();
+    if (!c) return;
+    if (!this.previewKey) {
+      this.previewKey = key;
+      const ids = this.expandIds(new Set(dirty)); const bases = new Set([...ids].filter(i => !i.includes('#')));
+      const gone = (fid: string) => ids.has(fid) || bases.has(fid.split('#')[0]); this.previewHit = gone;
+      for (const mesh of this.meshes) {
+        if (!mesh.visible) continue; const d = this.groupData.get(mesh)!; if (!d.ids.some(gone)) continue;
+        const src = mesh.geometry.getIndex()!.array; const sub: number[] = [];
+        d.ranges.forEach(([s, n], i) => { if (!gone(d.ids[i])) for (let k = s; k < s + n; k++) sub.push(src[k]); });
+        mesh.visible = false; this.swapped.add(mesh);
+        if (!sub.length) continue;
+        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', mesh.geometry.getAttribute('position')); const nrm = mesh.geometry.getAttribute('normal'); if (nrm) geo.setAttribute('normal', nrm); geo.setIndex(sub);
+        const m = new THREE.Mesh(geo, mesh.material); m.castShadow = mesh.castShadow; m.receiveShadow = mesh.receiveShadow; m.renderOrder = mesh.renderOrder; this.previewGroup.add(m);
+      }
+      if (this.edgeLines && this.edgeLines.visible && this.edgeIds.some(gone)) {
+        const P = this.edgeLines.geometry.getAttribute('position').array; const keep: number[] = [];
+        this.edgeIds.forEach((id, i) => { if (!gone(id)) for (let k = i * 6; k < i * 6 + 6; k++) keep.push(P[k]); });
+        this.edgeLines.visible = false; this.swapped.add(this.edgeLines); if (this.backLines?.visible) { this.backLines.visible = false; this.swapped.add(this.backLines); }
+        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(keep, 3));
+        const l = new THREE.LineSegments(geo, this.edgeLines.material); l.renderOrder = 1; this.previewGroup.add(l);
+      }
+      this.highlight(this.lastSelection);
+    }
+    // the changed objects as the ops leave them
+    for (const g of c.groups) {
+      if (!g.indices.length) continue;
+      const mesh = this.makeMesh(g); this.groupData.set(mesh, { ids: g.ids, ranges: g.idRanges, material: g.material, back: g.back });
+      this.applyFaceStyle(mesh); this.applyXray(mesh); this.previewGroup.add(mesh); this.previewOwn.push(mesh);
+    }
+    if (c.edges.positions.length && this.edgesVisible) {
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(c.edges.positions, 3));
+      const l = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: this.edgeColor })); l.renderOrder = 1; this.previewGroup.add(l); this.previewOwn.push(l);
+    }
+  }
+  private dropPreviewOwn() {
+    for (const o of this.previewOwn) { this.previewGroup.remove(o); const m = o as THREE.Mesh; m.geometry.dispose(); (m.material as THREE.Material).dispose(); if ((o as any).isMesh) this.groupData.delete(m); }
+    this.previewOwn = [];
+  }
+  private dropPreview() {
+    this.dropPreviewOwn();
+    for (const o of [...this.previewGroup.children]) this.previewGroup.remove(o); // stand-ins share the model's buffers: nothing to dispose
+    const had = this.swapped.size > 0;
+    for (const o of this.swapped) { if (o === this.edgeLines) o.visible = this.edgesVisible; else if ((o as any).isMesh) this.applyFaceStyle(o as THREE.Mesh); }
+    this.swapped.clear(); this.previewKey = ''; this.previewHit = null;
+    if (had) { this.applyFaceStyles(); this.highlight(this.lastSelection); }
+  }
+  private makeMesh(g: CompiledScene['groups'][number]) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(g.positions, 3));
+    if (g.normals?.length === g.positions.length) geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.normals, 3)); else geo.computeVertexNormals();
+    geo.setIndex(g.indices);
+    const transparent = g.opacity < 1;
+    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: new THREE.Color(g.color), transparent, opacity: g.opacity, depthWrite: !transparent, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: 4 })); // constant offset: edges win, faces never sink behind nearby surfaces at grazing angles
+    mesh.castShadow = !transparent; mesh.receiveShadow = true; mesh.userData.base = { color: g.color, opacity: g.opacity };
+    return mesh;
+  }
+
   setCompiled(c: CompiledScene) {
+    this.dropPreview();
     this.compiled = c;
     this.modelGroup.clear(); this.meshes = []; this.groupData.clear(); this.guideObjects = []; this.guideIds.clear(); this.textObjects = []; this.sectionMeshes = []; this.faceGeometries.clear();
     for (const g of c.groups) {
       if (!g.indices.length) continue;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(g.positions, 3));
-      if (g.normals?.length === g.positions.length) geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.normals, 3)); else geo.computeVertexNormals();
-      geo.setIndex(g.indices);
-      const transparent = g.opacity < 1;
-      const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: new THREE.Color(g.color), transparent, opacity: g.opacity, depthWrite: !transparent, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: 4 })); // constant offset: edges win, faces never sink behind nearby surfaces at grazing angles
-      mesh.castShadow = !transparent; mesh.receiveShadow = true; mesh.userData.base = { color: g.color, opacity: g.opacity };
+      const mesh = this.makeMesh(g);
       this.modelGroup.add(mesh); this.meshes.push(mesh);
       this.groupData.set(mesh, { ids: g.ids, ranges: g.idRanges, material: g.material, back: g.back });
       this.applyFaceStyle(mesh); this.applyXray(mesh);
@@ -336,7 +399,7 @@ export class Viewport {
   });
   private depthMap() {
     const c = this.cam.camera; c.updateMatrixWorld(); const w = Math.max(1, Math.round(this.width)), h = Math.max(1, Math.round(this.height));
-    const solid = (m: THREE.Mesh) => m.visible && !(m.material as THREE.Material).transparent;
+    const solid = (m: THREE.Mesh) => (m.visible || this.swapped.has(m)) && !(m.material as THREE.Material).transparent; // a mesh a preview stands in for still hides what is behind it
     const vis = this.meshes.map(m => (solid(m) ? '1' : '0')).join('');
     const same = (a: number[], b: ArrayLike<number>) => { for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return false; return true; };
     const d = this.depth;
@@ -378,15 +441,16 @@ export class Viewport {
   }
 
   /** What is under the cursor: an edge within a few pixels wins over a face. */
-  pick(ev: { clientX: number; clientY: number }, opts?: { ignore?: Set<string>; facesOnly?: boolean }): Pick | null {
+  pick(ev: { clientX: number; clientY: number }, opts?: { ignore?: Set<string>; facesOnly?: boolean; only?: (id: string) => boolean }): Pick | null {
     const rc = this.ray(ev);
+    const skip = (id: string) => !!opts?.ignore?.has(id) || (!!opts?.only && !opts.only(id)); // `only`: the rest is see-through
     rc.params.Line = { threshold: this.cam.distance * 0.008 };
     const faceHits = this.faceStyle === 'wireframe' ? rc.intersectObjects(this.meshes.filter(m => m.visible), false) : rc.intersectObjects(this.meshes, false); // wireframe: only edges can be picked
     let face: Pick | null = null;
     for (const h of faceHits) {
       const d = this.groupData.get(h.object as THREE.Mesh)!; const first = (h.faceIndex ?? 0) * 3; let id = '';
       for (let i = 0; i < d.ranges.length; i++) { const [s, n] = d.ranges[i]; if (first >= s && first < s + n) { id = d.ids[i]; break; } }
-      if (opts?.ignore?.has(id)) continue;
+      if (skip(id)) continue;
       const normal = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
       face = { id, kind: 'face', point: h.point, normal, material: d.material, back: d.back }; break;
     }
@@ -394,17 +458,17 @@ export class Viewport {
     if (this.edgeLines) {
       const eh = rc.intersectObject(this.edgeLines, false);
       for (const h of eh) {
-        const id = this.edgeIds[(h.index ?? 0) / 2 | 0]; if (!id || opts?.ignore?.has(id)) continue;
+        const id = this.edgeIds[(h.index ?? 0) / 2 | 0]; if (!id || skip(id)) continue;
         if (!face || h.distance <= face.point.distanceTo(this.cam.camera.position) + 0.02) return { id, kind: 'edge', point: h.point, normal: new THREE.Vector3(0, 1, 0) };
         break;
       }
     }
     if (!opts?.facesOnly) {
       const sh = rc.intersectObjects(this.sectionMeshes, false)[0];
-      if (sh) { const id = this.guideIds.get(sh.object); if (id && !opts?.ignore?.has(id) && (!face || sh.distance < face.point.distanceTo(this.cam.camera.position) - 0.05)) return { id, kind: 'section', point: sh.point, normal: new THREE.Vector3(0, 0, 1).applyQuaternion(sh.object.quaternion) }; }
+      if (sh) { const id = this.guideIds.get(sh.object); if (id && !skip(id) && (!face || sh.distance < face.point.distanceTo(this.cam.camera.position) - 0.05)) return { id, kind: 'section', point: sh.point, normal: new THREE.Vector3(0, 0, 1).applyQuaternion(sh.object.quaternion) }; }
     }
     const gh = rc.intersectObjects(this.guideObjects, false);
-    for (const h of gh) { const id = this.guideIds.get(h.object); if (id && !opts?.ignore?.has(id)) { const kind = this.compiled?.guides.some(g => g.id === id) ? 'guide' : this.compiled?.dimensions.some(d => d.id === id) ? 'dimension' : 'text'; if (!face || h.distance < face.point.distanceTo(this.cam.camera.position)) return { id, kind, point: h.point, normal: new THREE.Vector3(0, 1, 0) }; } }
+    for (const h of gh) { const id = this.guideIds.get(h.object); if (id && !skip(id)) { const kind = this.compiled?.guides.some(g => g.id === id) ? 'guide' : this.compiled?.dimensions.some(d => d.id === id) ? 'dimension' : 'text'; if (!face || h.distance < face.point.distanceTo(this.cam.camera.position)) return { id, kind, point: h.point, normal: new THREE.Vector3(0, 1, 0) }; } }
     return face;
   }
   pickSection(ev: { clientX: number; clientY: number }): string | null {
@@ -523,13 +587,15 @@ export class Viewport {
   expandIds: (ids: Set<string>) => Set<string> = ids => ids;
   highlight(ids: Set<string>, hover = false) {
     const target = hover ? this.hoverGroup : this.selectionGroup; target.clear();
+    if (!hover) this.lastSelection = new Set(ids);
     if (!ids.size) return;
     ids = this.expandIds(ids);
     // plugin geometry is compiled as `<entityId>#<faceKey>`: an entity id matches all its faces, a full id just that face
     const bases = new Set<string>(); for (const id of ids) if (!id.includes('#')) bases.add(id);
-    const hit = (fid: string) => ids.has(fid) || (bases.size > 0 && bases.has(fid.split('#')[0]));
+    const gone = this.previewHit; // under a preview: not where the old geometry was
+    const hit = (fid: string) => (ids.has(fid) || (bases.size > 0 && bases.has(fid.split('#')[0]))) && !gone?.(fid);
     for (const mesh of this.meshes) {
-      if (!mesh.visible) continue; // wireframe: only the edges light up
+      if (!mesh.visible && !this.swapped.has(mesh)) continue; // wireframe: only the edges light up
       const d = this.groupData.get(mesh)!; const src = mesh.geometry.getIndex()!.array; const sub: number[] = [];
       d.ranges.forEach(([s, n], i) => { if (hit(d.ids[i])) for (let k = s; k < s + n; k++) sub.push(src[k]); });
       if (!sub.length) continue;
