@@ -79,9 +79,10 @@ pub trait Plugin: Send + Sync {
     fn paint(&self, _entity: &mut Custom, _face_key: &str, _material: &str, _side: Side) -> Result<(), OpError> {
         Err(OpError("this plugin entity cannot be painted".into()))
     }
-    /// Called once before a round of `expand` calls with the same `doc` (a compile). A plugin running in a
-    /// sandbox uses it to receive the document once instead of with every entity.
-    fn prepare(&self, _doc: &Document) {}
+    /// Called once before a round of `expand` calls with the same document (a compile), only on plugins
+    /// that will expand something in it. A plugin running in a sandbox uses it to receive the document
+    /// once instead of with every entity (`Prepared::json` serialises it once for all of them).
+    fn prepare(&self, _doc: &Prepared) {}
     /// Extra numbers merged into `CompiledScene.metrics.plugins.<id>`.
     fn metrics(&self, _doc: &Document) -> Option<Value> { None }
     /// Called when a document is created or loaded (ensure materials, extension blocks…).
@@ -92,6 +93,24 @@ pub trait Plugin: Send + Sync {
     /// `only` = the requested ids when there are any) in `format`. `doc` is the original document.
     fn export(&self, _format: &str, _scene: &CompiledScene, _doc: &Document, _options: &Value) -> Result<ExportFile, OpError> {
         Err(OpError("this plugin writes no files".into()))
+    }
+}
+
+/// The document a round of `expand` calls works on, with its JSON made at most once for every plugin.
+pub struct Prepared<'a> { pub doc: &'a Document, json: std::sync::OnceLock<Vec<u8>> }
+impl<'a> Prepared<'a> {
+    pub fn new(doc: &'a Document) -> Self { Prepared { doc, json: std::sync::OnceLock::new() } }
+    pub fn json(&self) -> &[u8] { self.json.get_or_init(|| serde_json::to_vec(self.doc).unwrap_or_default()) }
+}
+
+/// The type prefixes (`construction`, `framing`…) of the custom entities in a list, through groups.
+fn prefixes_in(list: &[Entity], out: &mut std::collections::HashSet<String>) {
+    for e in list {
+        match e {
+            Entity::Custom(c) => { out.insert(c.type_.split('.').next().unwrap_or("").to_string()); }
+            Entity::Group(g) => prefixes_in(&g.entities, out),
+            _ => {}
+        }
     }
 }
 
@@ -211,8 +230,20 @@ impl Registry {
 
     /// A copy of the document where every custom entity is replaced by its plugin's expansion
     /// (custom entities without a plugin are dropped).
+    /// Prepare the plugins that own one of these type prefixes.
+    fn prepare_for(&self, doc: &Document, list: &[Entity], components: bool) {
+        let mut pre = std::collections::HashSet::new();
+        prefixes_in(list, &mut pre);
+        if components { for c in &doc.components { prefixes_in(&c.entities, &mut pre); } }
+        if pre.is_empty() { return; }
+        let shared = Prepared::new(doc);
+        for p in self.active() {
+            if pre.contains(p.id()) || p.aliases().iter().any(|a| pre.contains(*a)) { p.prepare(&shared); }
+        }
+    }
+
     pub fn expand_all(&self, doc: &Document) -> Document {
-        for p in self.active() { p.prepare(doc); }
+        self.prepare_for(doc, &doc.entities, true);
         let mut d = doc.clone();
         d.entities = self.expand_list(&doc.entities, doc);
         for c in d.components.iter_mut() { c.entities = self.expand_list(&c.entities, doc); }
@@ -221,8 +252,8 @@ impl Registry {
     /// Like `expand_all`, but the result holds only the top-level entities in `keep` (expanded against the whole
     /// document, so a wall still sees its neighbours). For previews that only redraw what an op changed.
     pub fn expand_some(&self, doc: &Document, keep: &std::collections::HashSet<String>) -> Document {
-        for p in self.active() { p.prepare(doc); }
         let list: Vec<Entity> = doc.entities.iter().filter(|e| keep.contains(e.id())).cloned().collect();
+        self.prepare_for(doc, &list, true);
         let mut components = doc.components.clone();
         for c in components.iter_mut() { c.entities = self.expand_list(&c.entities, doc); }
         Document { version: doc.version, units: doc.units.clone(), layers: doc.layers.clone(), materials: doc.materials.clone(), entities: self.expand_list(&list, doc), scenes: vec![], components, extensions: doc.extensions.clone(), extra: doc.extra.clone() }

@@ -83,11 +83,11 @@ curl -s -X POST https://plannr.example.org/api/projects/<id>/ops -H 'X-Plannr-Ow
 
 The HouseModel format is the one Uzzetje stores: `floors`, `rooms` / `polyRooms`, `walls`, `openings`
 (with `roomEdge`, `polyEdge` or `wall` hosts), `roof` and `roofVolumes`, `fixtures`, `runs`, `cavity`,
-`finishes`, `componentTypes`; see `docs/CONSTRUCTION.md`. Ids are kept, so a room id in your app is the
+`finishes`, `componentTypes`; see the Construction plugin's [README](https://github.com/MatthiasDM/plannr-plugins/tree/main/construction). Ids are kept, so a room id in your app is the
 id to pass to `zoom_to` and `select`.
 
 An app whose house model carries plumbing runs can turn them into real pipes after every import by
 adding the plumbing plugin's `import_runs` op (idempotent: pipes made from the same runs earlier are
-replaced, pipes drawn by hand in the viewer stay); see `docs/PLUMBING.md`.
+replaced, pipes drawn by hand in the viewer stay); see the Plumbing plugin's [README](https://github.com/MatthiasDM/plannr-plugins/tree/main/plumbing).
 
 `web/public/embed-example.html` is a working example: `/embed-example.html?project=<id>&owner=<key>`.

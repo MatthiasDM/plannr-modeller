@@ -14,12 +14,8 @@ crates/plannr-core     document model, ops kernel (draw / push-pull / offset / m
                        tessellation + section cuts, metrics, GLB export, plugin trait
 crates/plannr-server   Axum REST API + WebSocket + MCP endpoint + SQLite + static hosting (port 8795)
 web/                   Vite + TypeScript + three.js frontend (SketchUp-style UI)
-plugins/construction   the reference plugin: storeys, rooms, walls, openings, roofs, fixtures, runs (engine + browser)
-plugins/electrical     circuits, conduits, AREI checks and schematics · plugins/framing  wood framing · plugins/plumbing  pipes, fittings, brackets
 docs/CONTRACT.md       the document / ops / REST / WebSocket / MCP contract
-docs/PLUGINS.md        how to write engine and browser plugins
-docs/CONSTRUCTION.md   the construction plugin's entities and ops
-docs/PLUMBING.md       the plumbing plugin: pipes, fittings, brackets, checks, takeoff
+docs/PLUGINS.md        how to write engine and browser plugins, and how installable packages work
 ```
 
 ## A look inside
@@ -36,7 +32,7 @@ docs/PLUMBING.md       the plumbing plugin: pipes, fittings, brackets, checks, t
 `PLANNR_PUBLIC=1` runs Plannr as a public site (this is how plannr.m-dm.org runs): the front page
 (`web/home.html`) is served at `/` and the modeller at `/app`; every browser gets a random owner key
 (kept in `localStorage`, sent as `X-Plannr-Owner`) and only ever sees the projects it made (at most 30);
-the MCP endpoint is off. Without it, Plannr is a single-user local app with MCP.
+the MCP endpoint is off, and installing or switching plugins needs the server's `PLANNR_TOKEN`. Without it, Plannr is a single-user local app with MCP.
 
 ## Run
 
@@ -114,7 +110,7 @@ chrome and the viewport; the choice is remembered in the browser, and the front 
 Another app can show a project in an iframe (`/app?project=<id>&embed=1&owner=<key>`): viewer mode
 with the looking, measuring and section tools only, driven over `postMessage` (storeys, views, zoom to
 an entity, selection, screenshots, any op). An app that keeps its own house model pushes it with the
-construction plugin's `import_house`, which replaces the previous import and leaves what was drawn
+construction plugin's `import_house` (install the Construction plugin), which replaces the previous import and leaves what was drawn
 beside it. See [docs/EMBED.md](docs/EMBED.md) and `web/public/embed-example.html`.
 
 ## MCP
@@ -130,85 +126,27 @@ viewport tools that drive the open browser (`screenshot`, `set_view`, `set_camer
 
 ## Plugins
 
-The core knows only faces, edges, groups, guides, dimensions, texts and section planes. Domain tools come
-as plugins with an engine half (Rust: custom entity types expanded into core geometry, custom ops that
-become MCP tools `plugin.<id>.<op>`) and a browser half (tools, panels, entity editors). The
-**construction** plugin ships with the repo: storeys, rooms (rectangles or any shape, shared walls built
-once), free walls, doors / windows / passages / garage gates cut as real holes, flat / gable / hip / shed
-roofs, electrical and plumbing fixtures and cable / pipe runs, cavity walls and finishes. Its tools sit
-in their own toolbar group, a floor bar switches storeys, and "Isolate storey" gives a dollhouse view.
-Furniture and kitchen pieces are **parametric component scripts** (the same tiny JavaScript dialect as
-Uzzetje Studio: `component(id, { params, rules, build })` with `box()` / `shape()` prisms) evaluated by a
-JavaScript runtime embedded in the engine: 19 built-in types ship in `plugins/construction/catalogue/`,
-documents can define their own (`define_component`, also an MCP tool), and parameters are edited as a
-form in Entity Info.
-See [docs/PLUGINS.md](docs/PLUGINS.md) and [docs/CONSTRUCTION.md](docs/CONSTRUCTION.md).
+The core knows only faces, edges, groups, guides, dimensions, texts and section planes. Everything
+domain-specific comes as a plugin with an engine half (Rust: custom entity types expanded into core
+geometry, custom ops that become MCP tools `plugin.<id>.<op>`, export formats) and a browser half
+(tools, panels, Entity Info). Plugins are **installable packages**: download a `.plannr-plugin` file and
+install it with **Plugins → Manage plugins… → Install from file**; the same dialog switches each one on
+and off and removes it. Their engines run as WebAssembly in a sandbox inside the server. A fresh Plannr
+has none: it is a plain SketchUp-style modeller until you add some.
 
-**Route tool (construction).** A *route* is a pipe or cable run: a polyline at a fixed height above the
-active storey's floor. Pick the system in the Construction panel (cold water, hot water, drain, heating,
-electrical), type the height in the Measurements box (0.3 = skirting level, 2.45 = just under a 2.5 m
-ceiling), click each bend, and double-click or press Enter to finish. Runs are drawn as tubes in the
-system's colour and their lengths are totalled in Model Info. Electrical wiring is better done with the
-**electrical** plugin's Conduit tool, which knows about circuits.
+They live in [plannr-plugins](https://github.com/MatthiasDM/plannr-plugins), each with its own release:
 
-The **electrical** plugin models the installation to Belgian AREI/RGIE conventions: a distribution board
-(phases, main breaker, 300 mA head differential, earthing, Ik), circuits typed by use with breaker, cable
-section, 30/300 mA differential and their points (the construction plugin's sockets, switches, lights,
-data points), conduits (flush conduit or surface cable, 16/20/25 mm) drawn by hand or auto-routed from the
-board via the ceiling or floor, AREI checks (cable vs breaker, 30 mA on sockets and wet rooms, dedicated
-appliance circuits, points per circuit, unassigned points, demand vs capacity…), and the two drawings an
-inspection asks for: the **situatieschema** per storey with IEC 60617 symbols and the **eendraadschema**
-(one-line diagram), both as SVG. See [docs/ELECTRICAL.md](docs/ELECTRICAL.md).
+| Plugin | |
+|---|---|
+| **Construction** | houses from rooms: storeys, rooms of any shape with shared walls built once, Belgian masonry (cavity walls coursed brick by brick, beam-and-block floors, lintels, foundations), doors and windows as real holes, flat / gable / hip / shed roofs, fixtures, pipe and cable runs, parametric furniture, takeoff, checks and U-values, the import of Uzzetje house models |
+| **Electrical** | the installation to AREI/RGIE: board, circuits, conduits, checks, situation plan and one-line diagram (needs Construction) |
+| **Framing** | Medeek-style wood framing: walls, floors, every timber roof type, beams, stairs, foundations, hardware, engineering check, plans, cut list |
+| **Plumbing** | pipes with bends or fittings, valves, mixers, manifolds, brackets, checks, material list |
+| **Walking mode** | first-person walk-through with every tool at hand, on desktop and phone |
+| **3D Print** | 3MF / STL for slicers, watertight check and repair, plate layout |
+| **Car Track** | printable 1:64 die-cast track with connectors, supports and a test drive |
 
-The **framing** plugin brings Medeek-style parametric wood framing. **Walls** are drawn along their
-exterior face (clockwise) and join by themselves: L corners (California, 3-stud or 2-stud) and
-T-intersections (2-stud channel, ladder blocking, California T) with trimmed ends, interlocking top
-plates and lapped sheathing; studs at 300/400/600 mm, rough openings with kings, jacks, headers sized by
-span, sills and cripples, sheathing and gypsum. **Floors** (joists, rims, blocking, subfloor), **roofs**
-(gable, hip, shed and gambrel; Fink, Howe, king/queen-post, scissor, attic and mono trusses or rafters
-with hips and jacks; fascia, soffit, shingle/metal/tile cladding, gutters, gable and shed dormers),
-**beams and posts**, **stairs** (notched stringers, treads, risers), **foundations** (slab or stem wall),
-**hardware** (anchor bolts, hurricane ties, hold-downs, joist hangers), an **engineering check** and span
-tables (EN 338 C18/C24/C30 or SPF/DF-L No.2, snow and floor loads), **wall elevations and framing plans**
-as SVG, "Frame room" from the construction plugin, and a cut list with stock lengths, panel counts,
-hardware and CSV export. See [docs/FRAMING.md](docs/FRAMING.md).
-
-The **plumbing** plugin lays the pipework the way an installer does. **Pipes** are drawn corner by corner
-in Alupex (16×2, 20×2, 26×3, 32×3), PEX, copper, PVC or PE drain pipe or threaded steel, at a typed
-height, with exact leg lengths typed in the Measurements box or edited later per leg; corners become
-**bends** at the material's minimum radius (Alupex 5 × dn) or **elbow fittings** of the pipe's joint
-type. Ends that touch something are joined by themselves: a **coupling, reducer or elbow** between two
-pipe ends (both cut back to the fitting), a **tee** cut into a pipe you start from, a **wall plate**
-(muurplaat ½") at a tap. Press fittings (stainless sleeve, black indicator ring), clamp/screw fittings
-(brass with hex nuts), push-fit, solder, compression, glued PVC sockets, welded PE and threaded steel are
-all in the catalogue, as are stop, ball and check valves, pressure reducers, filters, water meters,
-angle stop valves, radiator valves, wall / thermostatic / basin **mixer taps**, **manifolds** with their
-outlets, traps and access pieces. **Brackets** (clips, clamps with rod) are placed by hand or
-automatically at the material's spacing on the nearest wall, ceiling or floor. Checks report open ends,
-diameter mismatches, bends too tight, missing fall on drains and brackets too far apart; the
-**material list** totals pipe per diameter, every fitting and bracket, with CSV export. See
-[docs/PLUMBING.md](docs/PLUMBING.md).
-
-**Installable plugins.** **Plugins → Manage plugins…** switches any plugin on and off and installs
-packaged ones: a `.plannr-plugin` file, its engine running as WebAssembly in a sandbox inside the server.
-Packaged plugins live in [plannr-plugins](https://github.com/MatthiasDM/plannr-plugins), each with its own
-release to download: **3D Print** (3MF / STL for slicers, watertight check and repair, plate layout) and
-**Car Track** (printable 1:64 die-cast track: straights, curves, ramps, loops, connectors, supports, a
-test drive). See [docs/PLUGINS.md](docs/PLUGINS.md#installable-plugins-packages).
-
-The construction plugin builds everything as **masonry**, the way it's built in Belgium. Exterior
-walls are **cavity walls** (spouwmuren): an outer facing-brick leaf, a cavity (empty, fully filled or
-with boards) with stainless ties, an inner leaf of snelbouw or blocks and interior plaster; inner walls
-are single leaves. Corners mitre and T-junctions trim automatically. Openings get concrete lintels
-inside, steel angles outside and bluestone sills, ground-floor walls a damp-proof course, and the bond
-pattern is drawn on the brick. Upper **floors** are beam-and-block ("potten en balken": prestressed
-joists, infill blocks, topping with mesh, ring beam, trimmed stair wells), hollow-core planks
-(welfsels) or poured slabs, plus **strip foundations**. Walls and floors are derived from the rooms; any
-one can be customised with its own build-up. Storey heights are floor to floor, and clear heights
-follow the structure above. Includes a takeoff (bricks, blocks, mortar, ties, lintels, joists, blocks,
-concrete), checks (lintel bearings, piers, ties, floor spans between bearing walls) and U-values
-against the EPB requirement with the effect of a cavity fill, plus wall elevations and storey plans as
-SVG. See [docs/MASONRY.md](docs/MASONRY.md).
+See [docs/PLUGINS.md](docs/PLUGINS.md) to write one.
 
 ## Document
 

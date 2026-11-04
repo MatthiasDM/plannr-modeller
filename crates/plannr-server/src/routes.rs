@@ -356,6 +356,7 @@ fn merge_manifest(v: &mut Value, m: &crate::packages::Manifest) {
     if let Some(h) = &m.homepage { v["homepage"] = json!(h); }
     if let Some(a) = &m.author { v["author"] = json!(a); }
     if !m.suggests.is_empty() { v["suggests"] = json!(m.suggests); }
+    if !m.requires.is_empty() { v["requires"] = json!(m.requires); }
 }
 
 /// Installing, enabling and removing plugins changes the server for everyone: open on a private instance,

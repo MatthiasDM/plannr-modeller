@@ -134,7 +134,7 @@ export function installTooltips() {
 /** Where packaged plugins are published (GitHub releases of the public repository). */
 export const PLUGIN_RELEASES = 'https://github.com/MatthiasDM/plannr-plugins/releases';
 
-interface ManagedPlugin { id: string; name: string; version?: string; description?: string; homepage?: string; enabled?: boolean; source?: 'builtIn' | 'installed'; engine?: boolean; browserOnly?: boolean; suggests?: string[]; ops?: unknown[]; exports?: { format: string }[] }
+interface ManagedPlugin { id: string; name: string; version?: string; description?: string; homepage?: string; enabled?: boolean; source?: 'builtIn' | 'installed'; engine?: boolean; browserOnly?: boolean; suggests?: string[]; requires?: string[]; ops?: unknown[]; exports?: { format: string }[] }
 
 /**
  * Plugins → Manage plugins…: every plugin with an on/off switch, Install from file (a `.plannr-plugin`
@@ -180,10 +180,12 @@ export function pluginsDialog(owner: string, notify: (text: string) => void): Pr
         const nOps = (p.ops ?? []).length; const ex = (p.exports ?? []).map(e => e.format.toUpperCase());
         const what = p.engine === false ? 'browser only' : [nOps ? `${nOps} tools` : '', ex.length ? `writes ${ex.join(', ')}` : ''].filter(Boolean).join(' · ') || 'engine';
         const missing = (p.suggests ?? []).filter(s => !names.has(s));
+        const needs = (p.requires ?? []).filter(s => !names.has(s) || all.find(x => x.id === s)?.enabled === false);
         return `<div class="plg-row ${on ? '' : 'off'}">
           <label class="plg-switch" title="${on ? 'Switch off' : 'Switch on'}"><input type="checkbox" data-toggle="${escHtml(p.id)}" ${on ? 'checked' : ''}><span></span></label>
           <div class="plg-main"><div class="plg-name">${escHtml(p.name || p.id)} <span class="plg-meta">${escHtml(p.id)}${p.version ? ` · ${escHtml(p.version)}` : ''} · ${kind} · ${what}</span></div>
             ${p.description ? `<div class="plg-desc">${escHtml(p.description)}</div>` : ''}
+            ${needs.length ? `<div class="plg-desc" style="color:var(--red)">Needs ${needs.map(escHtml).join(', ')} (${needs.some(n => names.has(n)) ? 'switched off' : 'not installed'})</div>` : ''}
             ${missing.length ? `<div class="plg-desc">Works with ${missing.map(escHtml).join(', ')} (not installed)</div>` : ''}
             ${p.homepage ? `<a class="plg-link" href="${escHtml(p.homepage)}" target="_blank" rel="noopener">Documentation</a>` : ''}</div>
           ${p.source === 'installed' ? `<button class="btn" data-remove="${escHtml(p.id)}" title="Uninstall">Remove</button>` : ''}</div>`;

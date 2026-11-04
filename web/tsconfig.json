@@ -11,5 +11,5 @@
     "baseUrl": ".",
     "paths": { "three": ["node_modules/@types/three/index.d.ts"] }
   },
-  "include": ["src", "../plugins/*/web"]
+  "include": ["src"]
 }

@@ -11,10 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 plannr-core = { path = "../plannr-core" }
-plannr-plugin-construction = { path = "../../plugins/construction/engine" }
-plannr-plugin-electrical = { path = "../../plugins/electrical/engine" }
-plannr-plugin-framing = { path = "../../plugins/framing/engine" }
-plannr-plugin-plumbing = { path = "../../plugins/plumbing/engine" }
 axum = { version = "0.8", features = ["json", "query", "macros", "ws"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "trace", "compression-gzip"] }

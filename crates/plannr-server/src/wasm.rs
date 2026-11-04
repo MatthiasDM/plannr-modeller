@@ -1,6 +1,6 @@
 //! Installed plugins' engines: WebAssembly modules (`wasm32-wasip1`, built with `plannr_core::wasm_plugin!`)
 //! run in a wasmtime sandbox. They see no files, network or environment (WASI gives them only a clock,
-//! random numbers and stderr for panic messages), get a memory cap and a fuel budget per call, and are
+//! random numbers and stderr for panic messages), get a memory cap and a time limit per call, and are
 //! re-instantiated after a trap. Calls carry JSON (see plannr_core::guest for the ABI).
 
 use std::collections::HashSet;
@@ -10,25 +10,32 @@ use plannr_core::compile::CompiledScene;
 use plannr_core::geom::Mat4;
 use plannr_core::model::{Custom, Document, Entity};
 use plannr_core::ops::{OpError, OpResult};
-use plannr_core::plugin::{ExportFile, ExportFormat, Plugin, PluginInfo, Side};
+use plannr_core::plugin::{ExportFile, ExportFormat, Plugin, PluginInfo, Prepared, Side};
 use serde::Serialize;
 use serde_json::Value;
 use wasmtime::{Config, Engine, Instance, Linker, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::WasiCtxBuilder;
 
-/// Fuel (≈ instructions) per call, and for exports, which mesh whole models.
-const FUEL: u64 = 60_000_000_000;
-const FUEL_EXPORT: u64 = 600_000_000_000;
+/// Time limit per call in ticks of 100 ms (exports mesh whole models and get longer).
+const FUEL: u64 = 300;
+const FUEL_EXPORT: u64 = 3000;
 const MEMORY: usize = 2 << 30;
 
 fn engine() -> &'static Engine {
     static E: OnceLock<Engine> = OnceLock::new();
-    E.get_or_init(|| { let mut c = Config::new(); c.consume_fuel(true); Engine::new(&c).expect("wasmtime engine") })
+    E.get_or_init(|| {
+        let mut c = Config::new(); c.epoch_interruption(true);
+        let e = Engine::new(&c).expect("wasmtime engine");
+        // the clock that stops a call running past its deadline (cheaper than counting fuel)
+        let tick = e.clone();
+        std::thread::spawn(move || loop { std::thread::sleep(std::time::Duration::from_millis(100)); tick.increment_epoch(); });
+        e
+    })
 }
 
 struct Ctx { wasi: WasiP1Ctx, limits: StoreLimits }
-struct Inner { store: Store<Ctx>, memory: Memory, alloc: TypedFunc<u32, u32>, free: TypedFunc<(u32, u32), ()>, call: TypedFunc<(u32, u32), u64> }
+struct Inner { abi: u32, store: Store<Ctx>, memory: Memory, alloc: TypedFunc<u32, u32>, free: TypedFunc<(u32, u32), ()>, call: TypedFunc<(u32, u32), u64> }
 
 fn instantiate(module: &Module) -> anyhow::Result<Inner> {
     let mut linker: Linker<Ctx> = Linker::new(engine());
@@ -36,13 +43,14 @@ fn instantiate(module: &Module) -> anyhow::Result<Inner> {
     let wasi = WasiCtxBuilder::new().inherit_stderr().build_p1();
     let mut store = Store::new(engine(), Ctx { wasi, limits: StoreLimitsBuilder::new().memory_size(MEMORY).build() });
     store.limiter(|c| &mut c.limits);
-    store.set_fuel(FUEL)?;
+    store.set_epoch_deadline(FUEL);
     let instance: Instance = linker.instantiate(&mut store, module)?;
     if let Ok(init) = instance.get_typed_func::<(), ()>(&mut store, "_initialize") { init.call(&mut store, ())?; }
     let abi = instance.get_typed_func::<(), u32>(&mut store, "plannr_abi").map_err(|_| anyhow::anyhow!("not a Plannr plugin: no plannr_abi export (build it with plannr_core::wasm_plugin!)"))?.call(&mut store, ())?;
-    if abi != plannr_core::guest::ABI_VERSION { anyhow::bail!("plugin ABI {abi}, this server speaks {}", plannr_core::guest::ABI_VERSION); }
+    if !(1..=plannr_core::guest::ABI_VERSION).contains(&abi) { anyhow::bail!("plugin ABI {abi}, this server speaks 1–{}: update Plannr", plannr_core::guest::ABI_VERSION); }
     let memory = instance.get_memory(&mut store, "memory").ok_or_else(|| anyhow::anyhow!("no memory export"))?;
     Ok(Inner {
+        abi,
         alloc: instance.get_typed_func(&mut store, "plannr_alloc")?,
         free: instance.get_typed_func(&mut store, "plannr_free")?,
         call: instance.get_typed_func(&mut store, "plannr_call")?,
@@ -75,6 +83,8 @@ pub struct WasmPlugin {
     /// Type prefixes this plugin owns (its id, its entity types' prefixes, its aliases).
     prefixes: HashSet<String>,
     module: Module,
+    /// ABI version the module speaks.
+    abi: u32,
     inner: Mutex<Option<Inner>>,
     /// The document `prepare` sent (address, version, entity count), so `expand` can leave it out.
     prepared: Mutex<Option<(usize, u64, usize)>>,
@@ -84,7 +94,8 @@ impl WasmPlugin {
     pub fn load(bytes: &[u8]) -> anyhow::Result<WasmPlugin> {
         let module = Module::new(engine(), bytes)?;
         let inner = instantiate(&module)?;
-        let mut p = WasmPlugin { id: String::new(), info: PluginInfo { id: String::new(), name: String::new(), entity_types: vec![], ops: vec![] }, aliases: vec![], exports: vec![], prefixes: HashSet::new(), module, inner: Mutex::new(Some(inner)), prepared: Mutex::new(None) };
+        let abi = inner.abi;
+        let mut p = WasmPlugin { abi, id: String::new(), info: PluginInfo { id: String::new(), name: String::new(), entity_types: vec![], ops: vec![] }, aliases: vec![], exports: vec![], prefixes: HashSet::new(), module, inner: Mutex::new(Some(inner)), prepared: Mutex::new(None) };
         let (d, _) = p.call(&Req { call: "describe", ..Default::default() }, FUEL).map_err(|e| anyhow::anyhow!(e.0))?;
         p.info = serde_json::from_value(d["info"].clone())?;
         p.id = p.info.id.clone();
@@ -96,12 +107,14 @@ impl WasmPlugin {
     }
 
     fn call(&self, req: &Req, fuel: u64) -> Result<(Value, Vec<u8>), OpError> {
-        let bytes = serde_json::to_vec(req).map_err(|e| OpError(e.to_string()))?;
+        self.call_bytes(serde_json::to_vec(req).map_err(|e| OpError(e.to_string()))?, fuel)
+    }
+    fn call_bytes(&self, bytes: Vec<u8>, fuel: u64) -> Result<(Value, Vec<u8>), OpError> {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if g.is_none() { *g = Some(instantiate(&self.module).map_err(|e| OpError(format!("plugin {}: {e}", self.id)))?); }
         let res = (|| -> anyhow::Result<Vec<u8>> {
             let i = g.as_mut().unwrap();
-            i.store.set_fuel(fuel)?;
+            i.store.set_epoch_deadline(fuel);
             let len = bytes.len() as u32;
             let ptr = i.alloc.call(&mut i.store, len)?;
             i.memory.write(&mut i.store, ptr as usize, &bytes)?;
@@ -118,7 +131,7 @@ impl WasmPlugin {
             Err(e) => {
                 // a trap (panic, out of fuel or memory) leaves the instance unusable: start afresh next time
                 *g = None; *self.prepared.lock().unwrap() = None;
-                let msg = if e.to_string().contains("fuel") { "took too long and was stopped".to_string() } else { format!("{e:#}") };
+                let msg = if format!("{e:#}").contains("interrupt") { "took too long and was stopped".to_string() } else { format!("{e:#}") };
                 return Err(OpError(format!("plugin {}: {msg}", self.id)));
             }
         };
@@ -145,14 +158,18 @@ impl Plugin for WasmPlugin {
     fn aliases(&self) -> &[&str] { &self.aliases }
     fn describe(&self) -> PluginInfo { self.info.clone() }
     fn exports(&self) -> Vec<ExportFormat> { self.exports.clone() }
-    fn prepare(&self, doc: &Document) {
-        let key = if self.owns(doc) && self.call(&Req { call: "prepare", doc: Some(doc), ..Default::default() }, FUEL).is_ok() { Some(Self::key(doc)) } else { None };
-        *self.prepared.lock().unwrap() = key;
+    fn prepare(&self, p: &Prepared) {
+        // the shared JSON of the document goes in as the request's `doc` without being serialised again
+        let mut req = br#"{"call":"prepare","doc":"#.to_vec(); req.extend_from_slice(p.json()); req.push(b'}');
+        let ok = self.call_bytes(req, FUEL).is_ok();
+        *self.prepared.lock().unwrap() = if ok { Some(Self::key(p.doc)) } else { None };
     }
     fn expand(&self, e: &Custom, doc: &Document) -> Result<Vec<Entity>, OpError> {
         let sent = *self.prepared.lock().unwrap() == Some(Self::key(doc));
-        let (v, _) = self.call(&Req { call: "expand", entity: Some(e), doc: if sent { None } else { Some(doc) }, ..Default::default() }, FUEL)?;
-        serde_json::from_value(v).map_err(|e| OpError(format!("plugin {}: {e}", self.id)))
+        let (v, bytes) = self.call(&Req { call: "expand", entity: Some(e), doc: if sent { None } else { Some(doc) }, ..Default::default() }, FUEL)?;
+        if self.abi < 2 { return serde_json::from_value(v).map_err(|e| OpError(format!("plugin {}: {e}", self.id))); }
+        let wire: Vec<plannr_core::guest::Wire> = serde_json::from_slice(&bytes).map_err(|e| OpError(format!("plugin {}: {e}", self.id)))?;
+        Ok(wire.into_iter().map(|w| w.into_entity()).collect())
     }
     fn apply(&self, op: &str, data: Value, doc: &mut Document) -> Result<OpResult, OpError> {
         let (mut v, _) = self.call(&Req { call: "apply", op: Some(op), data: Some(&data), doc: Some(doc), ..Default::default() }, FUEL)?;
@@ -242,3 +259,4 @@ mod tests {
         assert!(w.apply("track.add_piece", serde_json::json!({ "kind": "straight" }), &mut doc).is_ok());
     }
 }
+

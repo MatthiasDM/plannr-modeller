@@ -6,14 +6,14 @@ side, or both:
 
 | Side | Can add | Where |
 |---|---|---|
-| **Engine (Rust)** | custom entity types that expand into core geometry at compile time; custom ops (exposed automatically as MCP tools `plugin.<id>.<op>`); transform / paint / metrics hooks | implement `plannr_core::plugin::Plugin`, register it in `crates/plannr-server/src/plugins.rs` |
-| **Browser (TypeScript)** | tools (same `Tool` interface as Line, Push/Pull…), tray panels, an Entity Info editor for its entities, overlays on the viewport | `plugins/<id>/web/index.ts`, built by Vite to `web/dist/plugins/<id>.js`; the server lists it in `GET /api/plugins` as `script` and the app loads it at startup. Any other script can also call `window.plannr.registerPlugin({...})` |
+| **Engine (Rust)** | custom entity types that expand into core geometry at compile time; custom ops (exposed automatically as MCP tools `plugin.<id>.<op>`); transform / paint / metrics / export hooks | implement `plannr_core::plugin::Plugin` and end the crate with `plannr_core::wasm_plugin!(…)` (an installable package), or register it in `crates/plannr-server/src/plugins.rs` (compiled in) |
+| **Browser (TypeScript)** | tools (same `Tool` interface as Line, Push/Pull…), tray panels, an Entity Info editor for its entities, overlays on the viewport | `<id>/web/index.ts`, the package's `web.js`; the server lists it in `GET /api/plugins` as `script` and the app loads it at startup. Any other script can also call `window.plannr.registerPlugin({...})` |
 
-A plugin lives in `plugins/<id>/` with `engine/` (Rust crate) and `web/` (browser bundle). The
-**construction** plugin (`plugins/construction`, contract in [CONSTRUCTION.md](CONSTRUCTION.md)) is the
-reference: storeys, rooms, walls, openings, roofs, fixtures and runs on top of the core. The **electrical**
-([ELECTRICAL.md](ELECTRICAL.md)), **framing** ([FRAMING.md](FRAMING.md)) and **plumbing** ([PLUMBING.md](PLUMBING.md))
-plugins build on it and are smaller examples of the same two halves.
+Plannr's plugins live in [plannr-plugins](https://github.com/MatthiasDM/plannr-plugins), each in `<id>/`
+with `engine/` (Rust crate) and `web/` (browser bundle), packaged and installed as described under
+[Installable plugins](#installable-plugins-packages). **Construction** (`construction/`, contract in its
+README) is the reference: storeys, rooms, walls, openings, roofs, fixtures and runs on top of the core.
+**Electrical**, **Framing** and **Plumbing** build on it and are smaller examples of the same two halves.
 
 ### How the two sides meet
 
@@ -46,7 +46,8 @@ impl Plugin for Walls {
 }
 ```
 
-Register it in `crates/plannr-server/src/plugins.rs`:
+To package it, end the crate with `plannr_core::wasm_plugin!(Walls);` (see below). To compile it into a
+server instead, register it in `crates/plannr-server/src/plugins.rs`:
 
 ```rust
 pub fn registry() -> Registry { let mut r = Registry::new(); r.register(Box::new(Walls)); r }
@@ -158,4 +159,9 @@ it must be a zip with a valid `plugin.json`, its engine must load and say the sa
 A plugin can own more than one type prefix: `Plugin::aliases()` returns extra prefixes, and the
 registry routes `<alias>.*` entity types and ops to it (exact ids win over aliases). The construction
 plugin uses this for `masonry.*` (the masonry engine is one of its modules).
+
+A plugin that builds on another's crate (electrical on construction) links it as a library: the library
+puts its `wasm_plugin!` behind a feature (`#[cfg(not(feature = "embedded"))]`) that the dependant turns on,
+so only one plugin's exports end up in the module. Declare the dependency in `plugin.json` as
+`requires: ["construction"]`; the plugin manager says when it is missing or off.
 

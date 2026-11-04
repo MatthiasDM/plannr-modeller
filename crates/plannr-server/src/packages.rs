@@ -31,6 +31,8 @@ pub struct Manifest {
     /// File names inside the package (default engine.wasm / web.js when present).
     #[serde(default, skip_serializing_if = "Option::is_none")] pub engine: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")] pub web: Option<String>,
+    /// Plugins it needs (electrical builds on construction): the plugin manager says when one is missing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub requires: Vec<String>,
     /// Plugins that work well with it (shown in the plugin manager).
     #[serde(default, skip_serializing_if = "Vec::is_empty")] pub suggests: Vec<String>,
 }
