@@ -1,14 +1,17 @@
 import './style.css';
 import * as THREE from 'three';
 import { Viewport, A, V, COLOR, type ViewName, FACE_STYLES, type FaceStyle, type Pick as ScenePick } from './scene';
-import { api, Live, type CompiledScene, type PluginInfo } from './api';
-import { findEntity, topLevelId, walk, type Document, type Op, type OpResult, type Scene } from './model';
-import { BUILTIN_TOOLS, EMBED_TOOLS, placeComponentTool } from './tools';
+import { api, Live, type Changes, type CompiledScene, type PluginInfo } from './api';
+import { findEntity, topLevelId, walk, lengthUnit, setLengthUnit, UNITS, type Document, type Entity, type Op, type OpResult, type Scene, type Sun, type Vec3 } from './model';
+import { toOBJ, toSTL, parseOBJ, parseSTL, meshGroup, download } from './io';
+import { selectionBounds } from './tools/advanced';
+import { BUILTIN_TOOLS, EMBED_TOOLS, placeComponentTool, pasteTool } from './tools';
 import { zoomWindow } from './tools/arc';
+import { connectedTo } from './tools/edit';
 import type { Tool, ToolContext, Snap, SnapKind, SnapOptions, AxisLock, Plane } from './tools/base';
 import { AXIS, AXIS_COLOR, GROUND, MAGENTA, snapColor, snapLabel } from './tools/base';
 import { Tray } from './ui/tray';
-import { renderMenubar, renderToolbar, renderHud, renderToolOptions, renderWelcome, layoutToolbar } from './ui/chrome';
+import { renderMenubar, renderToolbar, renderHud, renderToolOptions, renderWelcome, layoutToolbar, showContextMenu } from './ui/chrome';
 import { registerPlugin, getPlugins, partsFor, onPlugin, type PluginHost, type CameraController } from './plugins';
 import { promptText, confirmDialog, installTooltips } from './ui/dialog';
 
@@ -24,6 +27,20 @@ function lockPageZoom() {
 }
 lockPageZoom();
 
+/** The labels of the Measurements box under which a bare number is a length (not an angle, a factor or a count). */
+const LENGTH_LABELS = new Set(['Distance', 'Length', 'Radius', 'Bulge', 'Width', 'Height', 'Dimensions', 'Measurements']);
+/** A measurement a tool reports (in metres) as the box shows it, in the document's unit. */
+function shownLength(v: string, label: string): string {
+  if (lengthUnit.factor === 1 || !LENGTH_LABELS.has(label)) return v;
+  return v.split(';').map(s => /^\s*-?\d*\.?\d+\s*$/.test(s) ? (parseFloat(s) * lengthUnit.factor).toFixed(lengthUnit.digits) : s).join(';');
+}
+/** What was typed, with the document's unit put on every bare length (the tools read bare numbers as metres). */
+function typedLength(v: string, label: string): string {
+  if (lengthUnit.factor === 1 || !LENGTH_LABELS.has(label)) return v; const u = lengthUnit.name;
+  const r = v.trim().match(/^(-?\d*\.?\d+)\s*r$/i); if (r) return `${r[1]}${u}r`; // a radius ("500r")
+  const x = v.trim().match(/^(\d*\.?\d+)\s*[x×]\s*(\d*\.?\d+)$/); if (x) return `${x[1]}${u};${x[2]}${u}`; // "400x300"
+  return v.replace(/(?<![\w.\/*:])(-?\d*\.?\d+)(?![\w.°:\/*])/g, `$1${u}`); // not "3x", "/3", "6s", "1:6", "250cm"
+}
 const emptyDoc = (): Document => ({ version: 0, units: 'm', layers: [{ id: 'layer0', name: 'Layer0', visible: true, color: '#7a8aa0' }], materials: [{ id: 'default', name: 'Default', color: '#F4F2EE', opacity: 1 }], entities: [], scenes: [], extensions: {} });
 
 export type ModKey = 'Control' | 'Alt' | 'Shift';
@@ -47,11 +64,40 @@ export class App {
   tools: Tool[] = [...BUILTIN_TOOLS];
   tool: Tool = this.tools[0];
   options: ToolContext['options'] = { circleSegments: 24, gridSnap: true, material: 'default', layer: 'layer0' };
-  display = { grid: true, axes: true, edges: true, figure: true, shadows: true };
+  display = { grid: true, axes: true, edges: true, figure: true, shadows: true, sectionPlanes: (() => { try { return localStorage.getItem('plannr.sectionPlanes') === '1'; } catch { return false; } })() };
   /** Face style and back edges are kept in this browser, like the theme. Hidden geometry on show is a view of this session. */
   faceStyle: FaceStyle = (() => { try { const v = localStorage.getItem('plannr.faceStyle'); return FACE_STYLES.some(s => s.id === v) ? v as FaceStyle : 'shaded'; } catch { return 'shaded'; } })();
   backEdges = (() => { try { return localStorage.getItem('plannr.backEdges') === '1'; } catch { return false; } })();
   hiddenGeometry = false;
+  /** The lens in degrees (SketchUp's field of view); 1 is the parallel projection. */
+  fov: number = (() => { try { const v = +(localStorage.getItem('plannr.fov') ?? 35); return v >= 1 && v <= 120 ? v : 35; } catch { return 35; } })();
+  private lens = 35;
+  get parallel() { return this.fov <= 1; }
+  setFov(fov: number) {
+    this.fov = Math.max(1, Math.min(120, fov)); if (this.fov > 1) this.lens = this.fov; this.scene.cam.setFov(this.fov);
+    try { localStorage.setItem('plannr.fov', String(this.fov)); } catch { /* storage blocked */ } this.refreshUI();
+  }
+  setProjection(parallel: boolean) { if (parallel !== this.parallel) this.setFov(parallel ? 1 : this.lens); }
+  async fovPrompt() {
+    const v = await this.promptText('Field of view in degrees (5 to 120; 35 is the usual lens)', String(this.parallel ? this.lens : this.fov)); if (v === null) return;
+    const n = parseFloat(v); if (n >= 5 && n <= 120) this.setFov(n); else this.toast('The field of view is a number of degrees between 5 and 120.');
+  }
+  /** Where the sun stands for the shadows. */
+  sun: Sun = (() => { const d: Sun = { byTime: false, hour: 14, month: 6, latitude: 51 }; try { return { ...d, ...JSON.parse(localStorage.getItem('plannr.sun') ?? '{}') }; } catch { return d; } })();
+  setSun(patch: Partial<Sun>, render = true) {
+    this.sun = { ...this.sun, ...patch }; try { localStorage.setItem('plannr.sun', JSON.stringify(this.sun)); } catch { /* storage blocked */ }
+    this.applySun(); if (render) this.tray.render();
+  }
+  private applySun() {
+    const s = this.sun; if (!s.byTime) { this.scene.setSun(new THREE.Vector3(20, 32, 14)); return; }
+    const rad = Math.PI / 180, day = (s.month - 1) * 30.4 + 15; // the middle of the month
+    const decl = 23.44 * rad * Math.sin((2 * Math.PI * (284 + day)) / 365), lat = s.latitude * rad, H = 15 * (s.hour - 12) * rad;
+    const el = Math.asin(Math.sin(lat) * Math.sin(decl) + Math.cos(lat) * Math.cos(decl) * Math.cos(H));
+    const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(lat) - Math.tan(decl) * Math.cos(lat)); // from south, towards west
+    const low = Math.max(el, 2 * rad); // below the horizon: a low, dim light instead of none
+    // north is −z (the Front view looks north), east +x
+    this.scene.setSun(new THREE.Vector3(-Math.cos(low) * Math.sin(az), Math.sin(low), Math.cos(low) * Math.cos(az)), el > 0 ? Math.min(1, 0.35 + Math.sin(el)) : 0.15);
+  }
   setFaceStyle(s: FaceStyle) { this.faceStyle = s; this.scene.setFaceStyle(s); this.scene.highlight(this.selection); try { localStorage.setItem('plannr.faceStyle', s); } catch { /* storage blocked */ } this.refreshUI(); renderHud(this, this.els['view-hud']); }
   setBackEdges(on: boolean) { this.backEdges = on; this.scene.setBackEdges(on); try { localStorage.setItem('plannr.backEdges', on ? '1' : '0'); } catch { /* storage blocked */ } this.refreshUI(); }
   async setHiddenGeometry(on: boolean) { this.hiddenGeometry = on; await this.refresh(); }
@@ -224,6 +270,7 @@ export class App {
     onPlugin(p => { this.tools.push(...(p.tools ?? [])); p.activate?.(this.pluginHost()); this.refreshUI(); });
     this.scene.expandIds = ids => { const out = new Set(ids); for (const id of ids) { const e = findEntity(this.doc, id); if (e?.kind === 'group') for (const { entity } of walk(e.entities)) out.add(entity.id); } return out; };
     this.scene.faceStyle = this.faceStyle; this.scene.backEdges = this.backEdges;
+    if (this.fov !== 35) this.scene.cam.setFov(this.fov); if (this.fov > 1) this.lens = this.fov; this.applySun();
     this.refreshUI(); this.setTool('select');
     if (this.embed) this.installEmbedBridge();
     this.boot();
@@ -271,23 +318,36 @@ export class App {
     this.doc = p.document; this.selection.clear(); this.enteredGroup = null;
     this.options.layer = this.doc.layers[0]?.id ?? 'layer0'; this.options.material = this.doc.materials[0]?.id ?? 'default';
     this.live?.close(); this.live = new Live(p.id);
-    this.live.onChanged = (version, label, source) => { if (version !== this.doc.version) this.refresh(source !== 'browser' ? `${label} (${source})` : undefined); };
+    this.knownVersion = p.document.version;
+    // our own changes come back here too: those are applied already (a second whole reload made every action lag)
+    this.live.onChanged = (version, label, source) => {
+      if (this.localBusy > 0) { this.remoteVersion = Math.max(this.remoteVersion, version); return; }
+      if (version > this.knownVersion) this.refresh(source !== 'browser' ? `${label} (${source})` : undefined);
+    };
     this.live.onCommand = (name, args) => this.handleCommand(name, args);
     this.live.onStatus = ok => this.setConn(ok);
     this.hideWelcome(); document.title = `${p.name} — Plannr`;
     await this.refresh(); this.zoomExtents();
   }
-  /** Reload document + compiled scene from the server. */
-  async refresh(notice?: string) {
+  /** The newest document version this browser has (or is applying): change notices up to it are our own. */
+  private knownVersion = 0; private localBusy = 0; private remoteVersion = 0; private reconcileTimer = 0;
+  /** Reload document + compiled scene from the server. `changes` (from a partial commit, undo or redo):
+   *  the scene is patched with just what changed and only the document is fetched. */
+  async refresh(notice?: string, changes?: Changes & { version: number }) {
     if (!this.projectId) return;
     const seq = ++this.compileSeq;
+    let patch = changes?.scene && changes.dirty ? changes : null;
+    if (changes) this.knownVersion = Math.max(this.knownVersion, changes.version);
+    if (patch) try { this.scene.patch(patch.scene!, patch.dirty!); } catch (e) { console.warn('patch failed, reloading the scene', e); patch = null; } // at once, against the document it was drawn from
+    if (!patch) clearTimeout(this.reconcileTimer);
     try {
-      const [p, c, h] = await Promise.all([api.getProject(this.projectId), api.compile(this.projectId, this.hiddenGeometry), api.history(this.projectId)]);
+      const [p, c, h] = await Promise.all([api.getProject(this.projectId), patch ? null : api.compile(this.projectId, this.hiddenGeometry), api.history(this.projectId)]);
       if (seq !== this.compileSeq) return;
-      this.doc = p.document; this.projectName = p.name; this.historyList = h;
+      this.doc = p.document; this.projectName = p.name; this.historyList = h; this.knownVersion = Math.max(this.knownVersion, p.document.version);
       const cur = h.findIndex(x => x.version === this.doc.version); this.canUndo = h.length > 0; this.canRedo = h.length > 0; void cur;
-      this.applyCompiled(c);
-      const compiledIds = [...this.selection].some(id => id.includes('#')) ? new Set(c.groups.flatMap(g => g.ids)) : null; // a selected part stays while it is still generated
+      if (c) this.applyCompiled(c);
+      if (patch?.reconcile) this.reconcileSoon();
+      const compiledIds = [...this.selection].some(id => id.includes('#')) ? new Set(this.scene.compiled?.groups.flatMap(g => g.ids) ?? []) : null; // a selected part stays while it is still generated
       for (const id of [...this.selection]) if (id.includes('#') ? !compiledIds!.has(id) : !findEntity(this.doc, id)) this.selection.delete(id);
       if (this.enteredGroup && !findEntity(this.doc, this.enteredGroup)) this.enteredGroup = null;
       this.scene.highlight(this.selection); this.saveState = `v${this.doc.version}`; this.online = true; this.setConn(true);
@@ -296,6 +356,31 @@ export class App {
     this.refreshUI(); this.emit('changed', this.doc);
   }
   private applyCompiled(c: CompiledScene) { this.scene.setCompiled(c); this.scene.highlight(this.selection); }
+  /** Plugin geometry can depend on neighbours a change didn't touch (a wall's corners): once the user pauses,
+   *  fetch the whole scene in the background and swap it in if nothing happened meanwhile. */
+  private reconcileSoon(delay = 1200) {
+    clearTimeout(this.reconcileTimer);
+    this.reconcileTimer = window.setTimeout(async () => {
+      if (!this.projectId) return;
+      if (this.previewWanted || this.localBusy > 0) { this.reconcileSoon(delay); return; }
+      const seq = this.compileSeq, version = this.doc.version;
+      try {
+        const c = await api.compile(this.projectId, this.hiddenGeometry);
+        if (seq !== this.compileSeq || version !== this.doc.version || c.version !== version) return;
+        if (this.previewWanted) { this.reconcileSoon(delay); return; }
+        this.applyCompiled(c);
+      } catch { /* offline: the next change refreshes */ }
+    }, delay);
+  }
+  /** Run a change made here (commit, undo, redo); change notices that arrive meanwhile are its own. */
+  private async local<T>(f: () => Promise<T>): Promise<T> {
+    this.localBusy++;
+    try { return await f(); }
+    finally {
+      this.localBusy--;
+      if (this.localBusy === 0 && this.remoteVersion > this.knownVersion) { this.remoteVersion = 0; void this.refresh(); } // someone else changed it meanwhile
+    }
+  }
   async rename(name: string) { this.projectName = name; document.title = `${name} — Plannr`; if (this.projectId) await api.renameProject(this.projectId, name); this.refreshUI(); }
   async renamePrompt() { const n = await this.promptText('Project name', this.projectName); if (n?.trim()) this.rename(n.trim()); }
   async duplicate() { if (!this.projectId) return; const p = await api.duplicateProject(this.projectId); await this.openProject(p.id); this.toast(`Duplicated as “${p.name}”`); }
@@ -317,14 +402,22 @@ export class App {
   }
 
   // ---- ops / undo ------------------------------------------------------------------
+  /** What a tool draws while a group is open for editing goes into that group (and sticks to its faces), as in SketchUp. */
+  inContext(ops: Op[]): Op[] {
+    const g = this.enteredGroup ? findEntity(this.doc, this.enteredGroup) : undefined; if (g?.kind !== 'group') return ops;
+    return ops.map(o => ['draw_line', 'draw_rectangle', 'draw_polygon', 'draw_circle', 'draw_arc', 'stretch', 'insert'].includes(o.op) && !(o as any).group ? { ...o, group: g.id } as Op : o);
+  }
   async commitOps(ops: Op[], label: string): Promise<OpResult[]> {
     if (!this.projectId || !ops.length) return [];
     this.previewNext = null; this.previewWanted = false; this.previewSeq++; this.previewFull = false; // the preview stays on screen until the refreshed scene replaces it (no flash of the old state)
-    try {
-      const r = await api.ops(this.projectId, ops, label);
-      await this.refresh();
-      return r.results;
-    } catch (e: any) { this.toast(e.message); await this.refresh(); return []; }
+    const id = this.projectId;
+    return this.local(async () => {
+      try {
+        const r = await api.opsPartial(id, ops, label, this.hiddenGeometry);
+        await this.refresh(undefined, r);
+        return r.results;
+      } catch (e: any) { this.toast(String(e.message).replace(/ \[[0-9a-f-]{36}\]$/, '')); await this.refresh(); return []; }
+    });
   }
   /** Live result of a tool. One request at a time, always for the newest ops: a slow engine reply never piles
    *  up behind others. The engine sends only the changed objects, drawn over the model (nothing else is rebuilt). */
@@ -353,8 +446,8 @@ export class App {
     this.scene.setPreview(null);
     if (this.previewFull && this.projectId) { this.previewFull = false; const seq = this.previewSeq; api.compile(this.projectId, this.hiddenGeometry).then(c => { if (seq === this.previewSeq && !this.previewWanted) this.applyCompiled(c); }).catch(() => {}); }
   }
-  async undo() { if (!this.projectId) return; try { const r = await api.undo(this.projectId); this.toast(`Undo ${r.label}`); await this.refresh(); } catch (e: any) { this.toast(e.message); } }
-  async redo() { if (!this.projectId) return; try { const r = await api.redo(this.projectId); this.toast(`Redo ${r.label}`); await this.refresh(); } catch (e: any) { this.toast(e.message); } }
+  async undo() { const id = this.projectId; if (!id) return; await this.local(async () => { try { const r = await api.undo(id, this.hiddenGeometry); this.toast(`Undo ${r.label}`); await this.refresh(undefined, r); } catch (e: any) { this.toast(e.message); } }); }
+  async redo() { const id = this.projectId; if (!id) return; await this.local(async () => { try { const r = await api.redo(id, this.hiddenGeometry); this.toast(`Redo ${r.label}`); await this.refresh(undefined, r); } catch (e: any) { this.toast(e.message); } }); }
 
   // ---- selection / groups -------------------------------------------------------------
   private docIds: { doc: Document | null; ids: Set<string> } = { doc: null, ids: new Set() };
@@ -420,6 +513,86 @@ export class App {
     const r = await this.commitOps([{ op: 'make_component', ids: [...this.selection], name }], 'Make component'); if (r[0]?.created?.[0]) this.select([r[0].created[0]]);
   }
   placeComponent(definition: string) { placeComponentTool.definition = definition; this.setTool('place'); }
+  /** Everything that hangs together with the selected faces and edges. */
+  selectConnected() { this.select([...new Set([...this.selection].flatMap(id => connectedTo(this.ctx, id)))]); }
+  /** Everything beside the selection (the top level, or the open group) on the same tags. */
+  selectSameTag() {
+    const tags = new Set([...this.selection].map(id => findEntity(this.doc, id)?.layer)); const g = this.enteredGroup ? findEntity(this.doc, this.enteredGroup) : null;
+    this.select((g?.kind === 'group' ? g.entities : this.doc.entities).filter((e: Entity) => tags.has(e.layer)).map(e => e.id));
+  }
+  // ---- clipboard, lock, import and export --------------------------------------------------------------
+  private clipMem: { entities: Entity[]; anchor: Vec3; group: string | null } | null = null;
+  /** What was copied last, in this window or another one. */
+  private get clipboard(): { entities: Entity[]; anchor: Vec3; group: string | null } | null { try { return JSON.parse(localStorage.getItem('plannr.clipboard') ?? 'null') ?? this.clipMem; } catch { return this.clipMem; } }
+  copySelection(): boolean {
+    const ents = [...new Set([...this.selection].map(id => findEntity(this.doc, id.split('#')[0])).filter((e): e is Entity => !!e))]; if (!ents.length) return false;
+    const b = selectionBounds(this.ctx, this.selection); // held by its lowest corner when pasted
+    const clip = { entities: JSON.parse(JSON.stringify(ents)) as Entity[], anchor: (b.isEmpty() ? [0, 0, 0] : [b.min.x, b.min.y, b.min.z]) as Vec3, group: this.enteredGroup };
+    this.clipMem = clip; try { localStorage.setItem('plannr.clipboard', JSON.stringify(clip)); } catch { try { localStorage.removeItem('plannr.clipboard'); } catch { /* storage blocked */ } }
+    this.toast(`Copied ${ents.length === 1 ? 'one entity' : `${ents.length} entities`}. Paste with ${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}V.`); return true;
+  }
+  async cutSelection() { if (this.copySelection()) await this.deleteSelection(); }
+  /** Paste: the copy follows the cursor until a click puts it down; in place, it lands where the original was. */
+  async paste(inPlace = false) {
+    const c = this.clipboard; if (!c) { this.toast('Nothing to paste: copy something first.'); return; }
+    // copied inside the group that is open now: its coordinates are that group's own
+    const entities = c.entities; const local = !!c.group && c.group === this.enteredGroup;
+    if (!inPlace) { pasteTool.clip = { entities, anchor: c.anchor, local }; this.setTool('paste'); return; }
+    const r = await this.commitOps(this.inContext([{ op: 'insert', entities, ...(local ? { local } : {}) } as Op]), 'Paste in place'); if (r[0]?.created?.length) this.select(r[0].created);
+  }
+  get lockedIds(): string[] { return [...walk(this.doc.entities)].filter(x => x.entity.locked === true).map(x => x.entity.id); }
+  async lockSelection(locked = true) {
+    const ids = [...new Set([...this.selection].map(id => id.split('#')[0]))]; if (!ids.length) return;
+    await this.commitOps([{ op: 'set_locked', ids, locked }], locked ? 'Lock' : 'Unlock'); this.toast(locked ? 'Locked: it can be selected and copied, not changed.' : 'Unlocked.');
+  }
+  async unlockAll() { const ids = this.lockedIds; if (ids.length) await this.commitOps([{ op: 'set_locked', ids, locked: false }], 'Unlock all'); }
+  exportObj() { const c = this.scene.compiled; if (c) download(`${this.projectName}.obj`, toOBJ(c), 'text/plain'); }
+  exportStl() { const c = this.scene.compiled; if (c) download(`${this.projectName}.stl`, toSTL(c), 'model/stl'); }
+  /** Import an OBJ or STL file as one group; triangles that lie in one plane are joined into faces. */
+  importModel() {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.obj,.stl';
+    inp.onchange = async () => { const f = inp.files?.[0]; if (f) await this.importFile(f.name, await f.arrayBuffer()); };
+    inp.click();
+  }
+  async importFile(name: string, data: ArrayBuffer) {
+    const stl = /\.stl$/i.test(name);
+    const unit = (await this.promptText('Unit of the file: mm, cm or m', stl ? 'mm' : 'm'))?.trim().toLowerCase(); if (!unit) return;
+    const scale = ({ mm: 0.001, cm: 0.01, m: 1 } as Record<string, number>)[unit]; if (!scale) { this.toast('The unit is mm, cm or m.'); return; }
+    let faces: Vec3[][] = [];
+    try { faces = stl ? parseSTL(data, scale) : parseOBJ(new TextDecoder().decode(data), scale); } catch (e: any) { this.toast(`Could not read ${name}: ${e.message ?? e}`); return; }
+    if (!faces.length) { this.toast(`No faces found in ${name}.`); return; }
+    if (faces.length > 150000) { this.toast(`${name} has ${faces.length} faces: too many to import (150 000 at most).`, 6000); return; }
+    const r = await this.commitOps([{ op: 'insert', entities: [meshGroup(name.replace(/\.[^.]+$/, ''), faces)], merge: true }], 'Import');
+    if (r[0]?.created?.length) { this.select(r[0].created); this.zoomSelection(); }
+  }
+  /** The unit lengths are shown and typed in, and how many decimals; stored with the document. */
+  async setUnits(unit: string, digits?: number) {
+    if (!this.projectId || !UNITS[unit]) return;
+    await api.putDocument(this.projectId, { ...this.doc, units: unit, precision: digits ?? UNITS[unit].digits }); await this.refresh('Units');
+  }
+  private syncUnits() {
+    const was = `${lengthUnit.name}/${lengthUnit.digits}`; setLengthUnit(this.doc.units, this.doc.precision as number | undefined);
+    if (was !== `${lengthUnit.name}/${lengthUnit.digits}`) this.scene.relabel();
+  }
+  /** Intersect Faces: edges where the selected faces cross other faces of the same shape, dividing both. */
+  async intersectFaces() {
+    const faces = [...this.selection].filter(id => findEntity(this.doc, id)?.kind === 'face');
+    if (!faces.length) { this.toast('Intersect Faces works on drawn faces: select them first (open a group to reach the faces inside it).', 5000); return; }
+    const r = await this.commitOps([{ op: 'intersect_faces', ids: faces }], 'Intersect faces');
+    const edges = (r[0]?.created ?? []).filter(id => findEntity(this.doc, id)?.kind === 'edge'); if (edges.length) this.select(edges);
+  }
+  /** Turn the selected faces inside out: the front becomes the back (each side keeps its material). */
+  async reverseFaces() {
+    const ops: Op[] = []; for (const id of this.selection) { const e = findEntity(this.doc, id); if (e?.kind === 'face') ops.push({ op: 'update_entity', id, patch: { outer: [...e.outer].reverse(), holes: e.holes.map(h => [...h].reverse()), material: e.backMaterial ?? null, backMaterial: e.material ?? null } }); }
+    if (ops.length) await this.commitOps(ops, 'Reverse faces'); else this.toast('Reverse Faces works on drawn faces: select them first.');
+  }
+  /** Right-click: the menu for what is under the cursor (it becomes the selection unless it already is part of it). */
+  private contextMenu(e: { clientX: number; clientY: number }, id?: string) {
+    if (this.tool.busy?.()) return;
+    const p = id ? null : this.scene.pick(e); const hit = id ?? (p ? this.resolve(p.id) : null);
+    if (hit && !this.selection.has(hit)) this.select([hit]);
+    showContextMenu(this, e.clientX, e.clientY);
+  }
   async explodeSelection() { const ops: Op[] = [...this.selection].filter(id => ['group', 'instance'].includes(findEntity(this.doc, id)?.kind ?? '')).map(id => ({ op: 'explode', id })); if (ops.length) { await this.commitOps(ops, 'Explode'); this.select([]); } }
 
   // ---- view ----------------------------------------------------------------------------------
@@ -433,19 +606,30 @@ export class App {
   }
   zoomSelection() { this.selection.size ? this.zoomTo([...this.selection]) : this.zoomExtents(); }
   setView(v: ViewName) { this.setCameraController(null); this.rememberView(); this.scene.cam.setView(v, this.scene.bounds); this.rememberViewSoon(); }
-  async saveScene() { const name = await this.promptText('Scene name', `Scene ${this.doc.scenes.length + 1}`); if (!name) return; const active = this.activeSections(); await this.putScenes([...this.doc.scenes, { id: crypto.randomUUID(), name, camera: this.scene.cam.serialize(), section: active[0] ?? null, sections: active }], 'Add scene'); }
+  /** What a scene keeps: the view, the active section planes, which tags show, the face style, the lens and the sun. */
+  private sceneState() { const active = this.activeSections(); return { camera: this.scene.cam.serialize(), section: active[0] ?? null, sections: active, layers: Object.fromEntries(this.doc.layers.map(l => [l.id, l.visible])), faceStyle: this.faceStyle, fov: this.fov, sun: { ...this.sun } }; }
+  async saveScene() { const name = await this.promptText('Scene name', `Scene ${this.doc.scenes.length + 1}`); if (!name) return; await this.putScenes([...this.doc.scenes, { id: crypto.randomUUID(), name, ...this.sceneState() }], 'Add scene'); }
   private activeSections(): string[] { return [...walk(this.doc.entities)].map(x => x.entity).filter(e => e.kind === 'section' && e.active).map(e => e.id); }
   /** The planes a scene keeps active (older scenes stored a single one). */
   private sceneSections(s: Scene): string[] { return s.sections ?? (s.section ? [s.section] : []); }
-  async updateScene(id: string) { const active = this.activeSections(); await this.putScenes(this.doc.scenes.map(s => s.id === id ? { ...s, camera: this.scene.cam.serialize(), section: active[0] ?? null, sections: active } : s), 'Update scene'); }
+  async updateScene(id: string) { await this.putScenes(this.doc.scenes.map(s => s.id === id ? { ...s, ...this.sceneState() } : s), 'Update scene'); }
   async removeScene(id: string) { await this.putScenes(this.doc.scenes.filter(s => s.id !== id), 'Remove scene'); }
   private async putScenes(scenes: Document['scenes'], label: string) { if (!this.projectId) return; await api.putDocument(this.projectId, { ...this.doc, scenes }); await this.refresh(label); }
-  restoreScene(id: string) { const s = this.doc.scenes.find(s => s.id === id); if (!s) return; this.rememberView(); this.scene.cam.restore(s.camera); this.rememberViewSoon(); const ops: Op[] = []; const keep = this.sceneSections(s); for (const { entity } of walk(this.doc.entities)) if (entity.kind === 'section' && entity.active !== keep.includes(entity.id)) ops.push({ op: 'update_section', id: entity.id, active: keep.includes(entity.id) }); if (ops.length) this.commitOps(ops, 'Scene section'); }
+  restoreScene(id: string) {
+    const s = this.doc.scenes.find(s => s.id === id); if (!s) return; this.rememberView();
+    if (s.fov && s.fov !== this.fov) this.setFov(s.fov);
+    if (s.faceStyle && s.faceStyle !== this.faceStyle && FACE_STYLES.some(f => f.id === s.faceStyle)) this.setFaceStyle(s.faceStyle as FaceStyle);
+    if (s.sun) this.setSun(s.sun);
+    this.scene.cam.restore(s.camera); this.rememberViewSoon(); const ops: Op[] = []; const keep = this.sceneSections(s);
+    for (const l of this.doc.layers) if (s.layers && s.layers[l.id] !== undefined && s.layers[l.id] !== l.visible) ops.push({ op: 'update_layer', id: l.id, visible: s.layers[l.id] });
+    for (const { entity } of walk(this.doc.entities)) if (entity.kind === 'section' && entity.active !== keep.includes(entity.id)) ops.push({ op: 'update_section', id: entity.id, active: keep.includes(entity.id) }); if (ops.length) this.commitOps(ops, 'Scene');
+  }
   toggleDisplay(k: keyof App['display']) {
     this.display[k] = !this.display[k];
     this.scene.grid.visible = this.display.grid; this.scene.axes.visible = this.display.axes; this.scene.figure.visible = this.display.figure;
     this.scene.edgesVisible = this.display.edges; if (this.scene.compiled) this.scene.setCompiled(this.scene.compiled); this.scene.highlight(this.selection);
     this.scene.renderer.shadowMap.enabled = this.display.shadows; this.scene.ground.receiveShadow = this.display.shadows;
+    this.scene.setSectionPlanesVisible(this.display.sectionPlanes); if (k === 'sectionPlanes') { try { localStorage.setItem('plannr.sectionPlanes', this.display.sectionPlanes ? '1' : '0'); } catch { /* storage blocked */ } this.els.toolbar.querySelector('[data-tool="sectiondisplay"]')?.classList.toggle('active', this.display.sectionPlanes); }
     this.refreshUI();
   }
 
@@ -466,7 +650,7 @@ export class App {
   /** Modifier pressed: switch to its tool until the key comes back up. */
   private beginTempTool(key: ModKey): boolean {
     const id = this.modifierTools[key]; if (!id || this.temp || this.pointerDown) return false;
-    if (this.tool.id === id || this.tool.busy?.()) return false;
+    if (this.tool.id === id || this.tool.busy?.() || this.tool.ownKeys?.includes(key)) return false;
     const prev = this.tool; this.setTool(id); if (this.tool.id !== id) return false;
     this.temp = { key, prev };
     this.els.statusbar.querySelector('.hint')!.textContent = `${this.tool.label} — release ${MOD_LABEL[key]} to return to ${prev.label}.`;
@@ -501,10 +685,10 @@ export class App {
     const app = this;
     return {
       scene: this.scene, doc: () => app.doc,
-      ops: (ops, label) => app.commitOps(ops, label), preview: (ops) => app.preview(ops),
+      ops: (ops, label) => app.commitOps(app.inContext(ops), label), preview: (ops) => app.preview(app.inContext(ops)),
       select: (ids, mode) => app.select(ids, mode), selection: () => app.selection, resolve: (id) => app.resolve(id),
       setHint: (t) => { app.els.statusbar.querySelector('.hint')!.textContent = t; },
-      setVCB: (v, label) => { const vcb = app.els.statusbar.querySelector<HTMLInputElement>('.vcb input')!; if (document.activeElement !== vcb) vcb.value = v; if (label) app.els.statusbar.querySelector('.vcb label')!.textContent = label; },
+      setVCB: (v, label) => { const vcb = app.els.statusbar.querySelector<HTMLInputElement>('.vcb input')!; const lab = app.els.statusbar.querySelector('.vcb label')!; if (label) lab.textContent = label; if (document.activeElement !== vcb) vcb.value = shownLength(v, lab.textContent ?? ''); },
       snap: (ev, opts) => app.snap(ev, opts), setTool: (id) => app.setTool(id),
       options: this.options, toast: (t) => app.toast(t), prompt: (l, v) => app.promptText(l, v), confirm: (t, ok, danger) => app.confirm(t, ok, danger),
       get lock() { return app.lock; }, set lock(v: AxisLock) { app.lock = v; },
@@ -512,7 +696,9 @@ export class App {
       targets: (accept) => [...app.selection].filter(id => !accept || accept(id)),
       pickTarget: (ev, opts) => {
         const t = new Set(opts?.anywhere ? [] : [...app.selection].filter(id => !opts?.accept || opts.accept(id)));
-        return app.scene.pick(ev, { facesOnly: opts?.facesOnly, only: (id) => app.inDocument(id) && (!t.size || t.has(app.resolve(id))) });
+        // with `anywhere`, `accept` alone decides (what it turns down is see-through)
+        const anyOk = (id: string) => !opts?.anywhere || !opts.accept || opts.accept(id);
+        return app.scene.pick(ev, { facesOnly: opts?.facesOnly, only: (id) => app.inDocument(id) && anyOk(id) && (!t.size || t.has(app.resolve(id))) });
       },
       inDocument: (id) => app.inDocument(id),
       enterGroup: (id: string) => app.enterGroup(app.resolve(id) === id ? id : app.resolve(id)),
@@ -566,7 +752,7 @@ export class App {
     const plane = sl?.plane ?? opts.plane ?? GROUND; this.lastPlane = plane;
     // a fingertip is far less precise than a mouse: snap from further away
     const k = ((ev as { pointerType?: string }).pointerType === 'touch' ? 2.4 : 1) * (opts.reach ?? 1);
-    const step = () => (sc.cam.distance > 60 ? 0.1 : 0.01);
+    const step = () => (sc.cam.range > 60 ? 0.1 : 0.01);
     type Ray = { p: THREE.Vector3; d: THREE.Vector3; kind: SnapKind; axis?: 'x' | 'y' | 'z'; color: number; ref?: THREE.Vector3; id?: string };
     // the line the point is held on: an axis (arrow keys) or the inference Shift holds
     const held: Ray | null = opts.lock && from ? { p: from, d: AXIS[opts.lock], kind: 'axis', axis: opts.lock, color: AXIS_COLOR[opts.lock], ref: from }
@@ -726,7 +912,7 @@ export class App {
       case 'previous_view': this.previousView(); await new Promise(r => setTimeout(r, 400)); return { camera: cam.serialize() };
       case 'next_view': this.nextView(); await new Promise(r => setTimeout(r, 400)); return { camera: cam.serialize() };
       case 'zoom_window': this.setCameraController(null); this.rememberView(); zoomWindow(this.ctx, a.x0 ?? 0, a.y0 ?? 0, a.x1 ?? 1, a.y1 ?? 1); await new Promise(r => setTimeout(r, 450)); this.rememberView(); return { camera: cam.serialize() };
-      case 'set_options': for (const k of ['grid', 'axes', 'edges', 'figure', 'shadows'] as const) { const key = ({ grid: 'gridVisible', axes: 'axesVisible', edges: 'edgesVisible', figure: 'figureVisible', shadows: 'shadows' })[k]; if (a[key] !== undefined && !!a[key] !== this.display[k]) this.toggleDisplay(k); }
+      case 'set_options': for (const k of ['grid', 'axes', 'edges', 'figure', 'shadows', 'sectionPlanes'] as const) { const key = ({ grid: 'gridVisible', axes: 'axesVisible', edges: 'edgesVisible', figure: 'figureVisible', shadows: 'shadows', sectionPlanes: 'sectionPlanesVisible' })[k]; if (a[key] !== undefined && !!a[key] !== this.display[k]) this.toggleDisplay(k); }
         if (Array.isArray(a.xray)) { this.scene.setXray(a.xray.map(String)); this.emit('xray', this.scene.xrayMaterials); }
         if (a.faceStyle !== undefined) { if (!FACE_STYLES.some(s => s.id === a.faceStyle)) throw new Error(`unknown face style ${a.faceStyle}`); this.setFaceStyle(a.faceStyle); }
         if (a.backEdges !== undefined) this.setBackEdges(!!a.backEdges);
@@ -761,8 +947,12 @@ export class App {
   // ---- input ---------------------------------------------------------------------------------------
   private bindInput() {
     const canvas = this.scene.renderer.domElement; canvas.tabIndex = 0;
-    let mid: { x: number; y: number; pan: boolean } | null = null;
+    let mid: { x: number; y: number; pan: boolean; x0: number; y0: number } | null = null;
     canvas.addEventListener('contextmenu', e => e.preventDefault());
+    // a text label is clicked like the thing it is: select it, or open its menu
+    const labelId = (e: Event) => (e.target as HTMLElement).closest<HTMLElement>('.vlabel.static[data-id]')?.dataset.id;
+    this.els.labels.addEventListener('click', e => { const id = labelId(e); if (id && this.tool.id === 'select') this.select([id], e.shiftKey ? 'add' : 'replace'); });
+    this.els.labels.addEventListener('contextmenu', e => { const id = labelId(e); if (!id) return; e.preventDefault(); this.contextMenu(e, id); });
     // touch: one finger drives the tool, and a press-drag-release completes a two-click tool (rectangle,
     // circle, line, push/pull, move…); two fingers orbit (drag) and zoom (pinch), three pan — and a gesture
     // never cancels what the tool is in the middle of. The first finger is held back for a moment so the
@@ -797,7 +987,7 @@ export class App {
         return;
       }
       if (this.camCtl?.onPointerDown?.(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic */ } e.preventDefault(); return; }
-      if (e.button === 1 || e.button === 2) { mid = { x: e.clientX, y: e.clientY, pan: e.shiftKey }; canvas.setPointerCapture(e.pointerId); e.preventDefault(); return; }
+      if (e.button === 1 || e.button === 2) { mid = { x: e.clientX, y: e.clientY, pan: e.shiftKey, x0: e.clientX, y0: e.clientY }; canvas.setPointerCapture(e.pointerId); e.preventDefault(); return; }
       this.tool.onDown?.(e, this.ctx); this.rememberClick();
     });
     canvas.addEventListener('pointermove', e => {
@@ -834,7 +1024,13 @@ export class App {
         return;
       }
       this.pointerDown = false;
-      if (this.camCtl?.onPointerUp?.(e)) return; if (mid && (e.button === 1 || e.button === 2)) { mid = null; this.sendState(); this.rememberViewSoon(); return; } this.tool.onUp?.(e, this.ctx); });
+      if (this.camCtl?.onPointerUp?.(e)) return; if (mid && (e.button === 1 || e.button === 2)) {
+        // the right button without a drag: the context menu (a drag orbits)
+        const still = e.button === 2 && Math.hypot(e.clientX - mid.x0, e.clientY - mid.y0) < 4; mid = null;
+        if (still) this.contextMenu(e); else { this.sendState(); this.rememberViewSoon(); }
+        return;
+      }
+      this.tool.onUp?.(e, this.ctx); });
     canvas.addEventListener('pointercancel', e => {
       this.pointerDown = false; touches.delete(e.pointerId);
       if (pending) { clearTimeout(pending.timer); pending = null; }
@@ -846,7 +1042,7 @@ export class App {
     canvas.addEventListener('dblclick', e => this.tool.onDblClick?.(e, this.ctx));
     canvas.addEventListener('wheel', e => { e.preventDefault(); if (this.camCtl?.onWheel?.(e)) return; this.rememberViewSoon(); const towards = this.scene.pick(e, { facesOnly: true })?.point ?? this.scene.groundPoint(e) ?? undefined; this.scene.cam.dolly(Math.pow(1.0015, e.deltaY), towards); }, { passive: false });
     const vcb = this.els.statusbar.querySelector<HTMLInputElement>('.vcb input')!;
-    vcb.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { this.tool.onVCB?.(vcb.value.trim(), this.ctx); vcb.blur(); canvas.focus(); } if (e.key === 'Escape') { vcb.blur(); canvas.focus(); } });
+    vcb.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { this.tool.onVCB?.(typedLength(vcb.value.trim(), this.els.statusbar.querySelector('.vcb label')?.textContent ?? ''), this.ctx); vcb.blur(); canvas.focus(); } if (e.key === 'Escape') { vcb.blur(); canvas.focus(); } });
     window.addEventListener('keydown', e => {
       const t = e.target as HTMLElement; if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
       if (this.camCtl?.onKey?.(e, true)) { e.preventDefault(); return; }
@@ -861,6 +1057,9 @@ export class App {
       const mod = e.metaKey || e.ctrlKey; const k = e.altKey && e.code.startsWith('Key') ? e.code.slice(3).toLowerCase() : e.key.toLowerCase(); // ⌥+letter works as the letter (walking mode uses bare letters to move)
       if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
       if (mod && k === 'a') { e.preventDefault(); this.selectAll(); return; }
+      if (mod && k === 'c' && this.selection.size) { e.preventDefault(); this.copySelection(); return; }
+      if (mod && k === 'x' && this.selection.size) { e.preventDefault(); this.cutSelection(); return; }
+      if (mod && k === 'v') { e.preventDefault(); this.paste(e.shiftKey); return; }
       if (mod && k === 'e') { e.preventDefault(); e.shiftKey ? this.unhideAll() : this.hideSelection(); return; }
       if (e.altKey && !mod && /^Digit[1-5]$/.test(e.code)) { e.preventDefault(); this.setFaceStyle(FACE_STYLES[+e.code.slice(5) - 1].id); return; }
       if (mod && (k === 'n' || k === 'o')) { e.preventDefault(); this.showWelcome(); return; }
@@ -876,7 +1075,7 @@ export class App {
       if (e.key === 'Escape') { if (this.lock) { this.setLock(null); return; } if (this.selection.size) this.select([]); else this.exitGroup(); return; }
       if (e.shiftKey && k === 'z') { e.preventDefault(); this.zoomExtents(); return; }
       if (k === 'g' && this.selection.size) { this.groupSelection(); return; }
-      if (/^[\d.,;-]$/.test(e.key)) { vcb.focus(); vcb.value = ''; return; }
+      if (/^[\d.,;\-\[<*\/]$/.test(e.key)) { vcb.focus(); vcb.value = ''; return; } // (also "[x;y;z]", "<x;y;z>", "*3", "/3")
       if (e.key === ' ') { e.preventDefault(); this.setTool('select'); return; }
       const t2 = this.tools.find(t => t.shortcut === k); if (t2) this.setTool(t2.id);
     });
@@ -889,7 +1088,7 @@ export class App {
   }
 
   // ---- ui -----------------------------------------------------------------------------------------------
-  refreshUI() { renderMenubar(this, this.els.menubar); renderToolbar(this, this.els.toolbar); renderHud(this, this.els['view-hud']); renderToolOptions(this, this.els['tool-options']); this.tray.render(); if (this.embed && this.embedPlugins.size) this.tray.renderFloating(this.els['embed-panel'], this.embedPlugins); }
+  refreshUI() { this.syncUnits(); renderMenubar(this, this.els.menubar); renderToolbar(this, this.els.toolbar); renderHud(this, this.els['view-hud']); renderToolOptions(this, this.els['tool-options']); this.tray.render(); if (this.embed && this.embedPlugins.size) this.tray.renderFloating(this.els['embed-panel'], this.embedPlugins); }
   private toastTimer: any = null;
   toast(text: string, ms = 2600) { const t = this.els.toast; t.textContent = text; t.classList.add('show'); clearTimeout(this.toastTimer); this.toastTimer = setTimeout(() => t.classList.remove('show'), ms); }
   promptText(label: string, value = ''): Promise<string | null> { return promptText(label, value); }

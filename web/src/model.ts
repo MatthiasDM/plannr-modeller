@@ -9,8 +9,8 @@ export interface FaceEntity extends Base { kind: 'face'; outer: Vec3[]; holes: V
 export interface EdgeEntity extends Base { kind: 'edge'; a: Vec3; b: Vec3 }
 export interface GroupEntity extends Base { kind: 'group'; name: string; transform: number[]; entities: Entity[] }
 export interface GuideEntity extends Base { kind: 'guide'; point: Vec3; direction?: Vec3 | null }
-export interface DimensionEntity extends Base { kind: 'dimension'; a: Vec3; b: Vec3; offset: Vec3 }
-export interface TextEntity extends Base { kind: 'text'; position: Vec3; text: string; anchor?: Vec3 | null }
+export interface DimensionEntity extends Base { kind: 'dimension'; a: Vec3; b: Vec3; offset: Vec3; style?: 'radius' | 'diameter' | null }
+export interface TextEntity extends Base { kind: 'text'; position: Vec3; text: string; anchor?: Vec3 | null; screen?: [number, number] | null }
 export interface SectionEntity extends Base { kind: 'section'; origin: Vec3; normal: Vec3; active: boolean }
 export interface CustomEntity extends Base { kind: 'custom'; type: string; data: unknown }
 export interface InstanceEntity extends Base { kind: 'instance'; definition: string; transform: number[]; name?: string }
@@ -18,7 +18,13 @@ export type Entity = FaceEntity | EdgeEntity | GroupEntity | GuideEntity | Dimen
 export interface ComponentDefinition { id: string; name: string; description?: string; entities: Entity[] }
 export type EntityKind = Entity['kind'];
 
-export interface Scene { id: string; name: string; camera: number[]; section?: string | null; sections?: string[] }
+/** Where the sun stands: by the hour of a day of the year at a latitude, or the fixed studio light. */
+export interface Sun { byTime: boolean; hour: number; month: number; latitude: number }
+export interface Scene {
+  id: string; name: string; camera: number[]; section?: string | null; sections?: string[];
+  /** What else the scene brings back: which tags show, the face style, the lens (1 = parallel projection) and the sun. */
+  layers?: Record<string, boolean>; faceStyle?: string; fov?: number; sun?: Sun;
+}
 export interface Document {
   version: number; units: string; layers: Layer[]; materials: Material[]; entities: Entity[]; scenes: Scene[];
   components?: ComponentDefinition[];
@@ -26,17 +32,19 @@ export interface Document {
 }
 
 export type Op =
-  | { op: 'draw_line'; points: Vec3[]; close?: boolean; layer?: string }
-  | { op: 'draw_rectangle'; corner: Vec3; opposite: Vec3; normal: Vec3; u?: Vec3; layer?: string }
-  | { op: 'draw_polygon'; points: Vec3[]; layer?: string }
-  | { op: 'draw_circle'; center: Vec3; normal: Vec3; radius: number; segments?: number; layer?: string }
-  | { op: 'push_pull'; face: string; distance: number }
+  | { op: 'draw_line'; points: Vec3[]; close?: boolean; layer?: string; group?: string }
+  | { op: 'draw_rectangle'; corner: Vec3; opposite: Vec3; normal: Vec3; u?: Vec3; layer?: string; group?: string }
+  | { op: 'draw_polygon'; points: Vec3[]; layer?: string; group?: string }
+  | { op: 'draw_circle'; center: Vec3; normal: Vec3; radius: number; segments?: number; layer?: string; group?: string }
+  | { op: 'push_pull'; face: string; distance: number; newFace?: boolean }
   | { op: 'offset'; face: string; distance: number }
   | { op: 'move'; ids: string[]; delta: Vec3 }
+  | { op: 'stretch'; ids?: string[]; points?: Vec3[]; delta?: Vec3; rotate?: { origin: Vec3; axis: Vec3; angle: number }; scale?: { origin: Vec3; factors: Vec3 }; group?: string }
   | { op: 'rotate'; ids: string[]; origin: Vec3; axis: Vec3; angle: number }
   | { op: 'scale'; ids: string[]; origin: Vec3; factors: Vec3 }
-  | { op: 'copy'; ids: string[]; delta: Vec3; count?: number }
+  | { op: 'copy'; ids: string[]; delta?: Vec3; rotate?: { origin: Vec3; axis: Vec3; angle: number }; count?: number }
   | { op: 'erase'; ids: string[] }
+  | { op: 'intersect_faces'; ids: string[] }
   | { op: 'paint'; ids: string[]; material: string; side?: 'front' | 'back' | 'both' }
   | { op: 'set_layer'; ids: string[]; layer: string }
   | { op: 'make_group'; ids: string[]; name?: string }
@@ -47,17 +55,20 @@ export type Op =
   | { op: 'add_material'; name: string; color: string; opacity?: number }
   | { op: 'update_material'; id: string; name?: string; color?: string; opacity?: number }
   | { op: 'add_guide'; point: Vec3; direction?: Vec3 }
-  | { op: 'add_dimension'; a: Vec3; b: Vec3; offset: Vec3 }
-  | { op: 'add_text'; position: Vec3; text: string; anchor?: Vec3 }
+  | { op: 'add_dimension'; a: Vec3; b: Vec3; offset: Vec3; style?: 'radius' | 'diameter' }
+  | { op: 'add_text'; position?: Vec3; text: string; anchor?: Vec3; screen?: [number, number] }
   | { op: 'add_section'; origin: Vec3; normal: Vec3; active?: boolean }
   | { op: 'update_section'; id: string; origin?: Vec3; normal?: Vec3; active?: boolean }
   | { op: 'slice_section'; id: string; layer?: string; name?: string }
   | { op: 'update_entity'; id: string; patch: Record<string, unknown> }
   | { op: 'set_hidden'; ids: string[]; hidden: boolean }
+  | { op: 'set_locked'; ids: string[]; locked: boolean }
+  | { op: 'insert'; entities: Entity[]; delta?: Vec3; group?: string; merge?: boolean; local?: boolean }
+  | { op: 'boolean'; mode: 'union' | 'subtract' | 'intersect' | 'split'; target: string; tools: string[]; keepTools?: boolean; material?: string }
   | { op: 'measure'; a: Vec3; b: Vec3 }
   | { op: 'set_extension'; plugin: string; data: unknown }
   | { op: 'custom'; type: string; data: unknown }
-  | { op: 'draw_arc'; center?: Vec3; start?: Vec3; end?: Vec3; through?: Vec3[]; from?: Vec3; to?: Vec3; bulge?: number; normal?: Vec3; segments?: number; pie?: boolean; closeChord?: boolean; layer?: string }
+  | { op: 'draw_arc'; center?: Vec3; start?: Vec3; end?: Vec3; through?: Vec3[]; from?: Vec3; to?: Vec3; bulge?: number; normal?: Vec3; segments?: number; pie?: boolean; closeChord?: boolean; layer?: string; group?: string }
   | { op: 'follow_me'; face: string; path?: Vec3[]; pathEdges?: string[] }
   | { op: 'mirror'; ids: string[]; origin: Vec3; normal: Vec3; copy?: boolean }
   | { op: 'make_component'; ids: string[]; name: string; description?: string }
@@ -97,8 +108,16 @@ export const KIND_LABEL: Record<EntityKind, string> = {
 export function fmt(n: number, digits = 2): string {
   return n.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: digits });
 }
-export const fmtM = (n: number) => `${fmt(n, 3)} m`;
-export const fmtM2 = (n: number) => `${fmt(n)} m²`;
+/** How lengths are shown and typed: the document's unit and decimals. (The model itself is always in metres.) */
+export const lengthUnit = { name: 'm', factor: 1, digits: 3 };
+export const UNITS: Record<string, { factor: number; digits: number }> = { m: { factor: 1, digits: 3 }, cm: { factor: 100, digits: 1 }, mm: { factor: 1000, digits: 0 } };
+export function setLengthUnit(name: string, digits?: number | null) {
+  const u = UNITS[name] ? name : 'm'; lengthUnit.name = u; lengthUnit.factor = UNITS[u].factor;
+  lengthUnit.digits = typeof digits === 'number' && digits >= 0 && digits <= 6 ? Math.round(digits) : UNITS[u].digits;
+}
+/** A length (metres) in the document's unit. */
+export const fmtM = (n: number) => `${fmt(n * lengthUnit.factor, lengthUnit.digits)} ${lengthUnit.name}`;
+export const fmtM2 = (n: number) => lengthUnit.name === 'm' ? `${fmt(n)} m²` : `${fmt(n * lengthUnit.factor ** 2, lengthUnit.digits)} ${lengthUnit.name}²`;
 export const fmtDeg = (n: number) => `${fmt(n, 1)}°`;
 
 export const v = {

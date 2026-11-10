@@ -124,6 +124,7 @@ kbd { font-size: 10.5px; color: var(--ink-3); }
 .menu .dropdown { display: none; position: absolute; top: calc(100% + 4px); left: 0; min-width: 240px; background: var(--surface); border: 1px solid var(--line-strong); box-shadow: var(--shadow-md); border-radius: var(--radius); padding: 4px; z-index: 50; }
 .menu.open .dropdown { display: block; animation: pop var(--t-fast) var(--ease); }
 @keyframes pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.context-menu { position: fixed; min-width: 200px; background: var(--surface); border: 1px solid var(--line-strong); box-shadow: var(--shadow-md); border-radius: var(--radius); padding: 4px; z-index: 200; animation: pop var(--t-fast) var(--ease); }
 .dropdown button { display: flex; width: 100%; justify-content: space-between; gap: 24px; background: none; border: 0; text-align: left; padding: 6px 10px; border-radius: var(--radius-xs); cursor: default; white-space: nowrap; }
 .dropdown button:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
 .dropdown button:disabled { color: var(--ink-3); }

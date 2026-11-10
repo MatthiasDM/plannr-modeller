@@ -1,7 +1,9 @@
 // Arc tools (centre, three-point, two-point, pie), Rotated Rectangle, Protractor and Zoom Window.
 import * as THREE from 'three';
 import type { Tool, ToolContext, Plane, Snap } from './base';
-import { parseNumbers, drawSnap, GROUND, arr, INK, MAGENTA, lineColor, DrawPlane } from './base';
+import { parseNumbers, parseAngle, drawSnap, GROUND, arr, INK, MAGENTA, lineColor, DrawPlane } from './base';
+
+const CYAN = 0x18a0b8;
 import { fmtM, fmtDeg } from '../model';
 import { planeBasis } from './draw';
 
@@ -19,7 +21,7 @@ const segsFor = (sweep: number) => Math.max(1, Math.min(200, Math.ceil((12 * swe
 
 /** Centre arc: centre, start, then the end angle. Pie variant closes with the radii. */
 export class ArcTool implements Tool {
-  id: string; label: string; hint = 'Click the centre, the start of the arc, then its end. Type a radius or an angle (e.g. 90°). Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; shortcut?: string; planeLock = true;
+  id: string; label: string; hint = 'Click the centre, the start of the arc, then its end. Type a radius or an angle (90, or a slope like 1:6). Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; shortcut?: string; planeLock = true;
   private c: THREE.Vector3 | null = null; private a: THREE.Vector3 | null = null; private dp = new DrawPlane(); private get plane() { return this.dp.plane; } private cur: Snap | null = null;
   constructor(private pie = false) { this.id = pie ? 'pie' : 'arc'; this.label = pie ? 'Pie' : 'Arc'; if (!pie) this.shortcut = 'a'; }
   busy() { return !!this.c; }
@@ -47,9 +49,10 @@ export class ArcTool implements Tool {
     await ctx.ops([{ op: 'draw_arc', center: arr(c), start: arr(a), end: arr(end), normal: arr(n), pie: this.pie, layer: ctx.options.layer }], this.pie ? 'Pie' : 'Arc');
   }
   onVCB(v: string, ctx: ToolContext) {
-    const n = parseNumbers(v); if (!n.length || !this.c) return;
+    if (!this.c) return;
+    if (this.a) { const ang = parseAngle(v); if (ang !== null) this.finish(ctx, (ang * Math.PI) / 180); return; }
+    const n = parseNumbers(v); if (!n.length) return;
     if (!this.a) { const dir = this.cur ? this.cur.point.clone().sub(this.c) : new THREE.Vector3(1, 0, 0); if (dir.lengthSq() < 1e-9) dir.set(1, 0, 0); this.a = this.onPlane(this.c.clone().addScaledVector(dir.normalize(), n[0])); ctx.setHint('Click where the arc ends, or type the angle.'); return; }
-    this.finish(ctx, (n[0] * Math.PI) / 180);
   }
   onLock(ctx: ToolContext) { if (this.c && !this.a) this.dp.relock(ctx); }
   onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.c) { this.c = this.a = null; ctx.scene.clearOverlay(); ctx.setHint(this.hint); return true; } return false; }
@@ -93,35 +96,63 @@ function circleThrough(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) {
 
 /** Two-point arc: chord endpoints, then the bulge. */
 export class TwoPointArcTool implements Tool {
-  id = 'arc2'; label = '2 Point Arc'; hint = 'Click both ends of the chord, then pull the bulge. Type a bulge distance. Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; planeLock = true;
+  id = 'arc2'; label = '2 Point Arc'; hint = 'Click both ends of the chord, then pull the bulge: it turns cyan where the arc runs on smoothly from an edge. Type a bulge distance, or a radius as 2r. Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; planeLock = true;
   private pts: THREE.Vector3[] = []; private dp = new DrawPlane(); private get plane() { return this.dp.plane; } private bulge = 0;
+  /** The bulges at which the arc leaves an end of the chord in line with an edge that ends there, and whether the current one is such. */
+  private tans: number[] = []; private tangent = false;
   busy() { return this.pts.length > 0; }
   activate(ctx: ToolContext) { this.pts = []; ctx.setHint(this.hint); ctx.setVCB('', 'Bulge'); }
+  private tangents(ctx: ToolContext): number[] {
+    const [a, b] = this.pts; const n = this.plane.normal; const L = a.distanceTo(b); const perp = n.clone().cross(b.clone().sub(a)).normalize(); const out: number[] = [];
+    for (const [end, other] of [[a, b], [b, a]]) for (const g of ctx.scene.segments) {
+      const from = g.b.distanceTo(end) < 1e-4 ? g.a : g.a.distanceTo(end) < 1e-4 ? g.b : null; if (!from) continue;
+      const t = end.clone().sub(from); if (t.lengthSq() < 1e-10) continue; t.normalize(); if (Math.abs(t.dot(n)) > 1e-3) continue; // an edge in the arc's plane
+      // the angle between tangent and chord is half the angle the arc spans
+      const ang = Math.acos(THREE.MathUtils.clamp(t.dot(other.clone().sub(end).normalize()), -1, 1)); if (ang < 0.02 || ang > Math.PI - 0.2) continue;
+      const h = Math.sign(t.dot(perp)) * (L / 2) * Math.tan(ang / 2); if (!out.some(x => Math.abs(x - h) < 1e-6)) out.push(h);
+    }
+    return out;
+  }
+  /** The bulge under the cursor; within a few pixels of a tangent one, that one. */
+  private held(ctx: ToolContext, p: THREE.Vector3) { const h = this.bulgeAt(p); const tol = ctx.scene.pixelSize(p) * 9; const t = this.tans.find(x => Math.abs(x - h) < tol); this.tangent = t !== undefined; return t ?? h; }
   deactivate(ctx: ToolContext) { this.pts = []; ctx.scene.clearOverlay(); }
   private bulgeAt(p: THREE.Vector3) { const [a, b] = this.pts; const chord = b.clone().sub(a); const perp = this.plane.normal.clone().cross(chord).normalize(); return p.clone().sub(a.clone().lerp(b, 0.5)).dot(perp); }
   private preview(ctx: ToolContext) {
     const [a, b] = this.pts; const chord = b.clone().sub(a); const L = chord.length(); const h = this.bulge; if (Math.abs(h) < 1e-4) { ctx.scene.addLine([a, b], INK, true); return; }
     const r = (L * L) / (8 * Math.abs(h)) + Math.abs(h) / 2; const perp = this.plane.normal.clone().cross(chord).normalize(); const mid = a.clone().lerp(b, 0.5); const c = mid.clone().addScaledVector(perp, Math.sign(h) * (Math.abs(h) - r));
-    const n = h > 0 ? this.plane.normal.clone() : this.plane.normal.clone().negate(); const sweep = sweepTo(c, n, a, b); ctx.scene.addLine(polyArc(c, n, a, sweep, segsFor(sweep)), INK, false, 2); ctx.scene.addLine([a, b], 0x888888, true); ctx.scene.addLabel(mid.clone().addScaledVector(perp, h), `bulge ${fmtM(Math.abs(h))}`);
+    const n = h > 0 ? this.plane.normal.clone() : this.plane.normal.clone().negate(); const sweep = sweepTo(c, n, a, b); ctx.scene.addLine(polyArc(c, n, a, sweep, segsFor(sweep)), this.tangent ? CYAN : INK, false, 2); ctx.scene.addLine([a, b], 0x888888, true); ctx.scene.addLabel(mid.clone().addScaledVector(perp, h), this.tangent ? `Tangent at Vertex · r ${fmtM(r)}` : `bulge ${fmtM(Math.abs(h))} · r ${fmtM(r)}`);
   }
   onMove(ev: PointerEvent, ctx: ToolContext) {
     const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, inPlane: !!this.pts.length, from: this.pts.length === 1 ? this.pts[0] : undefined }); ctx.scene.clearOverlay(); drawSnap(ctx, s);
     if (!this.pts.length) { this.dp.hover(ctx, ev, s, 'ring'); return; }
     s.point.copy(this.dp.on(s.point));
     if (this.pts.length === 1) { ctx.scene.addLine([this.pts[0], s.point], lineColor(this.pts[0], s.point, s), true); ctx.setVCB(this.pts[0].distanceTo(s.point).toFixed(3), 'Length'); }
-    if (this.pts.length === 2) { this.bulge = this.bulgeAt(s.point); this.preview(ctx); ctx.setVCB(this.bulge.toFixed(3), 'Bulge'); }
+    if (this.pts.length === 2) { this.bulge = this.held(ctx, s.point); this.preview(ctx); ctx.setVCB(this.bulge.toFixed(3), 'Bulge'); }
   }
   onDown(ev: PointerEvent, ctx: ToolContext) {
     if (ev.button !== 0) return; const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, inPlane: !!this.pts.length, from: this.pts.length === 1 ? this.pts[0] : undefined });
     if (!this.pts.length) this.dp.start(ctx, ev, s);
-    if (this.pts.length < 2) { this.pts.push(this.dp.on(s.point)); ctx.setHint(this.pts.length === 1 ? 'Click the other end of the chord.' : 'Pull the bulge and click, or type it.'); return; }
-    this.finish(ctx, this.bulgeAt(s.point));
+    if (this.pts.length < 2) {
+      const q = this.dp.on(s.point); if (this.pts.length === 1 && q.distanceTo(this.pts[0]) < 0.005) return;
+      this.pts.push(q); this.tangent = false; this.tans = this.pts.length === 2 ? this.tangents(ctx) : [];
+      ctx.setHint(this.pts.length === 1 ? 'Click the other end of the chord.' : 'Pull the bulge and click, or type it (a radius as 2r).'); return;
+    }
+    this.finish(ctx, this.held(ctx, this.dp.on(s.point)));
   }
   private async finish(ctx: ToolContext, bulge: number) {
     const [a, b] = this.pts; if (!b || Math.abs(bulge) < 1e-4) return; this.pts = []; ctx.scene.clearOverlay(); ctx.setHint(this.hint);
     await ctx.ops([{ op: 'draw_arc', from: arr(a), to: arr(b), bulge: +bulge.toFixed(5), normal: arr(this.plane.normal), layer: ctx.options.layer }], '2 point arc');
   }
-  onVCB(v: string, ctx: ToolContext) { const n = parseNumbers(v); if (n.length && this.pts.length === 2) this.finish(ctx, Math.sign(this.bulge || 1) * n[0]); }
+  onVCB(v: string, ctx: ToolContext) {
+    if (this.pts.length !== 2) return; const sign = Math.sign(this.bulge || 1);
+    const r = v.trim().match(/^(.+?)\s*r$/i); // "2r": the radius; the arc is the short way round
+    if (r) {
+      const n = parseNumbers(r[1]); const half = this.pts[0].distanceTo(this.pts[1]) / 2; if (!n.length) return;
+      if (n[0] < half) { ctx.toast(`The radius must be at least half the chord (${fmtM(half)}).`); return; }
+      this.finish(ctx, sign * (n[0] - Math.sqrt(n[0] * n[0] - half * half))); return;
+    }
+    const n = parseNumbers(v); if (n.length) this.finish(ctx, sign * n[0]);
+  }
   onLock(ctx: ToolContext) { if (this.pts.length === 1) this.dp.relock(ctx); }
   onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.pts.length) { this.pts = []; ctx.scene.clearOverlay(); return true; } return false; }
 }
@@ -163,7 +194,7 @@ export class RotatedRectangleTool implements Tool {
 
 /** Protractor: angled guide lines. Centre, reference direction, angle. */
 export class ProtractorTool implements Tool {
-  id = 'protractor'; label = 'Protractor'; hint = 'Click the vertex, a reference direction, then the angle: a guide line is placed. Type degrees. Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; planeLock = true;
+  id = 'protractor'; label = 'Protractor'; hint = 'Click the vertex, a reference direction, then the angle: a guide line is placed. Type degrees, or a slope like 1:6. Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; planeLock = true;
   private c: THREE.Vector3 | null = null; private ref: THREE.Vector3 | null = null; private dp = new DrawPlane(); private get plane() { return this.dp.plane; } private angle = 0;
   busy() { return !!this.c; }
   activate(ctx: ToolContext) { this.c = this.ref = null; ctx.setHint(this.hint); ctx.setVCB('', 'Angle'); }
@@ -183,7 +214,7 @@ export class ProtractorTool implements Tool {
     this.finish(ctx, this.dirAt(s.point).dir);
   }
   private async finish(ctx: ToolContext, dir: THREE.Vector3) { const c = this.c!; this.c = this.ref = null; ctx.scene.clearOverlay(); ctx.setHint(this.hint); await ctx.ops([{ op: 'add_guide', point: arr(c), direction: arr(dir) }], 'Guide'); }
-  onVCB(v: string, ctx: ToolContext) { const n = parseNumbers(v); if (!n.length || !this.c || !this.ref) return; const a = this.ref.clone().sub(this.c).normalize(); this.finish(ctx, a.applyAxisAngle(this.plane.normal, (n[0] * Math.PI) / 180)); }
+  onVCB(v: string, ctx: ToolContext) { const n = parseAngle(v); if (n === null || !this.c || !this.ref) return; const a = this.ref.clone().sub(this.c).normalize(); this.finish(ctx, a.applyAxisAngle(this.plane.normal, (n * Math.PI) / 180)); }
   onLock(ctx: ToolContext) { if (this.c) this.dp.relock(ctx); }
   onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.c) { this.c = this.ref = null; ctx.scene.clearOverlay(); return true; } return false; }
 }

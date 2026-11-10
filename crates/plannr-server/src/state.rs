@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use plannr_core::history::HistoryEntry;
+use plannr_core::model::Entity;
 use plannr_core::{apply_many, compile, CompileOptions, CompiledScene, Document, History, Op, OpResult, Registry};
 use serde_json::json;
 
@@ -102,13 +103,27 @@ impl AppState {
         })
     }
 
+    /// `apply_ops`, and what it changed compiled on its own (see `Changes`), so the browser swaps just that.
+    pub fn apply_ops_partial(&self, id: &str, ops: &[Op], label: &str, source: &str, opts: &CompileOptions) -> ApiResult<(u64, Vec<OpResult>, Option<Changes>)> {
+        let reg = &self.registry;
+        let (v, results, before, after) = self.with(id, |p| {
+            let before = p.doc.clone();
+            let results = apply_many(&mut p.doc, ops, reg)?;
+            let v = self.commit(id, p, before.clone(), label, source)?;
+            Ok((v, results, before, p.doc.clone()))
+        })?;
+        let changes = changes(&before, &after, &results, reg, opts);
+        Ok((v, results, changes))
+    }
+
+    /// A snapshot of the cached document: compiles run on it without holding every project's lock.
+    fn snapshot(&self, id: &str) -> ApiResult<Document> { self.with(id, |p| Ok(p.doc.clone())) }
+
     pub fn preview(&self, id: &str, ops: &[Op], opts: &CompileOptions) -> ApiResult<CompiledScene> {
         let reg = &self.registry;
-        self.with(id, |p| {
-            let mut doc = p.doc.clone();
-            apply_many(&mut doc, ops, reg)?;
-            Ok(compile(&doc, reg, opts))
-        })
+        let mut doc = self.snapshot(id)?;
+        apply_many(&mut doc, ops, reg)?;
+        Ok(compile(&doc, reg, opts))
     }
 
     /// A preview of only what the ops change: the top-level entities they create, modify or remove (`dirty`),
@@ -116,21 +131,20 @@ impl AppState {
     /// the whole scene (`None` for dirty) when the results don't say what changed.
     pub fn preview_partial(&self, id: &str, ops: &[Op], opts: &CompileOptions) -> ApiResult<(CompiledScene, Option<Vec<String>>)> {
         let reg = &self.registry;
-        self.with(id, |p| {
-            let mut doc = p.doc.clone();
-            let results = apply_many(&mut doc, ops, reg)?;
-            let (before, after) = (top_levels(&p.doc), top_levels(&doc));
-            let mut dirty: Vec<String> = vec![]; let mut known = true;
-            for r in &results {
-                for id in r.created.iter().chain(&r.modified).chain(&r.removed) {
-                    let bare = id.split('#').next().unwrap_or(id);
-                    match after.get(bare).or_else(|| before.get(bare)) { Some(t) => if !dirty.contains(t) { dirty.push(t.clone()) }, None => known = false }
-                }
+        let base = self.snapshot(id)?;
+        let mut doc = base.clone();
+        let results = apply_many(&mut doc, ops, reg)?;
+        let (before, after) = (top_levels(&base), top_levels(&doc));
+        let mut dirty: Vec<String> = vec![]; let mut known = true;
+        for r in &results {
+            for id in r.created.iter().chain(&r.modified).chain(&r.removed) {
+                let bare = id.split('#').next().unwrap_or(id);
+                match after.get(bare).or_else(|| before.get(bare)) { Some(t) => if !dirty.contains(t) { dirty.push(t.clone()) }, None => known = false }
             }
-            if !known || dirty.is_empty() { return Ok((compile(&doc, reg, opts), None)); }
-            let only: std::collections::HashSet<String> = dirty.iter().filter(|t| after.contains_key(*t)).cloned().collect();
-            Ok((compile(&doc, reg, &CompileOptions { only: Some(only), ..opts.clone() }), Some(dirty)))
-        })
+        }
+        if !known || dirty.is_empty() { return Ok((compile(&doc, reg, opts), None)); }
+        let only: std::collections::HashSet<String> = dirty.iter().filter(|t| after.contains_key(*t)).cloned().collect();
+        Ok((compile(&doc, reg, &CompileOptions { only: Some(only), ..opts.clone() }), Some(dirty)))
     }
 
     pub fn replace_document(&self, id: &str, mut doc: Document, source: &str) -> ApiResult<u64> {
@@ -145,28 +159,32 @@ impl AppState {
     }
 
     pub fn undo(&self, id: &str, source: &str) -> ApiResult<(u64, String)> {
-        self.with(id, |p| {
-            let label = p.history.undo(&mut p.doc).ok_or_else(|| ApiError::BadRequest("nothing to undo".into()))?;
-            self.db.save(id, &p.doc)?;
-            self.hub.broadcast(id, &json!({ "type": "changed", "version": p.doc.version, "label": format!("Undo {label}"), "source": source }));
-            Ok((p.doc.version, label))
-        })
+        self.step(id, source, true, None).map(|(v, l, _)| (v, l))
     }
 
     pub fn redo(&self, id: &str, source: &str) -> ApiResult<(u64, String)> {
-        self.with(id, |p| {
-            let label = p.history.redo(&mut p.doc).ok_or_else(|| ApiError::BadRequest("nothing to redo".into()))?;
+        self.step(id, source, false, None).map(|(v, l, _)| (v, l))
+    }
+
+    /// Undo (`back`) or redo one step; with `opts`, also what it changed compiled on its own (see `Changes`).
+    pub fn step(&self, id: &str, source: &str, back: bool, opts: Option<&CompileOptions>) -> ApiResult<(u64, String, Option<Changes>)> {
+        let (v, label, docs) = self.with(id, |p| {
+            let before = opts.map(|_| p.doc.clone());
+            let label = if back { p.history.undo(&mut p.doc) } else { p.history.redo(&mut p.doc) };
+            let label = label.ok_or_else(|| ApiError::BadRequest(if back { "nothing to undo" } else { "nothing to redo" }.into()))?;
             self.db.save(id, &p.doc)?;
-            self.hub.broadcast(id, &json!({ "type": "changed", "version": p.doc.version, "label": format!("Redo {label}"), "source": source }));
-            Ok((p.doc.version, label))
-        })
+            self.hub.broadcast(id, &json!({ "type": "changed", "version": p.doc.version, "label": format!("{} {label}", if back { "Undo" } else { "Redo" }), "source": source }));
+            Ok((p.doc.version, label, before.map(|b| (b, p.doc.clone()))))
+        })?;
+        let changes = match (docs, opts) { (Some((b, a)), Some(o)) => changes(&b, &a, &[], &self.registry, o), _ => None };
+        Ok((v, label, changes))
     }
 
     pub fn history(&self, id: &str) -> ApiResult<Vec<HistoryEntry>> { self.with(id, |p| Ok(p.history.entries())) }
 
     pub fn compile(&self, id: &str, opts: &CompileOptions) -> ApiResult<CompiledScene> {
-        let reg = &self.registry;
-        self.with(id, |p| Ok(compile(&p.doc, reg, opts)))
+        let doc = self.snapshot(id)?;
+        Ok(compile(&doc, &self.registry, opts))
     }
 
     pub fn create(&self, name: &str, doc: Option<Document>) -> ApiResult<ProjectSummary> { self.create_for(name, doc, &Owner(None)) }
@@ -201,4 +219,47 @@ fn top_levels(doc: &plannr_core::model::Document) -> std::collections::HashMap<S
     let mut m = std::collections::HashMap::new();
     for e in &doc.entities { walk(e, e.id(), &mut m); }
     m
+}
+
+/// What a committed change did to the drawing: the top-level entities it touched (`dirty`) and those of them
+/// that still exist, compiled on their own (`scene`). The browser swaps just these into the model it has.
+/// `reconcile`: plugin geometry was touched, which can depend on neighbours the change didn't touch (a wall's
+/// corners), so the browser should fetch the whole scene once it is idle.
+pub struct Changes { pub scene: CompiledScene, pub dirty: Vec<String>, pub reconcile: bool }
+
+/// More than this share of the top-level entities touched: the whole scene is as cheap.
+const MAX_DIRTY_SHARE: f64 = 0.5;
+
+/// `None` when only the whole scene is right: anything but the entities changed (layers, materials, components,
+/// plugin settings), a section plane changed (it cuts everything), or most of the model changed.
+fn changes(before: &Document, after: &Document, results: &[OpResult], reg: &Registry, opts: &CompileOptions) -> Option<Changes> {
+    if before.units != after.units || before.layers != after.layers || before.materials != after.materials
+        || before.components != after.components || before.extensions != after.extensions || before.extra != after.extra { return None; }
+    fn tops(d: &Document) -> HashMap<&str, &Entity> { d.entities.iter().map(|e| (e.id(), e)).collect() }
+    let (b, a) = (tops(before), tops(after));
+    let mut dirty: Vec<String> = vec![];
+    for e in &after.entities { if b.get(e.id()).map_or(true, |o| *o != e) { dirty.push(e.id().to_string()); } }
+    for e in &before.entities { if !a.contains_key(e.id()) { dirty.push(e.id().to_string()); } }
+    // ids the ops report (nested ones too) map to their top-level entity
+    let (nb, na) = (top_levels(before), top_levels(after));
+    for r in results {
+        for id in r.created.iter().chain(&r.modified).chain(&r.removed) {
+            let bare = id.split('#').next().unwrap_or(id);
+            if let Some(t) = na.get(bare).or_else(|| nb.get(bare)) { if !dirty.contains(t) { dirty.push(t.clone()); } }
+        }
+    }
+    let n = after.entities.len().max(before.entities.len()).max(1);
+    if dirty.len() as f64 > n as f64 * MAX_DIRTY_SHARE && dirty.len() > 8 { return None; }
+    let touched = || dirty.iter().filter_map(|id| a.get(id.as_str()).or_else(|| b.get(id.as_str())));
+    // a section plane cuts everything, unless the viewer cuts on the GPU (uncut geometry + `cuts`)
+    if !opts.ignore_sections && touched().any(|e| has_kind(e, &|e| matches!(e, Entity::Section(_)))) { return None; }
+    let reconcile = touched().any(|e| has_kind(e, &|e| matches!(e, Entity::Custom(_))));
+    let only: std::collections::HashSet<String> = dirty.iter().filter(|id| a.contains_key(id.as_str())).cloned().collect();
+    let scene = compile(after, reg, &CompileOptions { only: Some(only), ..opts.clone() });
+    Some(Changes { scene, dirty, reconcile })
+}
+
+/// Does `e`, or anything inside it (a group), match?
+fn has_kind(e: &Entity, f: &dyn Fn(&Entity) -> bool) -> bool {
+    f(e) || matches!(e, Entity::Group(g) if g.entities.iter().any(|c| has_kind(c, f)))
 }

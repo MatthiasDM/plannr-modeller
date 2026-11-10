@@ -8,9 +8,9 @@ fn reg() -> Registry { Registry::new() }
 /// A box [x0, x0+w] × [0, h] × [0, d] on the ground, its faces painted `material`.
 fn boxed(doc: &mut Document, x0: f64, w: f64, d: f64, h: f64, material: &str) {
     let before: Vec<String> = doc.entities.iter().map(|e| e.id().to_string()).collect();
-    let r = apply(doc, &Op::DrawRectangle { corner: [x0, 0.0, 0.0], opposite: [x0 + w, 0.0, d], normal: [0.0, 1.0, 0.0], u: None, layer: None, material: None }, &reg()).unwrap();
+    let r = apply(doc, &Op::DrawRectangle { corner: [x0, 0.0, 0.0], opposite: [x0 + w, 0.0, d], normal: [0.0, 1.0, 0.0], u: None, layer: None, material: None, group: None }, &reg()).unwrap();
     let face = r.created[0].clone();
-    apply(doc, &Op::PushPull { face, distance: h }, &reg()).unwrap();
+    apply(doc, &Op::PushPull { face, distance: h, new_face: false }, &reg()).unwrap();
     let ids: Vec<String> = doc.entities.iter().filter_map(|e| match e { Entity::Face(f) if !before.contains(&f.id) => Some(f.id.clone()), _ => None }).collect();
     apply(doc, &Op::Paint { ids, material: material.into(), side: None }, &reg()).unwrap();
 }

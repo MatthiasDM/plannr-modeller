@@ -7,9 +7,12 @@ pub mod guest;
 pub mod history;
 pub mod model;
 pub mod ops;
+pub mod planar;
 pub mod plugin;
 pub mod sample;
 pub mod slice;
+pub mod solid;
+pub mod sticky;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -30,7 +33,7 @@ mod tests {
     fn reg() -> Registry { Registry::new() }
     fn up() -> [f64; 3] { [0.0, 1.0, 0.0] }
     fn square(doc: &mut Document, size: f64) -> String {
-        apply(doc, &Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [size, 0.0, size], normal: up(), u: None, layer: None, material: None }, &reg()).unwrap().created[0].clone()
+        apply(doc, &Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [size, 0.0, size], normal: up(), u: None, layer: None, material: None, group: None }, &reg()).unwrap().created[0].clone()
     }
     fn face<'a>(doc: &'a Document, id: &str) -> &'a model::Face {
         match doc.find(id).unwrap() { Entity::Face(f) => f, _ => panic!("not a face") }
@@ -56,9 +59,9 @@ mod tests {
     #[test]
     fn draw_line_closing_a_square_creates_one_face() {
         let mut doc = Document::default();
-        let r = apply(&mut doc, &Op::DrawLine { points: vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 0.0, 2.0]], close: false, layer: None }, &reg()).unwrap();
+        let r = apply(&mut doc, &Op::DrawLine { points: vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 0.0, 2.0]], close: false, layer: None, group: None }, &reg()).unwrap();
         assert_eq!(r.created.len(), 2);
-        let r = apply(&mut doc, &Op::DrawLine { points: vec![[2.0, 0.0, 2.0], [0.0, 0.0, 2.0], [0.0, 0.0, 0.0]], close: false, layer: None }, &reg()).unwrap();
+        let r = apply(&mut doc, &Op::DrawLine { points: vec![[2.0, 0.0, 2.0], [0.0, 0.0, 2.0], [0.0, 0.0, 0.0]], close: false, layer: None, group: None }, &reg()).unwrap();
         let faces: Vec<_> = doc.entities.iter().filter(|e| matches!(e, Entity::Face(_))).collect();
         assert_eq!(faces.len(), 1, "exactly one face from the loop");
         assert_eq!(r.created.len(), 3, "two edges + one face");
@@ -70,7 +73,7 @@ mod tests {
     fn push_pull_builds_a_box_keeping_the_cap_id() {
         let mut doc = Document::default();
         let id = square(&mut doc, 2.0);
-        let r = apply(&mut doc, &Op::PushPull { face: id.clone(), distance: 3.0 }, &reg()).unwrap();
+        let r = apply(&mut doc, &Op::PushPull { face: id.clone(), distance: 3.0, new_face: false }, &reg()).unwrap();
         assert_eq!(r.created.len(), 5, "base + 4 sides");
         assert_eq!(r.modified, vec![id.clone()]);
         let cap = face(&doc, &id);
@@ -86,7 +89,7 @@ mod tests {
             let n = normal(&s.outer);
             assert!(dot(n, sub(c, [1.0, 1.5, 1.0])) > 0.0, "side normal points away from the box centre");
         }
-        assert!(apply(&mut doc, &Op::PushPull { face: id, distance: 0.0 }, &reg()).is_err());
+        assert!(apply(&mut doc, &Op::PushPull { face: id, distance: 0.0, new_face: false }, &reg()).is_err());
     }
 
     #[test]
@@ -103,7 +106,7 @@ mod tests {
     #[test]
     fn rotate_90_about_y_maps_plus_x_to_minus_z() {
         let mut doc = Document::default();
-        let r = apply(&mut doc, &Op::DrawLine { points: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], close: false, layer: None }, &reg()).unwrap();
+        let r = apply(&mut doc, &Op::DrawLine { points: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], close: false, layer: None, group: None }, &reg()).unwrap();
         let id = r.created[0].clone();
         apply(&mut doc, &Op::Rotate { ids: vec![id.clone()], origin: [0.0, 0.0, 0.0], axis: up(), angle: 90.0 }, &reg()).unwrap();
         let Entity::Edge(e) = doc.find(&id).unwrap() else { panic!() };
@@ -141,7 +144,7 @@ mod tests {
     fn section_clipping_halves_a_cube() {
         let mut doc = Document::default();
         let id = square(&mut doc, 2.0);
-        apply(&mut doc, &Op::PushPull { face: id, distance: 2.0 }, &reg()).unwrap();
+        apply(&mut doc, &Op::PushPull { face: id, distance: 2.0, new_face: false }, &reg()).unwrap();
         let full = compile(&doc, &reg(), &CompileOptions::default());
         let full_area: f64 = full.groups.iter().filter(|g| !g.back).map(|g| g.indices.len()).sum::<usize>() as f64;
         apply(&mut doc, &Op::AddSection { origin: [0.0, 1.0, 0.0], normal: up(), active: Some(true), layer: None }, &reg()).unwrap();
@@ -158,7 +161,7 @@ mod tests {
     fn several_active_sections_combine() {
         let mut doc = Document::default();
         let id = square(&mut doc, 2.0);
-        apply(&mut doc, &Op::PushPull { face: id, distance: 2.0 }, &reg()).unwrap();
+        apply(&mut doc, &Op::PushPull { face: id, distance: 2.0, new_face: false }, &reg()).unwrap();
         apply(&mut doc, &Op::AddSection { origin: [0.0, 1.0, 0.0], normal: up(), active: Some(true), layer: None }, &reg()).unwrap();
         apply(&mut doc, &Op::AddSection { origin: [1.0, 0.0, 0.0], normal: [1.0, 0.0, 0.0], active: Some(true), layer: None }, &reg()).unwrap();
         let actives = doc.entities.iter().filter(|e| matches!(e, Entity::Section(s) if s.active)).count();
@@ -243,8 +246,8 @@ mod tests {
     fn apply_many_is_atomic() {
         let mut doc = Document::default();
         let ops = vec![
-            Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [1.0, 0.0, 1.0], normal: up(), u: None, layer: None, material: None },
-            Op::PushPull { face: "missing".into(), distance: 1.0 },
+            Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [1.0, 0.0, 1.0], normal: up(), u: None, layer: None, material: None, group: None },
+            Op::PushPull { face: "missing".into(), distance: 1.0, new_face: false },
         ];
         assert!(apply_many(&mut doc, &ops, &reg()).is_err());
         assert!(doc.entities.is_empty(), "first op rolled back");
@@ -311,7 +314,7 @@ mod tests {
     #[test]
     fn an_arc_closing_an_open_outline_forms_a_face() {
         let mut doc = Document::default();
-        apply(&mut doc, &Op::DrawLine { points: vec![[0.0, 0.0, 2.0], [0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 0.0, 2.0]], close: false, layer: None }, &reg()).unwrap();
+        apply(&mut doc, &Op::DrawLine { points: vec![[0.0, 0.0, 2.0], [0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 0.0, 2.0]], close: false, layer: None, group: None }, &reg()).unwrap();
         assert!(faces(&doc).is_empty());
         // counter-clockwise about +y runs -x → +z, so starting at the left corner the arc bulges outward (z > 2)
         arc(&mut doc, json!({ "center": [2.0, 0.0, 2.0], "start": [0.0, 0.0, 2.0], "end": [4.0, 0.0, 2.0], "normal": [0.0, 1.0, 0.0] }));
@@ -324,7 +327,7 @@ mod tests {
     fn follow_me_along_an_l_path_makes_two_runs_of_sides_and_an_end_cap() {
         let mut doc = Document::default();
         // a 1×1 profile standing in the x/y plane (normal +z), swept 3 m along +z then 2 m along +x
-        let f = apply(&mut doc, &Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [1.0, 1.0, 0.0], normal: [0.0, 0.0, 1.0], u: None, layer: None, material: None }, &reg()).unwrap().created[0].clone();
+        let f = apply(&mut doc, &Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [1.0, 1.0, 0.0], normal: [0.0, 0.0, 1.0], u: None, layer: None, material: None, group: None }, &reg()).unwrap().created[0].clone();
         let r = apply(&mut doc, &Op::FollowMe { face: f.clone(), path: Some(vec![[0.5, 0.5, 0.0], [0.5, 0.5, 3.0], [2.5, 0.5, 3.0]]), path_edges: None }, &reg()).unwrap();
         assert_eq!(r.created.len(), 9, "2 × 4 sides + end cap");
         assert!(doc.find(&f).is_some(), "start cap keeps its id");
@@ -340,7 +343,7 @@ mod tests {
     #[test]
     fn follow_me_along_a_closed_path_makes_no_caps() {
         let mut doc = Document::default();
-        let f = apply(&mut doc, &Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [0.4, 0.4, 0.0], normal: [0.0, 0.0, 1.0], u: None, layer: None, material: None }, &reg()).unwrap().created[0].clone();
+        let f = apply(&mut doc, &Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [0.4, 0.4, 0.0], normal: [0.0, 0.0, 1.0], u: None, layer: None, material: None, group: None }, &reg()).unwrap().created[0].clone();
         let r = apply(&mut doc, &Op::FollowMe { face: f.clone(), path: Some(vec![[0.0, 0.0, 0.0], [0.0, 0.0, 4.0], [4.0, 0.0, 4.0], [4.0, 0.0, 0.0], [0.0, 0.0, 0.0]]), path_edges: None }, &reg()).unwrap();
         assert_eq!(r.created.len(), 16, "4 segments × 4 sides, no caps");
         assert!(doc.find(&f).is_none(), "the profile face is consumed");
@@ -350,8 +353,8 @@ mod tests {
     #[test]
     fn follow_me_accepts_a_chain_of_path_edges() {
         let mut doc = Document::default();
-        let f = apply(&mut doc, &Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [0.5, 0.5, 0.0], normal: [0.0, 0.0, 1.0], u: None, layer: None, material: None }, &reg()).unwrap().created[0].clone();
-        let e = apply(&mut doc, &Op::DrawLine { points: vec![[0.25, 0.25, 0.0], [0.25, 0.25, 2.0], [0.25, 2.25, 2.0]], close: false, layer: None }, &reg()).unwrap();
+        let f = apply(&mut doc, &Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [0.5, 0.5, 0.0], normal: [0.0, 0.0, 1.0], u: None, layer: None, material: None, group: None }, &reg()).unwrap().created[0].clone();
+        let e = apply(&mut doc, &Op::DrawLine { points: vec![[0.25, 0.25, 0.0], [0.25, 0.25, 2.0], [0.25, 2.25, 2.0]], close: false, layer: None, group: None }, &reg()).unwrap();
         let r = apply(&mut doc, &Op::FollowMe { face: f, path: None, path_edges: Some(e.created.clone()) }, &reg()).unwrap();
         assert_eq!(r.created.len(), 9);
     }
@@ -360,7 +363,7 @@ mod tests {
     #[test]
     fn mirror_keeps_area_and_flips_the_normal_consistently() {
         let mut doc = Document::default();
-        let id = apply(&mut doc, &Op::DrawRectangle { corner: [1.0, 0.0, 0.0], opposite: [3.0, 2.0, 0.0], normal: [0.0, 0.0, 1.0], u: None, layer: None, material: None }, &reg()).unwrap().created[0].clone();
+        let id = apply(&mut doc, &Op::DrawRectangle { corner: [1.0, 0.0, 0.0], opposite: [3.0, 2.0, 0.0], normal: [0.0, 0.0, 1.0], u: None, layer: None, material: None, group: None }, &reg()).unwrap().created[0].clone();
         let before = face(&doc, &id).clone();
         apply(&mut doc, &Op::Mirror { ids: vec![id.clone()], origin: [0.0; 3], normal: [1.0, 0.0, 0.0], copy: false }, &reg()).unwrap();
         let after = face(&doc, &id);
@@ -383,7 +386,7 @@ mod tests {
     // ---- components -------------------------------------------------------------------------
     fn cube(doc: &mut Document) -> (String, Vec<String>) {
         let top = square(doc, 1.0);
-        let r = apply(doc, &Op::PushPull { face: top.clone(), distance: 1.0 }, &reg()).unwrap();
+        let r = apply(doc, &Op::PushPull { face: top.clone(), distance: 1.0, new_face: false }, &reg()).unwrap();
         let mut ids = r.created.clone(); ids.push(top.clone());
         (top, ids)
     }
@@ -420,11 +423,12 @@ mod tests {
         let r = apply(&mut doc, &Op::MakeComponent { ids, name: "Box".into(), description: None }, &reg()).unwrap();
         let def = doc.components[0].id.clone();
         apply(&mut doc, &Op::PlaceComponent { definition: def.clone(), position: [3.0, 0.0, 0.0], rotation: None, scale: None, layer: None }, &reg()).unwrap();
-        // push the top of the definition up: both instances grow (push_pull creates 5 faces in the definition)
-        let before = compile(&doc, &reg(), &CompileOptions::default()).metrics.faces;
-        let r2 = apply(&mut doc, &Op::EditComponent { definition: def.clone(), ops: vec![Op::PushPull { face: top, distance: 0.5 }] }, &reg()).unwrap();
-        let after = compile(&doc, &reg(), &CompileOptions::default()).metrics.faces;
-        assert_eq!(after, before + 10, "5 new faces per instance");
+        // push the top of the definition up: both instances grow (the sides stretch, no face is added)
+        let before = compile(&doc, &reg(), &CompileOptions::default());
+        let r2 = apply(&mut doc, &Op::EditComponent { definition: def.clone(), ops: vec![Op::PushPull { face: top, distance: 0.5, new_face: false }] }, &reg()).unwrap();
+        let after = compile(&doc, &reg(), &CompileOptions::default());
+        assert_eq!(after.metrics.faces, before.metrics.faces, "the cubes grow, they get no new faces");
+        assert!((after.bounds.max[1] - before.bounds.max[1] - 0.5).abs() < 1e-9, "both instances are 0.5 taller");
         assert!(r2.modified.contains(&r.created[0]), "instances are reported as modified");
         // paint through an instance face id edits the definition face
         let fid = doc.components[0].entities[0].id().to_string();
@@ -432,6 +436,8 @@ mod tests {
         let Entity::Face(f) = &doc.components[0].entities[0] else { panic!() };
         assert!(f.material.is_some());
     }
+
+    fn i_def(doc: &Document, inst: &str) -> String { match doc.find(inst).unwrap() { Entity::Instance(i) => i.definition.clone(), _ => panic!("instance") } }
 
     #[test]
     fn make_unique_decouples_an_instance() {
@@ -444,10 +450,10 @@ mod tests {
         assert_eq!(doc.components.len(), 2);
         let Entity::Instance(i) = doc.find(&b).unwrap() else { panic!() };
         assert_ne!(i.definition, def);
-        let faces_before = compile(&doc, &reg(), &CompileOptions::default()).metrics.faces;
-        apply(&mut doc, &Op::EditComponent { definition: def.clone(), ops: vec![Op::PushPull { face: top, distance: 0.5 }] }, &reg()).unwrap();
-        let faces_after = compile(&doc, &reg(), &CompileOptions::default()).metrics.faces;
-        assert_eq!(faces_after, faces_before + 5, "only the original definition changed");
+        apply(&mut doc, &Op::EditComponent { definition: def.clone(), ops: vec![Op::PushPull { face: top, distance: 0.5, new_face: false }] }, &reg()).unwrap();
+        let height = |c: &model::ComponentDef| c.entities.iter().filter_map(|e| if let Entity::Face(f) = e { Some(f) } else { None }).flat_map(|f| f.outer.iter().map(|p| p[1])).fold(f64::MIN, f64::max);
+        assert!((height(doc.component(&def).unwrap()) - 1.5).abs() < 1e-9, "the original definition grew");
+        assert!((height(doc.component(&i_def(&doc, &b)).unwrap()) - 1.0).abs() < 1e-9, "the unique copy did not");
     }
 
     #[test]
@@ -488,7 +494,7 @@ mod tests {
     #[test]
     fn update_entity_and_measure() {
         let mut doc = Document::default();
-        let r = apply(&mut doc, &Op::AddText { position: [0.0, 0.0, 0.0], text: "a".into(), anchor: None, layer: None }, &reg()).unwrap();
+        let r = apply(&mut doc, &Op::AddText { position: [0.0, 0.0, 0.0], text: "a".into(), anchor: None, screen: None, layer: None }, &reg()).unwrap();
         let id = r.created[0].clone();
         apply(&mut doc, &Op::UpdateEntity { id: id.clone(), patch: json!({ "text": "b", "kind": "face" }) }, &reg()).unwrap();
         let Entity::Text(t) = doc.find(&id).unwrap() else { panic!("kind must not change") };
@@ -497,5 +503,62 @@ mod tests {
         assert_eq!(m.measurement, Some(5.0));
         let sq = square(&mut doc, 1.0);
         assert!(apply(&mut doc, &Op::UpdateEntity { id: sq, patch: json!({ "outer": [[0,0,0],[1,0,0],[1,1,1]] }) }, &reg()).is_err() || true);
+    }
+
+    #[test]
+    fn solid_ops_hollow_a_box_and_cut_slots() {
+        use crate::solid::{polys_of, volume};
+        let r = reg();
+        let mut doc = Document::default(); doc.normalize();
+        let mk = |doc: &mut Document, min: [f64; 3], max: [f64; 3]| apply(doc, &Op::SolidBox { min, max, name: None, layer: None, material: None }, &r).unwrap().created[0].clone();
+        let shell = mk(&mut doc, [0.0, 0.0, 0.0], [0.064, 0.029, 0.040]);
+        let cavity = mk(&mut doc, [0.002, 0.002, 0.002], [0.062, 0.040, 0.038]);
+        apply(&mut doc, &Op::Boolean { mode: "subtract".into(), target: shell.clone(), tools: vec![cavity.clone()], keep_tools: false, material: None }, &r).unwrap();
+        assert!(doc.find(&cavity).is_none(), "the tool is used up");
+        // a row of 12 slots through one side wall, made with copy
+        let slot = mk(&mut doc, [0.007, 0.005, -0.001], [0.009, 0.012, 0.003]);
+        let mut tools = vec![slot.clone()];
+        tools.extend(apply(&mut doc, &Op::Copy { ids: vec![slot], delta: [0.004, 0.0, 0.0], rotate: None, count: Some(11) }, &r).unwrap().created);
+        let t0 = std::time::Instant::now();
+        apply(&mut doc, &Op::Boolean { mode: "subtract".into(), target: shell.clone(), tools, keep_tools: false, material: None }, &r).unwrap();
+        assert!(t0.elapsed().as_secs_f64() < 2.0, "slow: {:?}", t0.elapsed());
+        let e = doc.find(&shell).unwrap().clone();
+        let v = volume(&polys_of(&e, &crate::geom::mat_identity()));
+        let want = 0.064 * 0.029 * 0.040 - 0.060 * 0.027 * 0.036 - 12.0 * 0.002 * 0.007 * 0.002;
+        assert!((v - want).abs() < 1e-11, "{v} vs {want}");
+        let Entity::Group(g) = &e else { panic!() };
+        // the side wall is one face with 12 holes
+        assert!(g.entities.iter().any(|f| matches!(f, Entity::Face(f) if f.holes.len() == 12)));
+        assert!(g.entities.len() < 80, "{} faces", g.entities.len());
+        // union and the errors
+        let a = mk(&mut doc, [0.1, 0.0, 0.0], [0.11, 0.01, 0.01]);
+        assert!(apply(&mut doc, &Op::Boolean { mode: "union".into(), target: a.clone(), tools: vec![a.clone()], keep_tools: false, material: None }, &r).is_err());
+        assert!(apply(&mut doc, &Op::Boolean { mode: "xor".into(), target: a.clone(), tools: vec![shell.clone()], keep_tools: false, material: None }, &r).is_err());
+        let c = apply(&mut doc, &Op::SolidCylinder { center: [0.105, 0.0, 0.005], axis: [0.0, 1.0, 0.0], radius: 0.002, height: 0.02, segments: Some(24), name: None, layer: None, material: Some("#336699".into()) }, &r).unwrap().created[0].clone();
+        apply(&mut doc, &Op::Boolean { mode: "subtract".into(), target: a.clone(), tools: vec![c], keep_tools: false, material: None }, &r).unwrap();
+        let ring = apply(&mut doc, &Op::Extrude { profile: vec![[0.2, 0.0, 0.0], [0.24, 0.0, 0.0], [0.24, 0.0, 0.04], [0.2, 0.0, 0.04]], holes: vec![vec![[0.21, 0.0, 0.01], [0.23, 0.0, 0.01], [0.23, 0.0, 0.03], [0.21, 0.0, 0.03]]], distance: Some(0.01), direction: None, name: None, layer: None, material: None }, &r).unwrap().created[0].clone();
+        let v = volume(&polys_of(doc.find(&ring).unwrap(), &crate::geom::mat_identity()));
+        assert!((v.abs() - 0.0012 * 0.01).abs() < 1e-12, "{v}");
+    }
+
+    #[test]
+    fn boolean_with_touching_tools_stays_one_shell() {
+        use crate::solid::{polys_of, volume};
+        let r = reg();
+        let mut doc = Document::default(); doc.normalize();
+        let mk = |doc: &mut Document, min: [f64; 3], max: [f64; 3]| apply(doc, &Op::SolidBox { min, max, name: None, layer: None, material: None }, &r).unwrap().created[0].clone();
+        let wall = mk(&mut doc, [0.0, 0.0, 0.0], [0.04, 0.03, 0.02]);
+        // a cavity and a groove that touches it face to face, cut in one call
+        let cavity = mk(&mut doc, [0.002, 0.002, 0.002], [0.038, 0.04, 0.018]);
+        let groove = mk(&mut doc, [0.01, 0.01, 0.0014], [0.03, 0.012, 0.002]);
+        apply(&mut doc, &Op::Boolean { mode: "subtract".into(), target: wall.clone(), tools: vec![cavity, groove], keep_tools: false, material: None }, &r).unwrap();
+        let e = doc.find(&wall).unwrap().clone();
+        let v = volume(&polys_of(&e, &crate::geom::mat_identity()));
+        let want = 0.04 * 0.03 * 0.02 - 0.036 * 0.028 * 0.016 - 0.02 * 0.002 * 0.0006;
+        assert!((v - want).abs() < 1e-12, "{v} vs {want}");
+        // no face lies inside the groove's footprint on the old wall plane z = 0.002 (it is open to the cavity)
+        let Entity::Group(g) = &e else { panic!() };
+        let stray = g.entities.iter().filter(|x| matches!(x, Entity::Face(f) if f.outer.iter().all(|p| (p[2] - 0.0014).abs() < 1e-9 || (p[2] - 0.002).abs() < 1e-9) && f.outer.iter().all(|p| p[0] >= 0.01 - 1e-9 && p[0] <= 0.03 + 1e-9 && p[1] >= 0.01 - 1e-9 && p[1] <= 0.012 + 1e-9) && (f.outer[0][2] - 0.002).abs() < 1e-9)).count();
+        assert_eq!(stray, 0, "the groove is closed off by a leftover face");
     }
 }

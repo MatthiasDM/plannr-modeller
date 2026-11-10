@@ -35,10 +35,10 @@ pub struct CompiledEdges {
 pub struct CompiledGuide { pub id: String, pub point: P3, #[serde(skip_serializing_if = "Option::is_none")] pub direction: Option<P3> }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CompiledDimension { pub id: String, pub a: P3, pub b: P3, pub offset: P3, pub value: f64 }
+pub struct CompiledDimension { pub id: String, pub a: P3, pub b: P3, pub offset: P3, pub value: f64, #[serde(default, skip_serializing_if = "Option::is_none")] pub style: Option<String> }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CompiledText { pub id: String, pub position: P3, pub text: String, #[serde(skip_serializing_if = "Option::is_none")] pub anchor: Option<P3> }
+pub struct CompiledText { pub id: String, pub position: P3, pub text: String, #[serde(default, skip_serializing_if = "Option::is_none")] pub anchor: Option<P3>, #[serde(default, skip_serializing_if = "Option::is_none")] pub screen: Option<[f64; 2]> }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledSection { pub id: String, pub origin: P3, pub normal: P3, pub active: bool }
@@ -46,6 +46,10 @@ pub struct CompiledSection { pub id: String, pub origin: P3, pub normal: P3, pub
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledCenter { pub id: String, pub point: P3, pub normal: P3, pub radius: f64 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledCut { pub origin: P3, pub normal: P3 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +86,11 @@ pub struct CompiledScene {
     pub sections: Vec<CompiledSection>,
     #[serde(default)]
     pub centers: Vec<CompiledCenter>,
+    /// The active section planes as they cut (world coordinates): what remains is where every one has
+    /// `dot(p - origin, normal) <= 0`. Listed even when the geometry is compiled uncut (`ignore_sections`), so a
+    /// viewer can cut on the GPU and switch a plane on or off without new geometry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cuts: Vec<CompiledCut>,
     pub bounds: Bounds,
     pub metrics: Metrics,
 }
@@ -275,8 +284,8 @@ impl<'a> Builder<'a> {
                 for c in &g.entities { self.entity(c, &gm); }
             }
             Entity::Guide(g) => { let p = mat_apply(m, g.point); self.grow(p); self.out.guides.push(CompiledGuide { id: g.id.clone(), point: p, direction: g.direction.map(|d| normalize(mat_apply_dir(m, d))) }); }
-            Entity::Dimension(d) => { let a = mat_apply(m, d.a); let b = mat_apply(m, d.b); self.grow(a); self.grow(b); self.out.dimensions.push(CompiledDimension { id: d.id.clone(), a, b, offset: mat_apply_dir(m, d.offset), value: dist(a, b) }); }
-            Entity::Text(t) => { let p = mat_apply(m, t.position); self.grow(p); self.out.texts.push(CompiledText { id: t.id.clone(), position: p, text: t.text.clone(), anchor: t.anchor.map(|a| mat_apply(m, a)) }); }
+            Entity::Dimension(d) => { let a = mat_apply(m, d.a); let b = mat_apply(m, d.b); self.grow(a); self.grow(b); self.out.dimensions.push(CompiledDimension { id: d.id.clone(), a, b, offset: mat_apply_dir(m, d.offset), value: dist(a, b), style: d.style.clone() }); }
+            Entity::Text(t) => { let p = mat_apply(m, t.position); if t.screen.is_none() { self.grow(p); } self.out.texts.push(CompiledText { id: t.id.clone(), position: p, text: t.text.clone(), anchor: t.anchor.map(|a| mat_apply(m, a)), screen: t.screen }); }
             Entity::Section(s) => self.out.sections.push(CompiledSection { id: s.id.clone(), origin: mat_apply(m, s.origin), normal: normalize(mat_apply_dir(m, s.normal)), active: s.active }),
             Entity::Custom(_) => {} // expanded by the registry before compile
             Entity::Instance(i) => {
@@ -300,23 +309,24 @@ pub fn compile(doc: &Document, reg: &Registry, opts: &CompileOptions) -> Compile
     let expanded = match &opts.only { Some(keep) => reg.expand_some(doc, keep), None => reg.expand_all(doc) };
     let doc = &expanded;
     let hidden: Vec<String> = doc.layers.iter().filter(|l| !l.visible).map(|l| l.id.clone()).collect();
-    // the active section planes (world coordinates); several combine, keeping what every one keeps
-    let mut cuts = vec![];
-    if !opts.ignore_sections {
-        doc.visit(|v| {
-            if let Entity::Section(s) = v.entity {
-                if s.active && !hidden.iter().any(|h| h == &s.layer) {
-                    cuts.push((mat_apply(&v.transform, s.origin), normalize(mat_apply_dir(&v.transform, s.normal))));
-                }
+    // the active section planes (world coordinates); several combine, keeping what every one keeps. Read from the
+    // whole document: a partial compile (`only`) still reports every plane.
+    let mut all_cuts = vec![];
+    original.visit(|v| {
+        if let Entity::Section(s) = v.entity {
+            if s.active && !hidden.iter().any(|h| h == &s.layer) {
+                all_cuts.push((mat_apply(&v.transform, s.origin), normalize(mat_apply_dir(&v.transform, s.normal))));
             }
-        });
-    }
+        }
+    });
+    let cuts = if opts.ignore_sections { vec![] } else { all_cuts.clone() };
     let mut b = Builder { doc, groups: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cuts, show_hidden: opts.show_hidden, ghost: 0, bb: None, hidden, prefix: String::new(), depth: 0, centers: HashSet::new() };
     b.out.metrics.definitions = doc.components.len();
     let m = mat_identity();
     for e in &doc.entities { b.entity(e, &m); }
     let mut out = b.out;
     out.version = doc.version;
+    out.cuts = all_cuts.into_iter().map(|(origin, normal)| CompiledCut { origin, normal }).collect();
     out.groups = b.groups.into_iter().filter(|g| !g.indices.is_empty()).collect();
     out.edges = b.edges;
     out.bounds = match b.bb { Some((lo, hi)) => Bounds { min: lo, max: hi }, None => Bounds::default() };

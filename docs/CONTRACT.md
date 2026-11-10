@@ -17,11 +17,11 @@ z green. All points are `[x, y, z]`. Ids are strings (UUID v4). JSON is camelCas
 ```jsonc
 {
   "version": 12,                       // increments on every committed change
-  "units": "m",
+  "units": "m",                // "m" | "cm" | "mm": how lengths are shown and typed in the app (`precision`: decimals); coordinates are always metres
   "layers":    [{ "id": "uuid", "name": "Layer0", "visible": true, "color": "#7a8aa0" }],
   "materials": [{ "id": "uuid", "name": "Brick", "color": "#B0623F", "opacity": 1.0 }],
   "entities":  [ /* Entity, see below */ ],
-  "scenes":    [{ "id": "uuid", "name": "Scene 1", "camera": [px,py,pz, tx,ty,tz, ux,uy,uz], "section": "sectionId|null", "sections": ["sectionId"] }],
+  "scenes":    [{ "id": "uuid", "name": "Scene 1", "camera": [px,py,pz, tx,ty,tz, ux,uy,uz], "section": "sectionId|null", "sections": ["sectionId"], "layers?": { "layerId": true }, "faceStyle?": "shaded", "fov?": 35, "sun?": { "byTime": false, "hour": 14, "month": 6, "latitude": 51 } }],
   "components": [{ "id": "uuid", "name": "Window 120", "description": "", "entities": [ /* Entity, local coords */ ] }],  // definitions shared by instances
   "extensions": { "<pluginId>": {} }   // opaque per-plugin data, preserved as-is
 }
@@ -37,8 +37,8 @@ The default document has one layer `Layer0` and one material `Default` (`#F4F2EE
 | `edge` | `a`, `b` | a line segment; faces also own their outline implicitly, edges are the "loose" lines |
 | `group` | `name`, `transform: [16 numbers, column-major]`, `entities: [Entity…]` | children in local coordinates |
 | `guide` | `point`, `direction?` | guide point, or an infinite guide line when `direction` is set |
-| `dimension` | `a`, `b`, `offset: [x,y,z]` | linear dimension between two points, drawn offset from them |
-| `text` | `position`, `text`, `anchor?` | a label; with `anchor` a leader is drawn to that point |
+| `dimension` | `a`, `b`, `offset: [x,y,z]`, `style?` | linear dimension between two points, drawn offset from them; `style: "radius"` (`a` the centre, `b` on the curve) or `"diameter"` (`a`, `b` across the circle), with `offset` leading from `b` to the label |
+| `text` | `position`, `text`, `anchor?`, `screen?` | a label; with `anchor` a leader is drawn to that point; with `screen: [fx, fy]` it is screen text, fixed at that fraction of the view |
 | `section` | `origin`, `normal`, `active: bool` | section plane; when active, geometry on the +normal side is cut away (several active planes combine) |
 | `custom` | `type: "<plugin>.<name>"`, `data: {}` | plugin entity; the core stores it and asks the plugin registry to expand it into core entities at compile time |
 | `instance` | `definition: id`, `transform: [16]`, `name?` | a placed copy of a `components[]` definition; compiles to the definition's entities under `transform` with ids `<instanceId>#<entityId>` (so picking resolves to the instance). `move`/`rotate`/`scale`/`copy`/`mirror`/`erase`/`set_layer`/`make_group` act on the instance's transform; `explode` replaces it by world-coordinate copies; `paint` on `<instanceId>#<faceId>` paints the **definition** face, i.e. every instance |
@@ -57,22 +57,34 @@ Response: `{ "version": 13, "results": [OpResult…] }` where
 the ops applied but **not committed** (live drag feedback). `POST /api/projects/:id/undo` and `/redo`
 return `{ "version", "label" }`.
 
+**Partial replies** (what the browser uses, so an action never waits for the whole model): `partial: true` in
+the ops body, or `?partial=1` on undo/redo (plus `hidden=1` for ghosts), adds what the change did:
+`scene` (a CompiledScene of only the top-level entities it touched that still exist), `dirty` (every
+top-level id it touched, removed ones too) and `reconcile` (plugin geometry was touched; it can depend on
+neighbours the change didn't touch, so fetch the whole scene once idle). Without `scene` (layers, materials,
+components or plugin settings changed, a section plane changed while the geometry is cut on the server, or
+most of the model did) the client fetches `compile`.
+
 Ops are tagged by `op`. Optional `layer` defaults to the first layer. Points on a face's plane are
-accepted within 1 mm.
+accepted within 1 mm. The draw ops (`draw_line`, `draw_rectangle`, `draw_polygon`, `draw_circle`,
+`draw_arc`) take an optional `group`: the id of a group to draw inside (points stay in world
+coordinates); without it they draw at the top level.
 
 | op | fields | effect |
 |---|---|---|
-| `draw_line` | `points: [p…] (≥2)`, `close?: bool` | adds edges between consecutive points. After adding, if the new edges together with existing loose coplanar edges form a closed loop, a `face` is created from that loop (SketchUp's "face from loop"). Returns created edge ids and any face id. |
-| `draw_rectangle` | `corner`, `opposite`, `normal`, `u?` | a rectangle in the plane through `corner` with `normal`; sides along `u` (default: world x projected on the plane, or world z when degenerate) and `normal × u`. Creates one face (no loose edges). |
-| `draw_polygon` | `points (≥3)` | one planar face. |
-| `draw_circle` | `center`, `normal`, `radius`, `segments?: 24` | one regular polygon face. |
-| `push_pull` | `face`, `distance` | extrudes the face along its normal by `distance` (negative pushes). The original face keeps its id and moves to the new cap; side faces and the base face are created; the base face is the original outline with the normal flipped. Result: created ids. |
-| `offset` | `face`, `distance` | new face whose outline is the original offset in-plane (positive = outward). |
+| `draw_line` | `points: [p…] (≥2)`, `close?: bool` | adds edges between consecutive points. After adding, if the new edges together with existing loose coplanar edges form a closed loop, a `face` is created from that loop (SketchUp's "face from loop"), unless a face already lies there. Edges lying on a face divide it wherever they (with the loose edges already on it) close off part of it: the largest part keeps the id (`modified`), the others are new faces. Returns created edge ids and any face ids. |
+| `draw_rectangle` | `corner`, `opposite`, `normal`, `u?` | a rectangle in the plane through `corner` with `normal`; sides along `u` (default: world x projected on the plane, or world z when degenerate) and `normal × u`. Creates one face (no loose edges), cut into the faces it lies on (see *Sticky geometry*). |
+| `draw_polygon` | `points (≥3)` | one planar face, cut into the faces it lies on. |
+| `draw_circle` | `center`, `normal`, `radius`, `segments?: 24` | one regular polygon face, cut into the faces it lies on. |
+| `push_pull` | `face`, `distance`, `newFace?` | moves the face along its normal by `distance` (negative pushes). **A face on its own or in a flat drawing** becomes a prism: it keeps its id and moves to the new cap; side faces and the base face are created; the base face is the original outline with the normal flipped. **A face of a solid** (see *Sticky geometry*) moves with the solid: no base, neighbours stretch, a face it is pushed onto is cut open. With `newFace: true` the face of a solid is treated as a face on its own: the solid keeps its shape, a face stays where this one was and a prism is built on it. |
+| `offset` | `face`, `distance` | the outline offset in-plane (positive = outward), cut into the face: inward leaves a border (keeps the id) around a new inner face (`created[0]`); outward creates a border face around the original. |
 | `move` | `ids`, `delta` | translates entities (groups move as a whole). |
-| `rotate` | `ids`, `origin`, `axis`, `angle` (degrees) | rotates about the axis through origin. |
-| `scale` | `ids`, `origin`, `factors: [sx,sy,sz]` | scales about origin. |
-| `copy` | `ids`, `delta`, `count?: 1` | duplicates with each copy offset by `delta` more; returns new ids. |
-| `erase` | `ids` | removes entities (a group's children with it). |
+| `stretch` | `ids?` (faces, loose edges), `points?: [p…]` (corner positions), one of `delta`, `rotate: { origin, axis, angle }` (degrees) or `scale: { origin, factors: [sx,sy,sz] }`, `group?` | moves, turns or scales those faces and edges, and the corners at `points`, with everything attached to them in their container (see *Sticky geometry*). `ids` must share one container; with `points` alone the container is `group` or the top level. Faces folded in the process are in `created`. |
+| `rotate` | `ids`, `origin`, `axis`, `angle` (degrees) | rotates about the axis through origin, as they are (nothing attached follows: see `stretch`). |
+| `scale` | `ids`, `origin`, `factors: [sx,sy,sz]` | scales about origin, as they are. |
+| `copy` | `ids`, `delta?`, `rotate?: { origin, axis, angle }`, `count?: 1` | duplicates with each copy offset by `delta` more and/or turned by `angle` degrees more about the axis (a radial array); returns new ids. |
+| `intersect_faces` | `ids` (faces of one container) | where these faces cross other faces of the container, loose edges are added along the crossings (`created`, edges first); an edge that runs right across a face divides it. Edges that two faces already share, and edges already drawn, are skipped. |
+| `erase` | `ids` | removes entities (a group's children with it). A loose edge between two faces of one plane joins them (the larger keeps its id, the other is in `removed`); any other loose edge along a face's outline takes that face with it. |
 | `paint` | `ids`, `material`, `side?: "front"\|"back"\|"both"` | sets face materials; on a group paints all faces inside. `material` may be a material id or a `#hex` colour (then a material is created on the fly). |
 | `set_layer` | `ids`, `layer` | moves entities to a layer. |
 | `make_group` | `ids`, `name?` | wraps entities in a group (identity transform, world coords). |
@@ -80,9 +92,11 @@ accepted within 1 mm.
 | `add_layer` / `update_layer` / `remove_layer` | `name`, `color?` / `id`, `name?`, `visible?`, `color?` / `id` | entities on a removed layer go to the first layer. |
 | `add_material` / `update_material` | `name`, `color`, `opacity?` / `id`, … | |
 | `add_guide` | `point`, `direction?` | |
-| `add_dimension` | `a`, `b`, `offset` | |
-| `add_text` | `position`, `text`, `anchor?` | |
+| `add_dimension` | `a`, `b`, `offset`, `style?` | linear by default. `style: "radius"`: `a` is the centre, `b` a point on the curve; `"diameter"`: `a` and `b` are opposite points of the circle; for both `offset` leads from `b` to the label |
+| `add_text` | `position?`, `text`, `anchor?`, `screen?` | `screen: [fx, fy]` (fractions of the view, from the top left) makes screen text: it stays there however the camera moves and has no leader |
 | `add_section` / `update_section` | `origin`, `normal`, `active?` / `id`, `origin?`, `normal?`, `active?` | every active section cuts; several combine, keeping only what all of them keep. |
+| `set_locked` | `ids`, `locked` | lock or unlock entities; stored as `locked: true` on the entity. A locked entity, and anything inside a locked group, refuses ops that would change or remove it; `copy` and `set_hidden` still work |
+| `insert` | `entities: [entity…]`, `delta?`, `group?`, `merge?`, `local?` | adds ready-made entities (pasted, imported): new ids all the way down, unknown tags and materials fall back to the default, instances without their definition are skipped. Faces are added as they are (not cut into what they land on); `merge: true` joins the coplanar, touching faces of each inserted group (a triangle mesh becomes clean faces); with `group`, `local: true` says the entities are already in that group's coordinates |
 | `set_hidden` | `ids`, `hidden` | hide or show entities (a group or component with everything in it); stored as `hidden: true` on the entity. Hidden entities leave the compiled scene, slices and exports; `compile?hidden=1` (and `preview?hidden=1`) draws them as ghosts in a material group `__hidden`, not counted in the metrics. A hidden section plane still cuts. |
 | `slice_section` | `id`, `layer?`, `name?` | a 2D slice (SketchUp's "Create Group from Slice"): every face of the model — plugin geometry included, hidden tags left out — is cut by section plane `id` (active or not), and the cut lines become edges in a new group in the plane (`name` default "Slice N", on a "Slices" tag made when missing). Pieces of one line are merged; joints between touching solids of the same material are dropped, those between different materials stay. Errors when the plane cuts nothing. |
 | `update_entity` | `id`, `patch: {}` | shallow-merge arbitrary fields (name, text, outer, …) after validation. |
@@ -95,6 +109,10 @@ accepted within 1 mm.
 | `make_unique` | `instance` | copies the definition and points the instance at the copy. |
 | `edit_component` | `definition`, `ops: [Op…]` | applies core ops to the definition's entities (ids inside are stable); all instances update; `modified` lists the instances. |
 | `rename_component` / `remove_component` | `definition`, `name` / `definition`, `force?` | removing fails while instances exist unless `force` erases them. |
+| `solid_box` | `min`, `max`, `name?`, `layer?`, `material?` | a closed box solid as its own group (world axes); `created` = the group id (no geometry in the result). |
+| `solid_cylinder` | `center`, `axis`, `radius`, `height`, `segments?: 32`, `name?`, `layer?`, `material?` | a closed cylinder solid as its own group: the base circle at `center` normal to `axis`, extruded `height` along it (negative goes the other way). |
+| `extrude` | `profile: [p…]`, `holes?: [[p…]…]`, `distance?` or `direction?`, `name?`, `layer?`, `material?` | a closed solid as its own group from a planar loop (with hole loops in its plane), swept `distance` along the profile's normal (right-hand rule of the point order) or by the vector `direction`. |
+| `boolean` | `mode: "union"\|"subtract"\|"intersect"\|"split"`, `target`, `tools: [id…]`, `keepTools?: false`, `material?` | solids are groups whose faces close up (faces pointing inward are turned out). `target` keeps its id and becomes the result, in its own coordinates; coplanar pieces of the result merge into faces with holes. Tools are erased unless `keepTools`; tools that don't overlap each other are combined in one pass. Faces a subtract creates take the target's dominant material; `material` paints the whole result. Fails when the target or a tool is not closed, or the result is empty. `split` takes one tool: target and tool each keep what is only theirs, the shared part is a new group in `created` (SketchUp's Split; Trim is `subtract` with `keepTools`). BSP CSG (csg.js), 1 µm plane tolerance. |
 | `set_extension` | `plugin`, `data` | stores plugin data. |
 | `custom` | `type`, `data` | routed to the plugin registered for `type`'s prefix; 400 `no plugin for <type>` otherwise. |
 
@@ -102,9 +120,42 @@ Geometry rules: faces are validated planar and non-degenerate; outer loops are r
 normal follows the given winding (for `draw_rectangle` the normal passed). Edge ids are stable.
 `erase` of a face leaves its outline edges only if they were loose edges before.
 
+### Sticky geometry
+
+The faces and loose edges of one container (the top level, or one group) behave as one connected
+shape where they touch, as in SketchUp. Faces still store their own outlines; what touches is found
+by position (0.1 mm), so documents need no migration.
+
+- **Drawing on a face divides it.** A face drawn on faces of its plane is cut into them: each keeps
+  its id for the part outside the new outline (`modified`); the parts inside become faces of their
+  own, listed first in `created`, with the old face's materials unless the new face names one. What
+  lies on no face is added as drawn (keeping the new face's id). Drawing the same shape twice adds
+  nothing.
+- **Push/Pull moves a face of a solid.** When other faces share the face's edges and the solid is
+  behind it (a ray from the face against its normal crosses an odd number of faces of the
+  container), the face moves and keeps its id and side. Along each edge, a face standing along the
+  pull is stretched or shortened (`modified`; squeezed to nothing it is in `removed`); elsewhere a
+  side face is created. No base face is left. Where the moved face comes to lie on another face,
+  that face is cut open and the moved face is removed: pushing a shape through a wall's thickness
+  leaves an opening.
+- **Erasing an edge** joins or removes the faces beside it (see `erase`).
+- **`stretch` moves corners with what is attached.** Every face and loose edge of the container with
+  a corner at a moving position follows with that corner; a moving corner in the middle of another
+  face's edge becomes a corner of that face first. A face whose corners all move keeps its shape. A
+  face that only partly moves is reshaped, and folded into flat faces when it no longer lies in one
+  plane (triangles of the old face that still share a plane are joined again). The change is a move
+  (`delta`), a rotation (`rotate`) or a scale (`scale`), in world coordinates: the top of a box
+  scaled to half tapers the box, turned about its centre it twists the box (each side folds in
+  two). The Move, Rotate and Scale tools send `stretch` for drawn faces and loose edges, and Move
+  also for a corner or edge taken hold of directly; `move`, `rotate` and `scale` themselves stay
+  rigid, so scripts that transform loose faces keep working as before.
+
 ## Compiled scene (what the browser renders)
 
-`GET /api/projects/:id/compile` (query `section=0` to ignore sections) or `POST /api/compile { document }`:
+`GET /api/projects/:id/compile` (query `section=0` for uncut geometry) or `POST /api/compile { document }`.
+`cuts` lists the active section planes even with `section=0`: the browser always asks for uncut geometry
+(compile, preview, partial ops/undo/redo) and cuts on the GPU, keeping what every plane has
+`dot(p - origin, normal) <= 0`, so switching or moving a plane needs only a partial reply.
 
 ```jsonc
 {
@@ -114,9 +165,10 @@ normal follows the given winding (for `draw_rectangle` the normal passed). Edge 
                 "ids": ["faceId", ...], "idRanges": [[startIndex, count], ...] } ],
   "edges": { "positions": [x,y,z,x,y,z, ...], "ids": ["edgeOrFaceId", ...] },   // one id per segment (2 points)
   "guides": [ { "id", "point", "direction" } ],
-  "dimensions": [ { "id", "a", "b", "offset", "value" } ],
-  "texts": [ { "id", "position", "text", "anchor" } ],
+  "dimensions": [ { "id", "a", "b", "offset", "value", "style?" } ],
+  "texts": [ { "id", "position", "text", "anchor", "screen?" } ],
   "sections": [ { "id", "origin", "normal", "active" } ],
+  "cuts": [ { "origin", "normal" } ],   // the active planes that cut (left out when none)
   "bounds": { "min": [..], "max": [..] },
   "metrics": { "faces": 12, "edges": 30, "groups": 1, "instances": 0, "definitions": 0, "area": 86.4, "areaByMaterial": { "Brick": 12.0 }, "edgeLength": 72.3 }
 }
@@ -141,9 +193,9 @@ black-edge look needs no extra work in the browser.
 | PUT | `/api/projects/:id/document` | Document → `{ version }` (replace; one undo step) |
 | DELETE | `/api/projects/:id` | 204 |
 | POST | `/api/projects/:id/duplicate` | → summary |
-| POST | `/api/projects/:id/ops` | see Ops |
+| POST | `/api/projects/:id/ops` | see Ops; `partial: true` (and `?hidden=1`) adds `scene`, `dirty`, `reconcile` |
 | POST | `/api/projects/:id/preview` | `{ ops, partial? }` → CompiledScene; with `partial: true` only the top-level entities the ops create, modify or remove, plus `partial: true` and `dirty` (those ids), or the whole scene when the results don't say what changed |
-| POST | `/api/projects/:id/undo`, `/redo` | → `{ version, label }` |
+| POST | `/api/projects/:id/undo`, `/redo` | → `{ version, label }`; `?partial=1` adds `scene`, `dirty`, `reconcile` (see Ops) |
 | GET | `/api/projects/:id/history` | `[{ version, label, at }]` |
 | GET | `/api/projects/:id/compile` | → CompiledScene |
 | POST | `/api/compile` | `{ document }` → CompiledScene |
@@ -183,7 +235,7 @@ results with `isError: true`. Every tool takes an optional `project` (id or name
 
 Tools (name → maps to):
 - Projects: `list_projects`, `create_project {name}`, `use_project {project}`, `get_document {project?, includeEntities?: true}`, `list_entities {kind?, layer?}`, `get_entity {id}`, `get_metrics`, `undo`, `redo`, `history`.
-- Every op above as its own tool with the same fields: `draw_line`, `draw_rectangle`, `draw_polygon`, `draw_circle`, `draw_arc`, `push_pull`, `offset`, `follow_me`, `move`, `rotate`, `scale`, `mirror`, `copy`, `erase`, `paint`, `set_layer`, `make_group`, `explode`, `make_component`, `place_component`, `make_unique`, `edit_component`, `rename_component`, `remove_component`, `add_layer`, `update_layer`, `remove_layer`, `add_material`, `update_material`, `add_guide`, `add_dimension`, `add_text`, `add_section`, `update_section`, `slice_section`, `update_entity`, `measure`, `set_extension`, `custom`. Each returns the OpResult as JSON text and the new version. `list_components` lists the definitions with entity and instance counts.
+- Every op above as its own tool with the same fields: `draw_line`, `draw_rectangle`, `draw_polygon`, `draw_circle`, `draw_arc`, `push_pull`, `offset`, `follow_me`, `move`, `stretch`, `rotate`, `scale`, `mirror`, `copy`, `erase`, `intersect_faces`, `insert`, `set_locked`, `paint`, `set_layer`, `make_group`, `explode`, `make_component`, `place_component`, `make_unique`, `edit_component`, `rename_component`, `remove_component`, `add_layer`, `update_layer`, `remove_layer`, `add_material`, `update_material`, `add_guide`, `add_dimension`, `add_text`, `add_section`, `update_section`, `slice_section`, `update_entity`, `measure`, `set_extension`, `custom`, and the solids `solid_box`, `solid_cylinder`, `extrude`, `boolean`. Each returns the OpResult as JSON text and the new version; groups in its `entities` are summed up as `{kind, id, name, layer, children}` rather than listing their faces (REST returns them in full). `list_components` lists the definitions with entity and instance counts.
 - `apply_ops {ops: [Op…], label?}` for several ops in one undo step.
 - Viewport (through the browser WebSocket): `screenshot {width?, height?, view?}` → **image content** (PNG) plus a text line with the camera; `set_view`, `set_camera`, `zoom_extents`, `zoom_to`, `zoom_window`, `previous_view`, `next_view`, `orbit`, `pan`, `zoom`, `select`, `activate_tool`, `get_view_state`, `set_options`.
 - `export_glb {path?}` → writes `data/exports/<project>.glb` (or `path`) and returns the path, size and download URL.

@@ -90,12 +90,22 @@ entity_struct!(Guide {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<P3>,
 });
-entity_struct!(Dimension { pub a: P3, pub b: P3, pub offset: P3, });
+entity_struct!(Dimension {
+    pub a: P3,
+    pub b: P3,
+    pub offset: P3,
+    /// "radius" (`a` the centre, `b` on the curve) or "diameter" (`a` and `b` across the circle): `offset` leads from `b` to the label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+});
 entity_struct!(Text {
     pub position: P3,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor: Option<P3>,
+    /// Screen text: where it sits on the screen (fractions of the width and height, from the top left); `position` is not used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<[f64; 2]>,
 });
 entity_struct!(Section {
     pub origin: P3,
@@ -188,6 +198,11 @@ impl Entity {
     pub fn hidden(&self) -> bool { self.extra().get("hidden").and_then(|v| v.as_bool()).unwrap_or(false) }
     pub fn set_hidden(&mut self, hidden: bool) {
         if hidden { self.extra_mut().insert("hidden".into(), Value::Bool(true)); } else { self.extra_mut().remove("hidden"); }
+    }
+    /// Locked with Edit → Lock: ops that would change or remove it are refused until it is unlocked.
+    pub fn locked(&self) -> bool { self.extra().get("locked").and_then(|v| v.as_bool()).unwrap_or(false) }
+    pub fn set_locked(&mut self, locked: bool) {
+        if locked { self.extra_mut().insert("locked".into(), Value::Bool(true)); } else { self.extra_mut().remove("locked"); }
     }
     pub fn kind(&self) -> &'static str {
         match self {
@@ -371,6 +386,18 @@ impl Document {
     }
 
     /// The list that directly contains the entity with `id` (top level or a group's children).
+    /// The entity, or a group it is in, is locked.
+    pub fn is_locked(&self, id: &str) -> bool {
+        fn walk(list: &[Entity], id: &str, locked: bool) -> Option<bool> {
+            for e in list {
+                let l = locked || e.locked();
+                if e.id() == id { return Some(l); }
+                if let Entity::Group(g) = e { if let Some(x) = walk(&g.entities, id, l) { return Some(x); } }
+            }
+            None
+        }
+        walk(&self.entities, id, false).unwrap_or(false)
+    }
     pub fn container_mut(&mut self, id: &str) -> Option<(&mut Vec<Entity>, Mat4)> {
         fn walk<'a>(list: &'a mut Vec<Entity>, id: &str, m: Mat4) -> Option<(&'a mut Vec<Entity>, Mat4)> {
             if list.iter().any(|e| e.id() == id) { return Some((list, m)); }

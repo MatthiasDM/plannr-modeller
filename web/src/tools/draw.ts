@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Tool, ToolContext, Plane, Snap } from './base';
-import { parseNumbers, lineColor, drawSnap, planeFromSnap, GROUND, arr, INK, AXIS, DrawPlane } from './base';
+import { parseNumbers, parsePoint, lineColor, drawSnap, planeFromSnap, surfacePlane, GROUND, arr, INK, AXIS, DrawPlane } from './base';
 import { fmtM } from '../model';
 
 /** In-plane basis (u, w) for a plane normal, u following world x where possible. */
@@ -13,7 +13,7 @@ export function planeBasis(normal: THREE.Vector3): { u: THREE.Vector3; w: THREE.
 
 /** Line (pencil): chained edges; closed coplanar loops become faces (done by the engine). */
 export class LineTool implements Tool {
-  id = 'line'; label = 'Line'; hint = 'Click the start of the line. Arrow keys lock an axis (→ red, ← green, ↑ blue); hold Shift to keep the inference under the cursor.'; cursor = 'crosshair'; shortcut = 'l';
+  id = 'line'; label = 'Line'; hint = 'Click the start of the line, or type its position as [x; y; z]. Arrow keys lock an axis (→ red, ← green, ↑ blue); hold Shift to keep the inference under the cursor.'; cursor = 'crosshair'; shortcut = 'l';
   private start: THREE.Vector3 | null = null; private first: THREE.Vector3 | null = null;
   private plane: Plane = GROUND; private cur: Snap | null = null;
   busy() { return !!this.start; }
@@ -29,7 +29,7 @@ export class LineTool implements Tool {
   onDown(ev: PointerEvent, ctx: ToolContext) {
     if (ev.button !== 0) return;
     const s = ctx.snap(ev, { plane: this.plane, from: this.start ?? undefined, lock: ctx.lock, faces: true });
-    if (!this.start) { this.start = s.point.clone(); this.first = this.start.clone(); this.plane = planeFromSnap(s, GROUND); ctx.setHint('Click the end of the line, or type a length and press Enter. Esc ends the chain.'); return; }
+    if (!this.start) { this.start = s.point.clone(); this.first = this.start.clone(); this.plane = planeFromSnap(s, GROUND); ctx.setHint(this.next); return; }
     this.place(ctx, s.point);
   }
   private async place(ctx: ToolContext, end: THREE.Vector3) {
@@ -39,7 +39,14 @@ export class LineTool implements Tool {
     if (closing || res[0]?.created?.length > 1) { this.start = null; this.first = null; ctx.scene.clearOverlay(); ctx.setHint(this.hint); }
     else this.start = end.clone();
   }
+  private next = 'Click the end of the line, or type a length. [x; y; z] goes to a position, <x; y; z> steps from the last point (y is up). Esc ends the chain.';
   onVCB(v: string, ctx: ToolContext) {
+    const c = parsePoint(v);
+    if (c) { // a typed position, or a step from the last point
+      if (this.start) { this.place(ctx, c.relative ? this.start.clone().add(c.p) : c.p); return; }
+      if (c.relative) return;
+      this.start = c.p; this.first = c.p.clone(); this.plane = { origin: c.p.clone(), normal: GROUND.normal.clone() }; ctx.setHint(this.next); return;
+    }
     const n = parseNumbers(v); if (!n.length || !this.start || !this.cur) return;
     const dir = this.cur.point.clone().sub(this.start); if (dir.lengthSq() < 1e-9) return; dir.normalize();
     this.place(ctx, this.start.clone().addScaledVector(dir, n[0]));
@@ -142,24 +149,51 @@ export class CircleTool implements Tool {
   onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.center) { this.center = null; ctx.scene.clearOverlay(); ctx.setHint(this.hint); return true; } return false; }
 }
 
-/** Polygon: click each corner; closes on the first point or Enter. */
+/** Polygon: click each corner (closes on the first point or Enter); or, after typing a number of sides
+ *  ("6s"), a regular polygon from its centre and one corner. */
 export class PolygonTool implements Tool {
-  id = 'polygon'; label = 'Polygon'; hint = 'Click each corner; click the first corner or press Enter to close. Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; shortcut = 'n'; planeLock = true;
+  id = 'polygon'; label = 'Polygon'; hint = 'Click each corner; click the first corner or press Enter to close. Type 6s for a regular polygon with six sides (0s for free corners again). Arrow keys turn the plane to face an axis (→ red, ← green, ↑ blue).'; cursor = 'crosshair'; shortcut = 'n'; planeLock = true;
   private pts: THREE.Vector3[] = []; private dp = new DrawPlane(); private get plane() { return this.dp.plane; }
-  busy() { return this.pts.length > 0; }
-  activate(ctx: ToolContext) { this.pts = []; ctx.setHint(this.hint); ctx.setVCB('', 'Length'); }
-  deactivate(ctx: ToolContext) { this.pts = []; ctx.scene.clearOverlay(); }
+  /** Regular polygon: the number of sides (0 = free corners) and its centre once placed; where the cursor was last. */
+  private sides = 0; private centre: THREE.Vector3 | null = null; private cur: THREE.Vector3 | null = null;
+  busy() { return this.pts.length > 0 || !!this.centre; }
+  private idle(ctx: ToolContext) {
+    ctx.setHint(this.sides ? `Regular polygon with ${this.sides} sides: click the centre, then a corner (or type the radius). Type 0s for free corners.` : this.hint);
+    ctx.setVCB(this.sides ? `${this.sides}s` : '', this.sides ? 'Sides' : 'Length');
+  }
+  activate(ctx: ToolContext) { this.pts = []; this.centre = null; this.idle(ctx); }
+  deactivate(ctx: ToolContext) { this.pts = []; this.centre = null; ctx.scene.clearOverlay(); }
+  /** The corners of the regular polygon about the centre with one corner at `corner`, counter-clockwise seen along the plane's normal. */
+  private ring(corner: THREE.Vector3) {
+    const c = this.centre!, d = corner.clone().sub(c), n = this.plane.normal.clone().normalize(); const pts: THREE.Vector3[] = [];
+    for (let i = 0; i < this.sides; i++) pts.push(c.clone().add(d.clone().applyAxisAngle(n, (i / this.sides) * Math.PI * 2)));
+    return pts;
+  }
+  private snapAt(ev: PointerEvent, ctx: ToolContext) {
+    const started = this.pts.length > 0 || !!this.centre;
+    const s = ctx.snap(ev, { plane: started ? this.plane : GROUND, faces: !started, inPlane: started, from: this.pts.at(-1) ?? this.centre ?? undefined }); if (started) s.point.copy(this.dp.on(s.point));
+    return s;
+  }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, inPlane: !!this.pts.length, from: this.pts.at(-1) }); if (this.pts.length) s.point.copy(this.dp.on(s.point));
+    const s = this.snapAt(ev, ctx); this.cur = s.point.clone();
     ctx.scene.clearOverlay(); drawSnap(ctx, s);
-    if (!this.pts.length) { this.dp.hover(ctx, ev, s, 'square'); return; }
+    if (!this.pts.length && !this.centre) { this.dp.hover(ctx, ev, s, this.sides ? 'ring' : 'square'); return; }
+    if (this.centre) {
+      const r = this.centre.distanceTo(s.point); if (r < 1e-6) return; const pts = this.ring(s.point);
+      ctx.scene.addLine([...pts, pts[0]], INK, false, 2); ctx.scene.addFace(pts); ctx.scene.addLine([this.centre, s.point], 0x888888, true);
+      ctx.scene.addLabel(this.centre.clone().lerp(s.point, 0.5), `r ${fmtM(r)}`); ctx.setVCB(r.toFixed(3), 'Radius'); return;
+    }
     ctx.scene.addLine([...this.pts, s.point], lineColor(this.pts.at(-1)!, s.point, s), false, 2);
     if (this.pts.length >= 2) ctx.scene.addFace([...this.pts, s.point]);
     const L = this.pts.at(-1)!.distanceTo(s.point); ctx.setVCB(L.toFixed(3), 'Length'); ctx.scene.addLabel(this.pts.at(-1)!.clone().lerp(s.point, 0.5), fmtM(L));
   }
   onDown(ev: PointerEvent, ctx: ToolContext) {
     if (ev.button !== 0) return;
-    const s = ctx.snap(ev, { plane: this.pts.length ? this.plane : GROUND, faces: !this.pts.length, inPlane: !!this.pts.length, from: this.pts.at(-1) }); if (this.pts.length) s.point.copy(this.dp.on(s.point));
+    const s = this.snapAt(ev, ctx);
+    if (this.sides) {
+      if (!this.centre) { this.dp.start(ctx, ev, s); this.centre = s.point.clone(); ctx.setHint('Click a corner of the polygon, or type the radius and press Enter.'); return; }
+      this.regular(ctx, s.point); return;
+    }
     if (!this.pts.length) this.dp.start(ctx, ev, s);
     if (this.pts.length >= 3 && s.point.distanceTo(this.pts[0]) < ctx.scene.pixelSize(s.point) * 10) return this.close(ctx);
     this.pts.push(s.point.clone());
@@ -169,12 +203,59 @@ export class PolygonTool implements Tool {
     const res = await ctx.ops([{ op: 'draw_polygon', points: this.pts.map(arr), layer: ctx.options.layer }], 'Polygon');
     this.pts = []; ctx.scene.clearOverlay(); if (res[0]?.created?.[0]) ctx.select([res[0].created[0]]);
   }
-  onVCB(v: string, ctx: ToolContext) { const n = parseNumbers(v); if (!n.length || !this.pts.length) return; void ctx; }
+  private async regular(ctx: ToolContext, corner: THREE.Vector3) {
+    if (!this.centre || this.centre.distanceTo(corner) < 0.005) return;
+    const res = await ctx.ops([{ op: 'draw_polygon', points: this.ring(corner).map(arr), layer: ctx.options.layer }], 'Polygon');
+    this.centre = null; ctx.scene.clearOverlay(); this.idle(ctx); if (res[0]?.created?.[0]) ctx.select([res[0].created[0]]);
+  }
+  onVCB(v: string, ctx: ToolContext) {
+    const m = v.match(/^(\d+)\s*s$/i);
+    if (m) { const n = parseInt(m[1]); this.sides = n >= 3 ? Math.min(n, 200) : 0; this.pts = []; this.centre = null; ctx.scene.clearOverlay(); this.idle(ctx); return; }
+    const n = parseNumbers(v); if (!n.length || n[0] <= 0) return;
+    if (this.centre) { // the radius, towards the cursor
+      const d = this.cur ? this.cur.clone().sub(this.centre) : new THREE.Vector3(); if (d.lengthSq() < 1e-9) d.copy(planeBasis(this.plane.normal).u);
+      this.regular(ctx, this.centre.clone().addScaledVector(d.normalize(), n[0])); return;
+    }
+    if (this.pts.length && this.cur) { // the length of the side being drawn, towards the cursor
+      const d = this.cur.clone().sub(this.pts.at(-1)!); if (d.lengthSq() < 1e-9) return;
+      this.pts.push(this.pts.at(-1)!.clone().addScaledVector(d.normalize(), n[0]));
+    }
+  }
   onKey(ev: KeyboardEvent, ctx: ToolContext) {
     if (ev.key === 'Enter') { this.close(ctx); return true; }
-    if (ev.key === 'Escape') { this.pts = []; ctx.scene.clearOverlay(); return true; }
+    if (ev.key === 'Escape' && this.busy()) { this.pts = []; this.centre = null; ctx.scene.clearOverlay(); this.idle(ctx); return true; }
     return false;
   }
-  /** The plane turns about the first corner; once there are more, they fix it. */
-  onLock(ctx: ToolContext) { if (this.pts.length === 1) this.dp.relock(ctx); }
+  /** The plane turns about the first corner (or the centre); once there are more corners, they fix it. */
+  onLock(ctx: ToolContext) { if (this.pts.length === 1 || this.centre) this.dp.relock(ctx); }
+}
+
+/** Freehand: press and drag to draw a hand-drawn line on the face (or the ground) under the first point. Let go
+ *  where it began and it closes into a face. */
+export class FreehandTool implements Tool {
+  id = 'freehand'; label = 'Freehand'; hint = 'Press and drag to draw by hand. Let go near where you began to close the shape into a face.'; cursor = 'crosshair';
+  private pts: THREE.Vector3[] = []; private plane: Plane = GROUND; private at = { x: 0, y: 0 }; private from = { x: 0, y: 0 };
+  busy() { return this.pts.length > 0; }
+  activate(ctx: ToolContext) { this.pts = []; ctx.setHint(this.hint); ctx.setVCB('', 'Measurements'); }
+  deactivate(ctx: ToolContext) { this.pts = []; ctx.scene.clearOverlay(); }
+  onDown(ev: PointerEvent, ctx: ToolContext) {
+    if (ev.button !== 0) return; const s = ctx.snap(ev, { faces: true });
+    this.plane = surfacePlane(ctx, ev, s); this.pts = [s.point.clone()]; this.at = this.from = { x: ev.clientX, y: ev.clientY };
+  }
+  onMove(ev: PointerEvent, ctx: ToolContext) {
+    if (!this.pts.length) { const s = ctx.snap(ev, { faces: true }); ctx.scene.clearOverlay(); drawSnap(ctx, s); return; }
+    if (Math.hypot(ev.clientX - this.at.x, ev.clientY - this.at.y) < 7) return; // a point every few pixels
+    const p = ctx.scene.planePoint(ev, this.plane.origin, this.plane.normal); if (!p || p.distanceTo(this.pts[this.pts.length - 1]) < 0.002) return;
+    this.pts.push(p); this.at = { x: ev.clientX, y: ev.clientY }; ctx.scene.setSnapMarker(null);
+    ctx.scene.clearOverlay(); ctx.scene.addLine(this.pts, INK, false, 2);
+    if (this.closes(ev)) ctx.scene.addLabel(this.pts[0], 'Close', 'infer');
+  }
+  private closes(ev: { clientX: number; clientY: number }) { return this.pts.length > 4 && Math.hypot(ev.clientX - this.from.x, ev.clientY - this.from.y) < 12; }
+  async onUp(ev: PointerEvent, ctx: ToolContext) {
+    if (ev.button !== 0 || !this.pts.length) return;
+    const close = this.closes(ev); const pts = close ? this.pts.slice(0, -1) : this.pts; this.pts = []; ctx.scene.clearOverlay();
+    if (pts.length < 2) return;
+    await ctx.ops([{ op: 'draw_line', points: pts.map(arr), close, layer: ctx.options.layer }], 'Freehand');
+  }
+  onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.pts.length) { this.pts = []; ctx.scene.clearOverlay(); return true; } return false; }
 }

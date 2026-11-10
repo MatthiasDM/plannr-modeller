@@ -57,32 +57,59 @@ Tests: `cargo test`. Type-check: `cd web && npx tsc --noEmit`.
 
 | Tool | Key | Notes |
 |---|---|---|
-| Select | Space | Shift adds, Ctrl toggles, drag a window (left→right) or crossing box (right→left), double-click enters a group or opens a plugin object (a construction wall or roof: select one face; a framed wall: single studs and plates), Esc leaves |
-| Eraser | E | Click or drag over edges, faces, objects |
-| Line | L | Chained edges; a closed coplanar loop becomes a face. Type a length. |
+| Select | Space | Shift adds, Ctrl toggles, Shift+Ctrl takes away, triple-click selects every drawn face and edge connected to the one clicked, drag a window (left→right) or crossing box (right→left), double-click enters a group or opens a plugin object (a construction wall or roof: select one face; a framed wall: single studs and plates), Esc leaves |
+| Eraser | E | Click or drag over edges, faces, objects; with Shift held they are hidden instead. Erasing the edge between two faces of one plane joins them |
+| Freehand | — | Press and drag to draw by hand on the face or the ground under the first point; let go where you began to close the shape into a face |
+| Line | L | Chained edges; a closed coplanar loop becomes a face, a line across a face divides it. Type a length, a position `[x;y;z]` or a step from the last point `<x;y;z>` (model coordinates, y is up) |
 | Rectangle | R | Two corners on the ground or on any face; type `w;h` |
 | Rotated Rectangle | — | First edge with two clicks, then the width: a rectangle at any angle in the plane |
 | Circle | C | Centre + radius; type `24s` for the number of sides |
-| Polygon | N | Click corners, Enter closes |
+| Polygon | N | Click corners, Enter closes; type a length for the side being drawn. Type `6s` for a regular polygon: centre, then a corner (or type the radius); `0s` goes back to free corners |
 | Arc / Pie | A | Centre, start, end (type a radius, then an angle); Pie closes the sector into a face |
 | 3 Point Arc | — | Start, a point on the arc, end |
-| 2 Point Arc | — | Both chord ends, then pull the bulge |
-| Push/Pull | P | Extrude a face; type a distance; the height snaps to other geometry. With a face selected first, click anywhere to pull it |
-| Offset | F | Offset a face's outline in or out (the selected face, when there is one) |
-| Move | M | Move or (Ctrl) copy; type a distance. With a selection, that is what moves, wherever you grab |
-| Rotate | Q | Protractor: centre (on a face = its plane), reference, angle; type degrees |
-| Scale | S | Green handles on the selection's box: corners uniform, side handles one axis, edge handles two; Ctrl scales about the centre; type a factor or `sx;sy;sz` |
-| Follow Me | — | Select the path (edges, or a face whose outline is the path), then click the profile face to sweep it |
+| 2 Point Arc | — | Both chord ends, then pull the bulge: it turns cyan where the arc runs on smoothly from an edge at either end (tangent). Type the bulge, or a radius as `2r` |
+| Push/Pull | P | Extrude a face; on a solid the face moves with its neighbours, and pushed through to the far side it cuts an opening. Type a distance; the height snaps to other geometry. Double-click a face to repeat the last distance. Ctrl (after taking hold of the face) builds on the face instead of moving it: the solid keeps its shape and the face stays as a floor between. With a face selected first, click anywhere to pull it |
+| Offset | F | Offset a face's outline in or out, dividing the face (the selected face, when there is one). Double-click a face to repeat the last offset. With two or more connected edges selected, the line they form is copied to one side instead |
+| Move | M | Move or (Ctrl) copy; type a distance. With a selection, that is what moves, wherever you grab. Drawn faces take the faces around them along; with nothing selected a single edge or corner can be moved. After a copy, type `3x` for three copies in a row or `/3` for three spread evenly up to it |
+| Rotate | Q | Protractor: centre (on a face = its plane), reference, angle; type degrees or a slope (`1:6`). A drawn face turns with the faces around it. Ctrl makes a copy; then `5x` or `/5` makes a ring of copies |
+| Scale | S | Green handles on the selection's box: corners uniform, side handles one axis, edge handles two; Ctrl scales about the centre; type a factor or `sx;sy;sz`, or a size with its unit (`2m`) to make the selection that large. A drawn face scales with the faces around it |
+| Follow Me | — | Click the profile face, move along the edges it should follow (round a loop too) and click. Or select the path first (edges, or a face whose outline is the path) and click the profile |
 | Flip / Mirror | — | Mirrors the selection across a plane through its centre (→ ← ↑ pick the axis) or across a clicked face; Ctrl keeps a copy |
 | Place Component | — | Drops an instance of a component definition (Edit → Make Component turns a selection into one); ← → turn it by 90° |
-| Tape Measure | T | Measure; start on an edge to pull a parallel guide line; Ctrl-click places a guide point |
-| Dimension | D | Two points, then the offset |
-| Protractor | — | Vertex, reference direction, angle: places an angled guide line; type degrees |
-| Text | X | Click a point, type a label |
-| Paint Bucket | B | Active material onto a face (Shift: whole object, Alt: sample) |
-| Orbit / Pan / Zoom | O / H / Z | Middle-drag orbits, Shift+middle pans, wheel zooms in any tool; Shift+Z zoom extents |
+| Box | — | Solid tools: a closed box solid (its own group). Two corners of the base on the ground or on a face (type `w;d`), then the height (type it) |
+| Cylinder | — | A closed cylinder solid: centre and radius of the base on the ground or a face, then the height; type `48s` for the number of sides |
+| Trim / Split | — | Trim cuts like Subtract but leaves the cutter in place. Split leaves both solids, cut along each other, and makes the part they share a third solid. (Union on two overlapping solids is SketchUp's Outer Shell) |
+| Union / Subtract / Intersect | — | Booleans between solids (groups whose faces close up): click the solid to keep, then the one to join, cut away or intersect with; the first stays picked for the next cut. The result's coplanar pieces merge into clean faces (a wall with slots is one face with holes) |
+| Tape Measure | T | Measure; start on an edge to pull a parallel guide line; Ctrl-click places a guide point. After measuring, type a new length to resize the whole model so the measured distance becomes it |
+| Dimension | D | Two points (or click an edge for its length), then the offset. Click a circle for its diameter or an arc for its radius (R and D switch), then where the label goes |
+| Protractor | — | Vertex, reference direction, angle: places an angled guide line; type degrees or a slope (`1:6`) |
+| Text | X | Click a point, an edge or a face for a label with a leader: it starts as the position, the length or the area. Click empty space for screen text, which stays in place in the view |
+| Paint Bucket | B | Active material onto a face. Ctrl: every connected face with the same material; Shift+Ctrl: every such face of the shape; Shift: whole object; Alt: sample. (Ctrl and Alt do not switch to Orbit and Pan while this tool is active) |
+| Orbit / Pan / Zoom | O / H / Z | Middle-drag (or right-drag) orbits, Shift+middle pans, wheel zooms in any tool; Shift+Z zoom extents |
 | Zoom Window | — | Drag a rectangle to fill the view with it; ⌘[ and ⌘] step through previous and next views |
 | Section Plane | — | Click a face to cut along it, the ground for a horizontal cut; the plane is previewed while hovering, its arrows on the side that is cut away (Tab flips it; Reverse later in Entity Info). Several active planes cut together |
+
+**Edit:** Cut, Copy and Paste (⌘X / ⌘C / ⌘V) work on the selection, also between projects: the copy follows the
+cursor by its lowest corner until you click; ⇧⌘V pastes in place. **Lock** (Edit menu, right-click) keeps something
+from being moved, changed or erased until it is unlocked; it can still be selected, copied and hidden.
+
+**Camera:** Camera → Parallel projection shows the model without perspective (a 1° lens from far away), Field of
+view sets the lens (35° by default). **Shadows:** Display → Sun → By date and time puts the sun where it stands at
+that hour, month and latitude (north is where the Front view looks). **Scenes** keep the view, the active section
+planes, which tags show, the face style, the lens and the sun.
+
+**Units:** Model Info → Units switches between metres, centimetres and millimetres and sets the decimals. Labels,
+dimensions and the Measurements box follow, and a bare number you type is in that unit (`500` is 500 mm); a unit
+you type yourself always wins (`2m`). The document stays in metres.
+
+**Import and export:** File → Import model reads `.obj` and `.stl` files as one group (triangles in one plane are
+joined into faces; you are asked for the file's unit). File → Export writes `.glb`, `.obj` (metres, y up) and `.stl`
+(millimetres, z up, for printing) of what is in view.
+
+**Right-click** something for its menu: Cut, Copy, Erase, Hide, Lock, Select connected, Select all with the same tag, Make group,
+Make Component, Explode, Edit group, Intersect faces (edges where the selected faces cross others, dividing both),
+Reverse faces, Zoom Selection. Over empty space: Undo, Redo, Paste, Select all, Unhide all, Zoom Extents. Dragging with
+the right button still orbits.
 
 **Hold a modifier for a tool:** holding Ctrl orbits and holding Option/Alt pans until you release the key,
 then you are back in the tool you had. Which key does what is set in the Shortcuts tray (Shift can be
@@ -117,7 +144,7 @@ beside it. See [docs/EMBED.md](docs/EMBED.md) and `web/public/embed-example.html
 
 Every tool is an MCP tool with the same semantics (`draw_line`, `draw_rectangle`, `draw_circle`,
 `draw_polygon`, `push_pull`, `offset`, `move`, `rotate`, `scale`, `copy`, `erase`, `paint`, `make_group`,
-`explode`, `draw_arc`, `follow_me`, `mirror`, `make_component`, `place_component`, `edit_component`, `make_unique`,
+`explode`, `draw_arc`, `follow_me`, `mirror`, `solid_box`, `solid_cylinder`, `extrude`, `boolean`, `make_component`, `place_component`, `edit_component`, `make_unique`,
 `add_guide`, `add_dimension`, `add_text`, `add_section`, `measure`, …), plus project tools
 (`list_projects`, `create_project`, `use_project`, `get_document`, `list_entities`, `undo`, `redo`),
 viewport tools that drive the open browser (`screenshot`, `set_view`, `set_camera`, `zoom_extents`,

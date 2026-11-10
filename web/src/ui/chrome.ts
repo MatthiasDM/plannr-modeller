@@ -1,5 +1,6 @@
 import { THEMES, type App, type Theme } from '../main';
 import { FACE_STYLES } from '../scene';
+import { findEntity, type Entity } from '../model';
 const THEME_LABEL: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
 import { icon } from './icons';
 import { mcpDialog, pluginsDialog } from './dialog';
@@ -18,24 +19,32 @@ export function renderMenubar(app: App, el: HTMLElement) {
     ['File', () => [
       { label: 'New…', key: `${KEY}N`, act: () => app.showWelcome() }, { label: 'Open…', key: `${KEY}O`, act: () => app.showWelcome() }, 'sep',
       { label: 'Duplicate project', act: () => app.duplicate() }, { label: 'Rename…', act: () => app.renamePrompt() }, 'sep',
-      { label: 'Import document JSON…', act: () => app.importJson() }, { label: 'Export 3D model (.glb)', act: () => app.exportGlb() }, { label: 'Export document JSON', act: () => app.exportJson() }, 'sep',
+      { label: 'Import model (.obj, .stl)…', act: () => app.importModel() }, { label: 'Import document JSON…', act: () => app.importJson() }, 'sep',
+      { label: 'Export 3D model (.glb)', act: () => app.exportGlb() }, { label: 'Export .obj', act: () => app.exportObj() }, { label: 'Export .stl (mm, for printing)', act: () => app.exportStl() }, { label: 'Export document JSON', act: () => app.exportJson() }, 'sep',
       { label: 'Load sample model', act: () => app.loadSample() }, { label: 'Delete project…', act: () => app.deleteProject() },
     ]],
     ['Edit', () => [
       { label: 'Undo', key: `${KEY}Z`, act: () => app.undo(), disabled: !app.canUndo }, { label: 'Redo', key: `⇧${KEY}Z`, act: () => app.redo(), disabled: !app.canRedo }, 'sep',
-      { label: 'Erase', key: '⌫', act: () => app.deleteSelection(), disabled: !app.selection.size },
+      { label: 'Cut', key: `${KEY}X`, act: () => app.cutSelection(), disabled: !app.selection.size }, { label: 'Copy', key: `${KEY}C`, act: () => app.copySelection(), disabled: !app.selection.size },
+      { label: 'Paste', key: `${KEY}V`, act: () => app.paste() }, { label: 'Paste in place', key: `⇧${KEY}V`, act: () => app.paste(true) },
+      { label: 'Erase', key: '⌫', act: () => app.deleteSelection(), disabled: !app.selection.size }, 'sep',
       { label: 'Select all', key: `${KEY}A`, act: () => app.selectAll() }, { label: 'Select none', act: () => app.select([]) }, 'sep',
       { label: 'Make group', key: 'G', act: () => app.groupSelection(), disabled: !app.selection.size },
       { label: 'Make Component…', act: () => app.makeComponent(), disabled: !app.selection.size },
       { label: 'Explode', act: () => app.explodeSelection(), disabled: !app.selection.size },
+      { label: 'Intersect faces', act: () => app.intersectFaces(), disabled: !app.selection.size },
+      { label: 'Reverse faces', act: () => app.reverseFaces(), disabled: !app.selection.size },
       { label: 'Close group', key: 'Esc', act: () => app.exitGroup(), disabled: !app.enteredGroup }, 'sep',
       { label: 'Hide', key: `${KEY}E`, act: () => app.hideSelection(), disabled: !app.selection.size },
       { label: 'Unhide selected', act: () => app.unhideSelected(), disabled: ![...app.selection].some(id => app.hiddenIds.includes(id)) },
       { label: 'Unhide last', act: () => app.unhideLast(), disabled: !app.hiddenIds.length },
-      { label: 'Unhide all', key: `⇧${KEY}E`, act: () => app.unhideAll(), disabled: !app.hiddenIds.length },
+      { label: 'Unhide all', key: `⇧${KEY}E`, act: () => app.unhideAll(), disabled: !app.hiddenIds.length }, 'sep',
+      { label: 'Lock', act: () => app.lockSelection(true), disabled: !app.selection.size },
+      { label: 'Unlock', act: () => app.lockSelection(false), disabled: ![...app.selection].some(id => app.lockedIds.includes(id)) },
+      { label: 'Unlock all', act: () => app.unlockAll(), disabled: !app.lockedIds.length },
     ]],
     ['View', () => [
-      ...(['grid', 'axes', 'edges', 'figure', 'shadows'] as const).map(k => ({ label: `${app.display[k] ? '✓ ' : '   '}${({ grid: 'Grid', axes: 'Axes', edges: 'Edges', figure: 'Scale figure', shadows: 'Shadows' })[k]}`, act: () => app.toggleDisplay(k) })),
+      ...(['grid', 'axes', 'edges', 'figure', 'shadows', 'sectionPlanes'] as const).map(k => ({ label: `${app.display[k] ? '✓ ' : '   '}${({ grid: 'Grid', axes: 'Axes', edges: 'Edges', figure: 'Scale figure', shadows: 'Shadows', sectionPlanes: 'Section planes' })[k]}`, act: () => app.toggleDisplay(k) })),
       'sep', ...FACE_STYLES.map((s, i) => ({ label: `${app.faceStyle === s.id ? '✓ ' : '   '}Face style: ${s.label}`, key: `⌥${i + 1}`, act: () => app.setFaceStyle(s.id) })),
       { label: `${app.backEdges ? '✓ ' : '   '}Back edges`, act: () => app.setBackEdges(!app.backEdges) },
       { label: `${app.hiddenGeometry ? '✓ ' : '   '}Hidden geometry`, act: () => app.setHiddenGeometry(!app.hiddenGeometry) },
@@ -48,10 +57,12 @@ export function renderMenubar(app: App, el: HTMLElement) {
       { label: 'Zoom Extents', key: '⇧Z', act: () => app.zoomExtents() }, { label: 'Zoom Selection', act: () => app.zoomSelection(), disabled: !app.selection.size }, { label: 'Zoom Window', act: () => app.setTool('zoomwin') }, 'sep',
       { label: 'Previous view', key: '⌘[', act: () => app.previousView(), disabled: !app.canPrevView }, { label: 'Next view', key: '⌘]', act: () => app.nextView(), disabled: !app.canNextView }, 'sep',
       ...(['iso', 'top', 'bottom', 'front', 'back', 'left', 'right'] as const).map(v => ({ label: `Standard view · ${v[0].toUpperCase()}${v.slice(1)}`, act: () => app.setView(v) })),
+      'sep', { label: `${app.parallel ? '   ' : '✓ '}Perspective`, act: () => app.setProjection(false) }, { label: `${app.parallel ? '✓ ' : '   '}Parallel projection`, act: () => app.setProjection(true) },
+      { label: `   Field of view… (${app.parallel ? 'parallel' : `${app.fov}°`})`, act: () => app.fovPrompt() },
       'sep', { label: 'Add scene…', act: () => app.saveScene() },
     ]],
-    ['Draw', () => tools.filter(t => ['line', 'rectangle', 'rotrect', 'circle', 'polygon', 'arc', 'arc3', 'arc2', 'pie'].includes(t.id)).map(t => ({ label: t.label, key: t.shortcut?.toUpperCase(), act: () => app.setTool(t.id) }))],
-    ['Tools', () => tools.filter(t => !['line', 'rectangle', 'rotrect', 'circle', 'polygon', 'arc', 'arc3', 'arc2', 'pie'].includes(t.id) && !getPlugins().some(p => p.tools?.includes(t))).map(t => ({ label: t.label, key: t.shortcut?.trim() ? t.shortcut.toUpperCase() : t.id === 'select' ? 'Space' : undefined, act: () => app.setTool(t.id) }))],
+    ['Draw', () => tools.filter(t => ['line', 'freehand', 'rectangle', 'rotrect', 'circle', 'polygon', 'arc', 'arc3', 'arc2', 'pie'].includes(t.id)).map(t => ({ label: t.label, key: t.shortcut?.toUpperCase(), act: () => app.setTool(t.id) }))],
+    ['Tools', () => tools.filter(t => !['paste', 'line', 'freehand', 'rectangle', 'rotrect', 'circle', 'polygon', 'arc', 'arc3', 'arc2', 'pie'].includes(t.id) && !getPlugins().some(p => p.tools?.includes(t))).map(t => ({ label: t.label, key: t.shortcut?.trim() ? t.shortcut.toUpperCase() : t.id === 'select' ? 'Space' : undefined, act: () => app.setTool(t.id) }))],
     ['Plugins', () => {
       const manage: MenuItem[] = [{ label: 'Manage plugins…', act: () => pluginsDialog(owner, t => app.toast(t)) }, 'sep'];
       const items: MenuItem[] = getPlugins().flatMap(p => [{ label: `● ${p.name}`, act: () => {}, disabled: true }, ...(p.tools ?? []).map(t => ({ label: `   ${t.label}`, key: t.shortcut?.toUpperCase(), act: () => app.setTool(t.id) }))]);
@@ -87,7 +98,56 @@ export function renderMenubar(app: App, el: HTMLElement) {
   nameInput.onkeydown = (e) => { if (e.key === 'Enter') nameInput.blur(); e.stopPropagation(); };
 }
 
+let closeMenu: (() => void) | null = null;
+export function closeContextMenu() { closeMenu?.(); }
+/** The right-click menu: what can be done with the selection (the thing under the cursor), or with the model over empty space. */
+export function showContextMenu(app: App, x: number, y: number) {
+  closeContextMenu();
+  const sel = [...app.selection]; const ents = sel.map(id => findEntity(app.doc, id)).filter((e): e is Entity => !!e);
+  const has = (k: Entity['kind']) => ents.some(e => e.kind === k); const one = ents.length === 1 ? ents[0] : null;
+  const locked = sel.some(id => app.lockedIds.includes(id));
+  const items: MenuItem[] = sel.length ? [
+    { label: 'Cut', key: `${KEY}X`, act: () => app.cutSelection() }, { label: 'Copy', key: `${KEY}C`, act: () => app.copySelection() },
+    { label: 'Erase', key: '⌫', act: () => app.deleteSelection() },
+    { label: 'Hide', key: `${KEY}E`, act: () => app.hideSelection() },
+    ...(sel.some(id => app.hiddenIds.includes(id)) ? [{ label: 'Unhide', act: () => app.unhideSelected() }] : []),
+    { label: locked ? 'Unlock' : 'Lock', act: () => app.lockSelection(!locked) },
+    'sep',
+    ...(has('face') || has('edge') ? [{ label: 'Select connected', act: () => app.selectConnected() }] : []),
+    { label: 'Select all with the same tag', act: () => app.selectSameTag() },
+    'sep',
+    ...(one?.kind === 'group' ? [{ label: 'Edit group', act: () => app.enterGroup(one.id) }] : []),
+    { label: 'Make group', key: 'G', act: () => app.groupSelection() },
+    { label: 'Make Component…', act: () => app.makeComponent() },
+    ...(has('group') || has('instance') ? [{ label: 'Explode', act: () => app.explodeSelection() }] : []),
+    ...(has('face') ? ['sep' as const, { label: 'Intersect faces', act: () => app.intersectFaces() }, { label: 'Reverse faces', act: () => app.reverseFaces() }] : []),
+    'sep', { label: 'Zoom Selection', act: () => app.zoomSelection() },
+  ] : [
+    { label: 'Undo', key: `${KEY}Z`, act: () => app.undo(), disabled: !app.canUndo }, { label: 'Redo', key: `⇧${KEY}Z`, act: () => app.redo(), disabled: !app.canRedo }, 'sep',
+    { label: 'Paste', key: `${KEY}V`, act: () => app.paste() }, { label: 'Paste in place', key: `⇧${KEY}V`, act: () => app.paste(true) }, 'sep',
+    { label: 'Select all', key: `${KEY}A`, act: () => app.selectAll() },
+    { label: 'Unhide all', key: `⇧${KEY}E`, act: () => app.unhideAll(), disabled: !app.hiddenIds.length }, 'sep',
+    { label: 'Zoom Extents', key: '⇧Z', act: () => app.zoomExtents() },
+    ...(app.enteredGroup ? [{ label: 'Close group', key: 'Esc', act: () => app.exitGroup() }] : []),
+  ];
+  const el = document.createElement('div'); el.className = 'dropdown context-menu';
+  el.innerHTML = items.map(it => it === 'sep' ? '<hr>' : `<button ${it.disabled ? 'disabled' : ''}><span>${esc(it.label)}</span>${it.key ? `<kbd>${it.key}</kbd>` : ''}</button>`).join('');
+  document.body.appendChild(el);
+  el.style.left = `${Math.max(4, Math.min(x, window.innerWidth - el.offsetWidth - 4))}px`; el.style.top = `${Math.max(4, Math.min(y, window.innerHeight - el.offsetHeight - 4))}px`;
+  const acts = items.filter(x => x !== 'sep') as Exclude<MenuItem, 'sep'>[];
+  el.querySelectorAll('button').forEach((b, i) => { b.onclick = () => { closeContextMenu(); acts[i].act(); }; });
+  el.oncontextmenu = e => e.preventDefault();
+  const away = (e: Event) => { if (e instanceof KeyboardEvent ? e.key === 'Escape' : !el.contains(e.target as Node)) closeContextMenu(); };
+  closeMenu = () => { el.remove(); closeMenu = null; document.removeEventListener('pointerdown', away, true); window.removeEventListener('keydown', away, true); window.removeEventListener('wheel', away, true); window.removeEventListener('blur', away); };
+  document.addEventListener('pointerdown', away, true); window.addEventListener('keydown', away, true); window.addEventListener('wheel', away, true); window.addEventListener('blur', away);
+}
+
 const holdName: Record<string, string> = { Control: 'Ctrl', Alt: '⌥', Shift: '⇧', Meta: '⌘' };
+/** Palette buttons that act instead of picking a tool: a label, a shortcut, whether they show as on, and what a click does. */
+const ACTIONS: Record<string, { label: string; key?: string; badge?: string; on?: (app: App) => boolean; act: (app: App) => void }> = {
+  zoomext: { label: 'Zoom Extents', key: 'Shift+Z', badge: '⇧Z', act: app => app.zoomExtents() },
+  sectiondisplay: { label: 'Display Section Planes', on: app => app.display.sectionPlanes, act: app => app.toggleDisplay('sectionPlanes') },
+};
 
 export function renderToolbar(app: App, el: HTMLElement) {
   let groups: { ids: string[]; plugin?: { id: string; name: string; accent: string } }[] = [...TOOLBAR.map(ids => ({ ids })), ...getPlugins().flatMap(p => (p.toolbar ?? (p.tools?.length ? [p.tools.map(t => t.id)] : [])).map(ids => ({ ids, plugin: { id: p.id, name: p.name, accent: p.accent ?? '#8e44ad' } })))];
@@ -96,12 +156,13 @@ export function renderToolbar(app: App, el: HTMLElement) {
   el.innerHTML = `<button class="toolbar-grip" title="Drag to move the tools to the ${top ? 'left' : 'top'} · tap to switch">${top ? '⋮' : '⋯'}</button><div class="groups">` + groups.map(g => `<div class="group ${g.plugin ? 'plugin' : ''}" style="--n:${g.ids.length};${g.plugin ? `--plugin-accent:${g.plugin.accent}` : ''}" ${g.plugin ? `title="${esc(g.plugin.name)} plugin"` : ''}>${g.ids.map(id => {
     const t = app.tools.find(t => t.id === id);
     const hold = (Object.entries(app.modifierTools) as [string, string][]).filter(([, tid]) => tid === id).map(([k]) => holdName[k] ?? k);
-    const key = t ? (t.shortcut ? (t.shortcut.trim() ? t.shortcut.toUpperCase() : 'Space') : '') : 'Shift+Z';
-    const badge = t ? (t.shortcut ? (t.shortcut.trim() ? t.shortcut.toUpperCase() : '␣') : '') : '⇧Z';
-    const title = `${g.plugin ? `${g.plugin.name} · ` : ''}${t ? t.label : 'Zoom Extents'}${key ? ` (${key})` : ''}${hold.length ? ` · hold ${hold.join(' or ')}` : ''}`;
-    return `<button class="tool-btn ${app.tool.id === id ? 'active' : ''}" data-tool="${id}" title="${esc(title)}">${t?.icon ? `<span class="icon">${t.icon}</span>` : icon(id)}${badge ? `<kbd class="key">${esc(badge)}</kbd>` : ''}</button>`;
+    const a = t ? undefined : ACTIONS[id];
+    const key = t ? (t.shortcut ? (t.shortcut.trim() ? t.shortcut.toUpperCase() : 'Space') : '') : a?.key ?? '';
+    const badge = t ? (t.shortcut ? (t.shortcut.trim() ? t.shortcut.toUpperCase() : '␣') : '') : a?.badge ?? '';
+    const title = `${g.plugin ? `${g.plugin.name} · ` : ''}${t ? t.label : a?.label ?? id}${key ? ` (${key})` : ''}${hold.length ? ` · hold ${hold.join(' or ')}` : ''}`;
+    return `<button class="tool-btn ${(t ? app.tool.id === id : a?.on?.(app)) ? 'active' : ''}" data-tool="${id}" title="${esc(title)}">${t?.icon ? `<span class="icon">${t.icon}</span>` : icon(id)}${badge ? `<kbd class="key">${esc(badge)}</kbd>` : ''}</button>`;
   }).join('')}</div>`).join('') + '</div>';
-  el.querySelectorAll<HTMLElement>('[data-tool]').forEach(b => b.onclick = () => b.dataset.tool === 'zoomext' ? app.zoomExtents() : app.setTool(b.dataset.tool!));
+  el.querySelectorAll<HTMLElement>('[data-tool]').forEach(b => b.onclick = () => { const a = ACTIONS[b.dataset.tool!]; if (a && !app.tools.some(t => t.id === b.dataset.tool)) a.act(app); else app.setTool(b.dataset.tool!); });
   layoutToolbar(el);
 }
 

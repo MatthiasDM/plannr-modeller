@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { CompiledScene } from './api';
-import type { Vec3 } from './model';
+import { fmtM, type Vec3 } from './model';
 
 export const V = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
 export const A = (p: THREE.Vector3): Vec3 => [p.x, p.y, p.z];
@@ -40,9 +40,20 @@ export class ViewCamera {
   dolly(factor: number, towards?: THREE.Vector3) {
     this.anim = null;
     if (towards) this.target.addScaledVector(towards.clone().sub(this.target), 1 - factor);
-    this.sph.radius = Math.max(0.2, Math.min(1500, this.sph.radius * factor)); this.apply();
+    this.sph.radius = Math.max(0.2 * this.reach, Math.min(1500 * this.reach, this.sph.radius * factor)); this.apply();
+  }
+  /** How much further away than the standard 35° lens this lens stands for the same picture. */
+  private get reach() { return Math.tan((35 * Math.PI) / 360) / Math.tan((this.camera.fov * Math.PI) / 360); }
+  /** Change the lens, and stand back (or come closer) so that what is at the target stays the same size. A 1° lens
+   *  from far away is the parallel projection: lines that are parallel stay parallel on screen. */
+  setFov(fov: number) {
+    const t = (f: number) => Math.tan((f * Math.PI) / 360); const k = t(this.camera.fov) / t(fov);
+    if (this.anim) this.anim.to[0] = this.anim.to[1].clone().add(this.anim.to[0].clone().sub(this.anim.to[1]).multiplyScalar(k));
+    this.sph.radius *= k; this.camera.fov = fov; this.camera.updateProjectionMatrix(); this.apply();
   }
   get distance() { return this.sph.radius; }
+  /** The distance a standard 35° lens would show this picture from. */
+  get range() { return this.sph.radius / this.reach; }
   fitDistance(b: Bounds): number {
     const r = Math.max(Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2, 1.2);
     const vfov = (this.camera.fov * Math.PI) / 180, hfov = 2 * Math.atan(Math.tan(vfov / 2) * this.camera.aspect);
@@ -50,7 +61,7 @@ export class ViewCamera {
   }
   private centerOf(b?: Bounds) { return b ? new THREE.Vector3((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2) : new THREE.Vector3(0, 0.5, 0); }
   setView(kind: ViewName, bounds?: Bounds) {
-    const c = this.centerOf(bounds); const r = bounds ? this.fitDistance(bounds) : 18;
+    const c = this.centerOf(bounds); const r = bounds ? this.fitDistance(bounds) : 18 * this.reach;
     const views: Record<ViewName, [number, number]> = { iso: [Math.PI / 3.2, Math.PI / 4], top: [0.0001, 0], bottom: [Math.PI - 0.0001, 0], front: [Math.PI / 2, 0], back: [Math.PI / 2, Math.PI], left: [Math.PI / 2, -Math.PI / 2], right: [Math.PI / 2, Math.PI / 2] };
     const [phi, theta] = views[kind];
     const pos = new THREE.Vector3().setFromSpherical(new THREE.Spherical(r, phi, theta)).add(c);
@@ -96,13 +107,27 @@ export class Viewport {
   private edgeLines: THREE.LineSegments | null = null; private edgeIds: string[] = [];
   private guideObjects: THREE.Object3D[] = []; private guideIds = new Map<THREE.Object3D, string>();
   private textObjects: { id: string; pos: THREE.Vector3 }[] = [];
-  private sectionMeshes: THREE.Mesh[] = [];
+  private sectionMeshes: THREE.Mesh[] = []; private sectionGroups: THREE.Object3D[] = [];
+  /** Whether the section planes themselves are drawn (and pickable). Off by default, like SketchUp's
+   *  "Display Section Planes": the cut still applies, only the sheets are hidden. A selected plane still shows its highlight. */
+  sectionPlanesVisible = false;
+  setSectionPlanesVisible(on: boolean) { this.sectionPlanesVisible = on; for (const g of this.sectionGroups) g.visible = on; }
   private faceGeometries = new Map<string, { pos: THREE.Vector3[]; normal: THREE.Vector3 }>(); // outline + normal per face id for planes
   vertices: THREE.Vector3[] = []; segments: { a: THREE.Vector3; b: THREE.Vector3; id: string }[] = [];
   // snap index: flat arrays + a screen-space projection cache that is rebuilt only when the camera or viewport changes
   private vp = new Float32Array(0); private sa = new Float32Array(0); private sb = new Float32Array(0);
   private scr = { key: '', verts: new Float32Array(0), segA: new Float32Array(0), segB: new Float32Array(0) };
   bounds?: Bounds; compiled?: CompiledScene;
+  /** The active section planes as GPU clipping planes, shared by every model material (one array, updated in
+   *  place): switching a plane is instant. Picking and snapping skip what they cut away (`kept`). */
+  private clips: THREE.Plane[] = [];
+  private clip<M extends THREE.Material>(m: M): M { m.clippingPlanes = this.clips; m.clipShadows = true; return m; }
+  /** Whether a point survives the active section planes. */
+  kept(p: THREE.Vector3): boolean { for (const pl of this.clips) if (pl.distanceToPoint(p) < -1e-6) return false; return true; }
+  private setClips(cuts: CompiledScene['cuts']) {
+    this.clips.length = 0;
+    for (const c of cuts ?? []) { const n = V(c.normal).normalize(); this.clips.push(new THREE.Plane(n.clone().negate(), n.dot(V(c.origin)))); }
+  }
   edgesVisible = true; edgeColor = COLOR.ink; private sun: THREE.DirectionalLight;
   private clock = new THREE.Clock();
 
@@ -112,6 +137,7 @@ export class Viewport {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.localClippingEnabled = true; // section planes cut the model on the GPU (see `clips`)
     container.appendChild(this.renderer.domElement);
     this.cam = new ViewCamera(1);
     this.scene.add(new THREE.HemisphereLight(0xdfe9f3, 0xbfb8a8, 1.15));
@@ -190,7 +216,7 @@ export class Viewport {
     if (this.edgeLines) { const em = this.edgeLines.material as THREE.LineBasicMaterial; const t = style === 'xray'; if (em.transparent !== t) { em.transparent = t; em.needsUpdate = true; } } // drawn after the see-through faces, not dimmed by them
     const want = this.backEdges && this.edgesVisible && !!this.edgeLines && (style === 'shaded' || style === 'monochrome' || style === 'hiddenline');
     if (want && !this.backLines) {
-      const l = new THREE.LineSegments(this.edgeLines!.geometry, new THREE.LineDashedMaterial({ color: this.edgeColor, dashSize: 0.06, gapSize: 0.05, transparent: true, opacity: 0.55, depthWrite: false, depthFunc: THREE.GreaterDepth }));
+      const l = new THREE.LineSegments(this.edgeLines!.geometry, this.clip(new THREE.LineDashedMaterial({ color: this.edgeColor, dashSize: 0.06, gapSize: 0.05, transparent: true, opacity: 0.55, depthWrite: false, depthFunc: THREE.GreaterDepth })));
       l.computeLineDistances(); l.renderOrder = 2; this.modelGroup.add(l); this.backLines = l;
     }
     if (this.backLines) this.backLines.visible = want;
@@ -252,7 +278,7 @@ export class Viewport {
     }
     if (c.edges.positions.length && this.edgesVisible) {
       const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(c.edges.positions, 3));
-      const l = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: this.edgeColor })); l.renderOrder = 1; this.previewGroup.add(l); this.previewOwn.push(l);
+      const l = new THREE.LineSegments(geo, this.clip(new THREE.LineBasicMaterial({ color: this.edgeColor }))); l.renderOrder = 1; this.previewGroup.add(l); this.previewOwn.push(l);
     }
   }
   private dropPreviewOwn() {
@@ -271,36 +297,78 @@ export class Viewport {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(g.positions, 3));
     if (g.normals?.length === g.positions.length) geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.normals, 3)); else geo.computeVertexNormals();
-    geo.setIndex(g.indices);
+    geo.setIndex(Array.isArray(g.indices) ? g.indices : new THREE.BufferAttribute(g.indices as Uint32Array, 1)); // a patched group holds typed arrays
     const transparent = g.opacity < 1;
-    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: new THREE.Color(g.color), transparent, opacity: g.opacity, depthWrite: !transparent, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: 4 })); // constant offset: edges win, faces never sink behind nearby surfaces at grazing angles
+    const mesh = new THREE.Mesh(geo, this.clip(new THREE.MeshLambertMaterial({ color: new THREE.Color(g.color), transparent, opacity: g.opacity, depthWrite: !transparent, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: 4 }))); // constant offset: edges win, faces never sink behind nearby surfaces at grazing angles
     mesh.castShadow = !transparent; mesh.receiveShadow = true; mesh.userData.base = { color: g.color, opacity: g.opacity };
     return mesh;
   }
 
+  /** Swap what a commit changed into the model: `c` holds the top-level entities `dirty` as they are now
+   *  (those that still exist). Material groups the change doesn't touch keep their meshes and GPU buffers. */
+  patch(c: CompiledScene, dirty: string[]) {
+    const base = this.compiled; if (!base) { this.setCompiled(c); return; }
+    const ids = this.expandIds(new Set(dirty)); const bases = new Set([...ids].filter(i => !i.includes('#')));
+    const gone = (fid: string) => ids.has(fid) || bases.has(fid.split('#')[0]);
+    const key = (g: CompiledScene['groups'][number]) => `${g.material}\u0000${g.back}`;
+    const add = new Map(c.groups.map(g => [key(g), g]));
+    const groups: CompiledScene['groups'] = [];
+    for (const g of base.groups) {
+      const a = add.get(key(g)); add.delete(key(g)); const touched = g.ids.some(gone);
+      const m = touched || a ? mergeGroup(g, touched ? gone : null, a) : g;
+      if (m.indices.length) groups.push(m);
+    }
+    for (const a of add.values()) if (a.indices.length) groups.push(a);
+    // edges: drop the changed ones, append the new
+    const E = base.edges; let edges = E;
+    if (E.ids.some(gone) || c.edges.ids.length) {
+      const keep: number[] = []; E.ids.forEach((id, i) => { if (!gone(id)) keep.push(i); });
+      const pos = new Float32Array((keep.length + c.edges.ids.length) * 6); const eids: string[] = new Array(keep.length + c.edges.ids.length);
+      const EP = E.positions; keep.forEach((i, j) => { for (let k = 0; k < 6; k++) pos[j * 6 + k] = EP[i * 6 + k]; eids[j] = E.ids[i]; });
+      pos.set(c.edges.positions as ArrayLike<number>, keep.length * 6); c.edges.ids.forEach((id, j) => { eids[keep.length + j] = id; });
+      edges = { positions: pos as unknown as number[], ids: eids };
+    }
+    const keepOld = <T extends { id: string }>(old: T[] | undefined, now: T[] | undefined) => [...(old ?? []).filter(x => !gone(x.id)), ...(now ?? [])];
+    const finite = (b?: Bounds) => !!b && isFinite(b.min[0]) && b.max[0] >= b.min[0] && (b.max[0] > b.min[0] || b.max[1] > b.min[1] || b.max[2] > b.min[2]);
+    const bounds = !finite(c.bounds) ? base.bounds : !finite(base.bounds) ? c.bounds
+      : { min: [0, 1, 2].map(i => Math.min(base.bounds.min[i], c.bounds.min[i])) as Vec3, max: [0, 1, 2].map(i => Math.max(base.bounds.max[i], c.bounds.max[i])) as Vec3 };
+    this.setCompiled({ ...base, version: c.version, groups, edges, guides: keepOld(base.guides, c.guides), dimensions: keepOld(base.dimensions, c.dimensions), texts: keepOld(base.texts, c.texts), sections: keepOld(base.sections, c.sections), centers: keepOld(base.centers, c.centers), cuts: c.cuts, bounds });
+  }
+
+  /** The mesh built for each compiled group, so a patched scene reuses the meshes of the groups it kept. */
+  private meshOf = new Map<CompiledScene['groups'][number], THREE.Mesh>();
   setCompiled(c: CompiledScene) {
     this.dropPreview();
-    this.compiled = c;
-    this.modelGroup.clear(); this.meshes = []; this.groupData.clear(); this.guideObjects = []; this.guideIds.clear(); this.textObjects = []; this.sectionMeshes = []; this.faceGeometries.clear();
+    this.compiled = c; this.setClips(c.cuts);
+    const old = this.meshOf; this.meshOf = new Map();
+    const models = new Set<THREE.Object3D>(this.meshes);
+    for (const o of this.modelGroup.children) if (!models.has(o)) disposeObject(o, o === this.backLines); // edges, guides, dimensions, sections… (the back edges share the edges' geometry)
+    this.modelGroup.clear(); this.meshes = []; this.groupData.clear(); this.guideObjects = []; this.guideIds.clear(); this.textObjects = []; this.sectionMeshes = []; this.sectionGroups = []; this.faceGeometries.clear();
     for (const g of c.groups) {
       if (!g.indices.length) continue;
-      const mesh = this.makeMesh(g);
+      let mesh = old.get(g); old.delete(g);
+      if (!mesh) mesh = this.makeMesh(g);
+      this.meshOf.set(g, mesh);
       this.modelGroup.add(mesh); this.meshes.push(mesh);
       this.groupData.set(mesh, { ids: g.ids, ranges: g.idRanges, material: g.material, back: g.back });
       this.applyFaceStyle(mesh); this.applyXray(mesh);
     }
+    for (const m of old.values()) disposeObject(m); // groups that went: free their GPU buffers
     // edges: one black segment list with ids
     this.edgeIds = c.edges.ids;
     const eg = new THREE.BufferGeometry(); eg.setAttribute('position', new THREE.Float32BufferAttribute(c.edges.positions, 3));
-    this.edgeLines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: this.edgeColor })); this.edgeLines.renderOrder = 1; this.edgeLines.visible = this.edgesVisible;
+    this.edgeLines = new THREE.LineSegments(eg, this.clip(new THREE.LineBasicMaterial({ color: this.edgeColor }))); this.edgeLines.renderOrder = 1; this.edgeLines.visible = this.edgesVisible;
     this.modelGroup.add(this.edgeLines);
     this.backLines = null; this.applyFaceStyles();
     // snapping data
     const seen = new Map<string, THREE.Vector3>(); this.segments = [];
     const P = c.edges.positions;
+    const q = (v: number) => Math.round(v * 1e4); // 0.1 mm: points closer than that are one vertex
     for (let i = 0; i + 5 < P.length; i += 6) {
-      const a = new THREE.Vector3(P[i], P[i + 1], P[i + 2]), b = new THREE.Vector3(P[i + 3], P[i + 4], P[i + 5]);
-      for (const p of [a, b]) { const k = `${p.x.toFixed(4)},${p.y.toFixed(4)},${p.z.toFixed(4)}`; if (!seen.has(k)) seen.set(k, p); }
+      let a = new THREE.Vector3(P[i], P[i + 1], P[i + 2]), b = new THREE.Vector3(P[i + 3], P[i + 4], P[i + 5]);
+      if (this.clips.length) { const s = clipSegment(a, b, this.clips); if (!s) continue; [a, b] = s; } // what the section planes cut away can't be snapped to
+      const ka = `${q(a.x)},${q(a.y)},${q(a.z)}`; if (!seen.has(ka)) seen.set(ka, a);
+      const kb = `${q(b.x)},${q(b.y)},${q(b.z)}`; if (!seen.has(kb)) seen.set(kb, b);
       this.segments.push({ a, b, id: c.edges.ids[i / 6] });
     }
     this.vertices = [...seen.values()];
@@ -322,18 +390,20 @@ export class Viewport {
     for (const d of c.dimensions) {
       const a = V(d.a), b = V(d.b), o = V(d.offset); const a2 = a.clone().add(o), b2 = b.clone().add(o);
       const mat = new THREE.LineBasicMaterial({ color: COLOR.ink });
-      const geo = new THREE.BufferGeometry().setFromPoints([a, a2, b, b2, a2, b2]);
+      // a radius or diameter: the line across (or out from the centre), then the leader from the curve to the label
+      const geo = new THREE.BufferGeometry().setFromPoints(d.style ? [a, b, b, b2] : [a, a2, b, b2, a2, b2]);
       const ls = new THREE.LineSegments(geo, mat); this.modelGroup.add(ls); this.guideObjects.push(ls); this.guideIds.set(ls, d.id);
-      this.textObjects.push({ id: d.id, pos: a2.clone().lerp(b2, 0.5) });
+      this.textObjects.push({ id: d.id, pos: d.style ? b2 : a2.clone().lerp(b2, 0.5) });
     }
     for (const t of c.texts) {
+      if (t.screen) continue; // screen text: a label only, at a fixed place of the view
       this.textObjects.push({ id: t.id, pos: V(t.position) });
       if (t.anchor) { const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([V(t.anchor), V(t.position)]), new THREE.LineBasicMaterial({ color: COLOR.ink })); this.modelGroup.add(l); this.guideObjects.push(l); this.guideIds.set(l, t.id); }
     }
     this.bounds = c.bounds && isFinite(c.bounds.min[0]) && c.bounds.max[0] >= c.bounds.min[0] ? c.bounds : undefined;
     for (const s of c.sections) {
       const { group, sheet } = this.sectionShape(V(s.origin), V(s.normal), s.active ? COLOR.blue : 0x888888, s.active ? 0.07 : 0.04);
-      this.modelGroup.add(group); this.sectionMeshes.push(sheet); this.guideIds.set(sheet, s.id);
+      group.visible = this.sectionPlanesVisible; this.modelGroup.add(group); this.sectionMeshes.push(sheet); this.sectionGroups.push(group); this.guideIds.set(sheet, s.id);
     }
     if (this.bounds) this.fitShadows();
     this.renderStaticLabels();
@@ -344,7 +414,7 @@ export class Viewport {
   private fitShadows() {
     const b = this.bounds!; const c = new THREE.Vector3((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2);
     const r = Math.max(3, new THREE.Vector3(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]).length() / 2 + 1.5);
-    const dir = new THREE.Vector3(20, 32, 14).normalize();
+    const dir = this.sunDir;
     this.sun.target.position.copy(c); this.sun.target.updateMatrixWorld();
     this.sun.position.copy(c).addScaledVector(dir, r + 10);
     const sc = this.sun.shadow.camera; sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 0.5; sc.far = 2 * r + 20; sc.updateProjectionMatrix();
@@ -353,10 +423,18 @@ export class Viewport {
     // a texel-scaled normal offset removes acne without detaching shadows from their casters
     this.sun.shadow.normalBias = Math.min(0.05, (2 * r / size) * 1.5); this.sun.shadow.bias = -0.0002;
   }
+  /** Where the sun stands (the direction towards it) and how bright it is (1 = full daylight). */
+  sunDir = new THREE.Vector3(20, 32, 14).normalize();
+  setSun(dir: THREE.Vector3, strength = 1) {
+    this.sunDir.copy(dir).normalize(); this.sun.intensity = 1.4 * strength;
+    if (this.bounds) this.fitShadows(); else this.sun.position.copy(this.sunDir).multiplyScalar(50);
+  }
+  /** Write the dimension and text labels again (the unit of length changed). */
+  relabel() { this.renderStaticLabels(); }
   private renderStaticLabels() {
     for (const el of Array.from(this.labels.querySelectorAll('.vlabel.static'))) el.remove();
-    for (const d of this.compiled?.dimensions ?? []) this.addLabel(V(d.a).add(V(d.offset)).lerp(V(d.b).add(V(d.offset)), 0.5), `${d.value.toFixed(3).replace(/\.?0+$/, '')} m`, 'static dim', d.id);
-    for (const t of this.compiled?.texts ?? []) this.addLabel(V(t.position), t.text, 'static text', t.id);
+    for (const d of this.compiled?.dimensions ?? []) this.addLabel(d.style ? V(d.b).add(V(d.offset)) : V(d.a).add(V(d.offset)).lerp(V(d.b).add(V(d.offset)), 0.5), `${d.style === 'radius' ? 'R ' : d.style === 'diameter' ? '⌀ ' : ''}${fmtM(d.value)}`, 'static dim', d.id);
+    for (const t of this.compiled?.texts ?? []) { const el = this.addLabel(V(t.position), t.text, t.screen ? 'static text screen' : 'static text', t.id); if (t.screen) (el as any).__screen = t.screen; }
   }
 
   ndc(ev: { clientX: number; clientY: number }): THREE.Vector2 {
@@ -378,7 +456,7 @@ export class Viewport {
     const ndc = p.clone().project(this.cam.camera); this.sightRay.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.cam.camera);
     const r = this.sightRay.ray; const t = p.clone().sub(r.origin).dot(r.direction);
     for (const h of this.sightRay.intersectObjects(this.meshes, false)) {
-      const m = h.object as THREE.Mesh; if (!m.visible || (m.material as THREE.Material).transparent) continue;
+      const m = h.object as THREE.Mesh; if (!m.visible || (m.material as THREE.Material).transparent || !this.kept(h.point)) continue;
       const d = this.groupData.get(m); if (!d) continue; const first = (h.faceIndex ?? 0) * 3; let id = '';
       for (let i = 0; i < d.ranges.length; i++) { const [s0, n] = d.ranges[i]; if (first >= s0 && first < s0 + n) { id = d.ids[i]; break; } }
       if (ignore?.(id)) continue;
@@ -391,12 +469,12 @@ export class Viewport {
    *  telling whether a point is hidden is then a lookup instead of a raycast (milliseconds each on a big model). */
   private depth: { cam: number[]; proj: number[]; w: number; h: number; model: unknown; vis: string; data: Uint8Array } | null = null;
   private depthTarget: THREE.WebGLRenderTarget | null = null;
-  private depthMat = new THREE.ShaderMaterial({
-    side: THREE.DoubleSide,
-    vertexShader: 'varying float vDist; void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vDist = -mv.z; gl_Position = projectionMatrix * mv; }',
+  private depthMat = this.clip(new THREE.ShaderMaterial({
+    side: THREE.DoubleSide, clipping: true, // what the section planes cut away hides nothing
+    vertexShader: '#include <clipping_planes_pars_vertex>\nvarying float vDist; void main() { vec4 mvPosition = modelViewMatrix * vec4(position, 1.0); vDist = -mvPosition.z; gl_Position = projectionMatrix * mvPosition;\n#include <clipping_planes_vertex>\n}',
     // the distance in tenths of a millimetre over three bytes (up to 1.6 km)
-    fragmentShader: 'varying float vDist; void main() { float u = clamp(floor(vDist * 10000.0 + 0.5), 0.0, 16777214.0); float r = floor(u / 65536.0); float g = floor((u - r * 65536.0) / 256.0); float b = u - r * 65536.0 - g * 256.0; gl_FragColor = vec4(r, g, b, 255.0) / 255.0; }',
-  });
+    fragmentShader: '#include <clipping_planes_pars_fragment>\nvarying float vDist; void main() {\n#include <clipping_planes_fragment>\nfloat u = clamp(floor(vDist * 10000.0 + 0.5), 0.0, 16777214.0); float r = floor(u / 65536.0); float g = floor((u - r * 65536.0) / 256.0); float b = u - r * 65536.0 - g * 256.0; gl_FragColor = vec4(r, g, b, 255.0) / 255.0; }',
+  }));
   private depthMap() {
     const c = this.cam.camera; c.updateMatrixWorld(); const w = Math.max(1, Math.round(this.width)), h = Math.max(1, Math.round(this.height));
     const solid = (m: THREE.Mesh) => (m.visible || this.swapped.has(m)) && !(m.material as THREE.Material).transparent; // a mesh a preview stands in for still hides what is behind it
@@ -444,10 +522,11 @@ export class Viewport {
   pick(ev: { clientX: number; clientY: number }, opts?: { ignore?: Set<string>; facesOnly?: boolean; only?: (id: string) => boolean }): Pick | null {
     const rc = this.ray(ev);
     const skip = (id: string) => !!opts?.ignore?.has(id) || (!!opts?.only && !opts.only(id)); // `only`: the rest is see-through
-    rc.params.Line = { threshold: this.cam.distance * 0.008 };
+    rc.params.Line = { threshold: this.pixelSize() * 8 }; // (in pixels: the parallel projection looks from very far away)
     const faceHits = this.faceStyle === 'wireframe' ? rc.intersectObjects(this.meshes.filter(m => m.visible), false) : rc.intersectObjects(this.meshes, false); // wireframe: only edges can be picked
     let face: Pick | null = null;
     for (const h of faceHits) {
+      if (!this.kept(h.point)) continue; // cut away by a section plane
       const d = this.groupData.get(h.object as THREE.Mesh)!; const first = (h.faceIndex ?? 0) * 3; let id = '';
       for (let i = 0; i < d.ranges.length; i++) { const [s, n] = d.ranges[i]; if (first >= s && first < s + n) { id = d.ids[i]; break; } }
       if (skip(id)) continue;
@@ -458,13 +537,13 @@ export class Viewport {
     if (this.edgeLines) {
       const eh = rc.intersectObject(this.edgeLines, false);
       for (const h of eh) {
-        const id = this.edgeIds[(h.index ?? 0) / 2 | 0]; if (!id || skip(id)) continue;
+        const id = this.edgeIds[(h.index ?? 0) / 2 | 0]; if (!id || skip(id) || !this.kept(h.point)) continue;
         if (!face || h.distance <= face.point.distanceTo(this.cam.camera.position) + 0.02) return { id, kind: 'edge', point: h.point, normal: new THREE.Vector3(0, 1, 0) };
         break;
       }
     }
     if (!opts?.facesOnly) {
-      const sh = rc.intersectObjects(this.sectionMeshes, false)[0];
+      const sh = this.sectionPlanesVisible ? rc.intersectObjects(this.sectionMeshes, false)[0] : undefined; // hidden planes can't be clicked
       if (sh) { const id = this.guideIds.get(sh.object); if (id && !skip(id) && (!face || sh.distance < face.point.distanceTo(this.cam.camera.position) - 0.05)) return { id, kind: 'section', point: sh.point, normal: new THREE.Vector3(0, 0, 1).applyQuaternion(sh.object.quaternion) }; }
     }
     const gh = rc.intersectObjects(this.guideObjects, false);
@@ -472,7 +551,7 @@ export class Viewport {
     return face;
   }
   pickSection(ev: { clientX: number; clientY: number }): string | null {
-    const h = this.ray(ev).intersectObjects(this.sectionMeshes, false)[0]; return h ? this.guideIds.get(h.object) ?? null : null;
+    if (!this.sectionPlanesVisible) return null; const h = this.ray(ev).intersectObjects(this.sectionMeshes, false)[0]; return h ? this.guideIds.get(h.object) ?? null : null;
   }
   /** Ray ∩ arbitrary plane. */
   planePoint(ev: { clientX: number; clientY: number }, origin: THREE.Vector3, normal: THREE.Vector3): THREE.Vector3 | null {
@@ -600,7 +679,7 @@ export class Viewport {
       d.ranges.forEach(([s, n], i) => { if (hit(d.ids[i])) for (let k = s; k < s + n; k++) sub.push(src[k]); });
       if (!sub.length) continue;
       const geo = new THREE.BufferGeometry(); geo.setAttribute('position', mesh.geometry.getAttribute('position')); geo.setIndex(sub);
-      const fill = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: hover ? COLOR.hover : COLOR.select, transparent: true, opacity: hover ? 0.16 : 0.3, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide }));
+      const fill = new THREE.Mesh(geo, this.clip(new THREE.MeshBasicMaterial({ color: hover ? COLOR.hover : COLOR.select, transparent: true, opacity: hover ? 0.16 : 0.3, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide })));
       fill.renderOrder = 3; target.add(fill);
     }
     const pts: THREE.Vector3[] = [];
@@ -692,11 +771,13 @@ export class Viewport {
   }
   addLabel(p: THREE.Vector3, text: string, cls = '', id?: string) {
     const el = document.createElement('div'); el.className = `vlabel ${cls}`; el.textContent = text; if (id) el.dataset.id = id;
-    (el as any).__pos = p.clone(); this.labels.appendChild(el);
+    (el as any).__pos = p.clone(); this.labels.appendChild(el); return el;
   }
   private updateLabels() {
     const w = this.width, h = this.height;
     for (const el of Array.from(this.labels.children) as HTMLElement[]) {
+      const at = (el as any).__screen as [number, number] | undefined; // screen text keeps its place in the view
+      if (at) { el.style.display = ''; el.style.transform = `translate(${at[0] * w}px, ${at[1] * h}px) translate(-50%, -50%)`; continue; }
       const p = ((el as any).__pos as THREE.Vector3).clone().project(this.cam.camera); const vis = p.z < 1;
       el.style.display = vis ? '' : 'none'; el.style.transform = `translate(${((p.x + 1) / 2) * w}px, ${((1 - p.y) / 2) * h}px) translate(-50%, -140%)`;
     }
@@ -704,7 +785,8 @@ export class Viewport {
   render() {
     const dt = Math.min(this.clock.getDelta(), 0.1); this.cam.tick(dt); this.updateLabels();
     // depth precision follows the viewing distance: near ≈ 0.2 % of it, far generous enough for the ground and site
-    const c = this.cam.camera; const d = Math.max(0.5, this.cam.distance); const near = Math.min(0.5, Math.max(0.005, d * 0.002)), far = Math.max(3000, d * 400);
+    const c = this.cam.camera; const d = Math.max(0.5, this.cam.distance); const tele = c.fov < 8; // the parallel projection looks from far away: its depth range lies around the target, not at the lens
+    const near = tele ? d * 0.5 : Math.min(0.5, Math.max(0.005, d * 0.002)), far = tele ? d * 2 + 3000 : Math.max(3000, d * 400);
     if (Math.abs(c.near - near) > near * 0.2 || Math.abs(c.far - far) > far * 0.2) { c.near = near; c.far = far; c.updateProjectionMatrix(); }
     this.renderer.render(this.scene, this.cam.camera);
   }
@@ -724,12 +806,54 @@ export class Viewport {
     ctx.font = '12px -apple-system, Helvetica, Arial'; ctx.textAlign = 'center';
     const sx = c.width / this.width, sy = c.height / this.height;
     for (const el of Array.from(this.labels.children) as HTMLElement[]) {
-      if (el.style.display === 'none') continue; const p = ((el as any).__pos as THREE.Vector3).clone().project(this.cam.camera); if (p.z >= 1) continue;
-      const x = ((p.x + 1) / 2) * this.width * sx, y = ((1 - p.y) / 2) * this.height * sy - 14 * sy; const t = el.textContent ?? ''; const tw = ctx.measureText(t).width + 8;
+      if (el.style.display === 'none') continue; const at = (el as any).__screen as [number, number] | undefined;
+      const p = at ? new THREE.Vector3(at[0] * 2 - 1, 1 - at[1] * 2, 0) : ((el as any).__pos as THREE.Vector3).clone().project(this.cam.camera); if (p.z >= 1) continue;
+      const x = ((p.x + 1) / 2) * this.width * sx, y = ((1 - p.y) / 2) * this.height * sy - (at ? -4 : 14) * sy; const t = el.textContent ?? ''; const tw = ctx.measureText(t).width + 8;
       ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.fillRect(x - tw / 2, y - 12, tw, 16); ctx.strokeStyle = '#333'; ctx.strokeRect(x - tw / 2, y - 12, tw, 16); ctx.fillStyle = '#111'; ctx.fillText(t, x, y);
     }
     const png = c.toDataURL('image/png').split(',')[1];
     if (width && height) { this.renderer.setSize(w0, h0, false); this.cam.camera.aspect = w0 / h0; this.cam.camera.updateProjectionMatrix(); }
     return { png, width: c.width, height: c.height };
   }
+}
+
+/** Free an object's GPU buffers (and its material unless shared). */
+function disposeObject(o: THREE.Object3D, keepGeometry = false) {
+  o.traverse(x => {
+    const m = x as THREE.Mesh; if (!keepGeometry) m.geometry?.dispose();
+    const mat = m.material as THREE.Material | THREE.Material[] | undefined; if (Array.isArray(mat)) mat.forEach(t => t.dispose()); else mat?.dispose?.();
+  });
+}
+
+type Group = CompiledScene['groups'][number];
+/** `g` without the triangles of the ids `drop` matches (null: keep all), with `add` appended: compacted typed arrays. */
+function mergeGroup(g: Group, drop: ((id: string) => boolean) | null, add: Group | undefined): Group {
+  const P = g.positions, N = g.normals, I = g.indices; const hasN = N.length === P.length;
+  const remap = new Int32Array(P.length / 3).fill(-1); let nv = 0;
+  const keep: number[] = []; let ni = 0;
+  for (let r = 0; r < g.ids.length; r++) { if (drop?.(g.ids[r])) continue; keep.push(r); const [st, n] = g.idRanges[r]; ni += n; for (let k = st; k < st + n; k++) if (remap[I[k]] < 0) remap[I[k]] = nv++; }
+  const aP = add?.positions ?? [], aN = add?.normals ?? [], aI = add?.indices ?? [], aV = aP.length / 3;
+  const pos = new Float32Array((nv + aV) * 3), nrm = new Float32Array((nv + aV) * 3), idx = new Uint32Array(ni + aI.length);
+  for (let v = 0; v < remap.length; v++) { const t = remap[v]; if (t < 0) continue; pos[t * 3] = P[v * 3]; pos[t * 3 + 1] = P[v * 3 + 1]; pos[t * 3 + 2] = P[v * 3 + 2]; if (hasN) { nrm[t * 3] = N[v * 3]; nrm[t * 3 + 1] = N[v * 3 + 1]; nrm[t * 3 + 2] = N[v * 3 + 2]; } }
+  const ids: string[] = []; const ranges: [number, number][] = []; let at = 0;
+  for (const r of keep) { const [st, n] = g.idRanges[r]; for (let k = 0; k < n; k++) idx[at + k] = remap[I[st + k]]; ids.push(g.ids[r]); ranges.push([at, n]); at += n; }
+  if (add) {
+    pos.set(aP as ArrayLike<number>, nv * 3);
+    if (aN.length === aP.length) nrm.set(aN as ArrayLike<number>, nv * 3);
+    for (let k = 0; k < aI.length; k++) idx[at + k] = aI[k] + nv;
+    add.ids.forEach((id, j) => { const [st, n] = add.idRanges[j]; ids.push(id); ranges.push([at + st, n]); });
+  }
+  return { ...g, positions: pos as unknown as number[], normals: nrm as unknown as number[], indices: idx as unknown as number[], ids, idRanges: ranges };
+}
+
+/** The part of segment a–b that every plane keeps (three.js: distance >= 0), or null. */
+function clipSegment(a: THREE.Vector3, b: THREE.Vector3, planes: THREE.Plane[]): [THREE.Vector3, THREE.Vector3] | null {
+  for (const pl of planes) {
+    const da = pl.distanceToPoint(a), db = pl.distanceToPoint(b);
+    if (da >= 0 && db >= 0) continue;
+    if (da < 0 && db < 0) return null;
+    const m = a.clone().lerp(b, da / (da - db));
+    if (da < 0) a = m; else b = m;
+  }
+  return [a, b];
 }

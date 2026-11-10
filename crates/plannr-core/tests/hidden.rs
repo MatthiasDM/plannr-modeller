@@ -9,8 +9,8 @@ fn reg() -> Registry { Registry::new() }
 /// A 2 × 2 × 2 box in a group; returns the group id.
 fn boxed() -> (Document, String) {
     let mut d = Document::default(); d.normalize();
-    let f = apply(&mut d, &Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [2.0, 0.0, 2.0], normal: [0.0, 1.0, 0.0], u: None, layer: None, material: None }, &reg()).unwrap().created[0].clone();
-    apply(&mut d, &Op::PushPull { face: f, distance: 2.0 }, &reg()).unwrap();
+    let f = apply(&mut d, &Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [2.0, 0.0, 2.0], normal: [0.0, 1.0, 0.0], u: None, layer: None, material: None, group: None }, &reg()).unwrap().created[0].clone();
+    apply(&mut d, &Op::PushPull { face: f, distance: 2.0, new_face: false }, &reg()).unwrap();
     let ids: Vec<String> = d.entities.iter().map(|e| e.id().to_string()).collect();
     let g = apply(&mut d, &Op::MakeGroup { ids, name: Some("Box".into()) }, &reg()).unwrap().created[0].clone();
     (d, g)

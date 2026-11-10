@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use plannr_core::{compile, export_glb, sample_document, CompileOptions, Document, Entity, Op};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::db::ProjectSummary;
@@ -144,11 +144,33 @@ async fn duplicate(State(s): State<Shared>, Extension(owner): Extension<Owner>, 
 #[derive(Deserialize)]
 pub struct OpsBody { pub ops: Vec<Op>, #[serde(default)] pub label: Option<String>, #[serde(default)] pub partial: bool }
 
-async fn apply_ops(State(s): State<Shared>, Path(id): Path<String>, Json(b): Json<OpsBody>) -> ApiResult<Json<Value>> {
+async fn apply_ops(State(s): State<Shared>, Path(id): Path<String>, Query(q): Query<CompileQuery>, Json(b): Json<OpsBody>) -> ApiResult<Response> {
     if b.ops.is_empty() { return Err(ApiError::BadRequest("ops is empty".into())); }
     let label = b.label.clone().unwrap_or_else(|| default_label(&b.ops));
-    let (version, results) = s.apply_ops(&id, &b.ops, &label, "api")?;
-    Ok(Json(json!({ "version": version, "results": results })))
+    if !b.partial {
+        let (version, results) = s.apply_ops(&id, &b.ops, &label, "api")?;
+        return Ok(Json(json!({ "version": version, "results": results })).into_response());
+    }
+    let (version, results, changes) = s.apply_ops_partial(&id, &b.ops, &label, "api", &q.options())?;
+    Ok(Json(ChangedReply { version, results: Some(&results), label: None, changes: changes.as_ref().map(ChangesReply::from) }).into_response())
+}
+
+/// A commit, undo or redo with `partial`: what changed, compiled on its own (`scene` + `dirty`), or neither
+/// when the browser has to fetch the whole scene.
+#[derive(Serialize)]
+struct ChangedReply<'a> {
+    version: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    results: Option<&'a [plannr_core::OpResult]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(flatten)]
+    changes: Option<ChangesReply<'a>>,
+}
+#[derive(Serialize)]
+struct ChangesReply<'a> { scene: &'a plannr_core::CompiledScene, dirty: &'a [String], reconcile: bool }
+impl<'a> From<&'a crate::state::Changes> for ChangesReply<'a> {
+    fn from(c: &'a crate::state::Changes) -> Self { ChangesReply { scene: &c.scene, dirty: &c.dirty, reconcile: c.reconcile } }
 }
 
 pub fn default_label(ops: &[Op]) -> String {
@@ -158,22 +180,28 @@ pub fn default_label(ops: &[Op]) -> String {
     if ops.len() > 1 { format!("{cap} (+{})", ops.len() - 1) } else { cap }
 }
 
-async fn preview(State(s): State<Shared>, Path(id): Path<String>, Query(q): Query<CompileQuery>, Json(b): Json<OpsBody>) -> ApiResult<Json<Value>> {
-    let opts = CompileOptions { show_hidden: flag(&q.hidden), ..Default::default() };
-    if !b.partial { return Ok(Json(serde_json::to_value(s.preview(&id, &b.ops, &opts)?)?)); }
-    let (scene, dirty) = s.preview_partial(&id, &b.ops, &opts)?;
-    let mut v = serde_json::to_value(scene)?;
-    if let (Some(d), Some(o)) = (dirty, v.as_object_mut()) { o.insert("partial".into(), json!(true)); o.insert("dirty".into(), json!(d)); }
-    Ok(Json(v))
+/// A compiled scene, written straight to JSON: going through `serde_json::Value` would print every f32 with
+/// f64 digits (3.549999952316284 for 3.55), more than doubling the biggest replies.
+#[derive(Serialize)]
+struct PartialScene { #[serde(flatten)] scene: plannr_core::CompiledScene, partial: bool, dirty: Vec<String> }
+
+async fn preview(State(s): State<Shared>, Path(id): Path<String>, Query(q): Query<CompileQuery>, Json(b): Json<OpsBody>) -> ApiResult<Response> {
+    let opts = q.options();
+    if !b.partial { return Ok(Json(s.preview(&id, &b.ops, &opts)?).into_response()); }
+    Ok(match s.preview_partial(&id, &b.ops, &opts)? {
+        (scene, Some(dirty)) => Json(PartialScene { scene, partial: true, dirty }).into_response(),
+        (scene, None) => Json(scene).into_response(),
+    })
 }
 
-async fn undo(State(s): State<Shared>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let (version, label) = s.undo(&id, "api")?;
-    Ok(Json(json!({ "version": version, "label": label })))
-}
-async fn redo(State(s): State<Shared>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let (version, label) = s.redo(&id, "api")?;
-    Ok(Json(json!({ "version": version, "label": label })))
+#[derive(Deserialize)]
+struct StepQuery { #[serde(default)] partial: Option<String>, #[serde(flatten)] compile: CompileQuery }
+async fn undo(State(s): State<Shared>, Path(id): Path<String>, Query(q): Query<StepQuery>) -> ApiResult<Response> { step(s, id, q, true) }
+async fn redo(State(s): State<Shared>, Path(id): Path<String>, Query(q): Query<StepQuery>) -> ApiResult<Response> { step(s, id, q, false) }
+fn step(s: Shared, id: String, q: StepQuery, back: bool) -> ApiResult<Response> {
+    let opts = flag(&q.partial).then(|| q.compile.options());
+    let (version, label, changes) = s.step(&id, "api", back, opts.as_ref())?;
+    Ok(Json(ChangedReply { version, results: None, label: Some(label), changes: changes.as_ref().map(ChangesReply::from) }).into_response())
 }
 async fn history(State(s): State<Shared>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     Ok(Json(serde_json::to_value(s.history(&id)?)?))
@@ -181,20 +209,23 @@ async fn history(State(s): State<Shared>, Path(id): Path<String>) -> ApiResult<J
 
 #[derive(Deserialize)]
 struct CompileQuery { #[serde(default)] section: Option<String>, #[serde(default)] hidden: Option<String> }
+impl CompileQuery {
+    /// `section=0`: uncut geometry (the viewer cuts with `cuts`); `hidden=1`: hidden entities as ghosts.
+    fn options(&self) -> CompileOptions { CompileOptions { ignore_sections: matches!(self.section.as_deref(), Some("0") | Some("false")), show_hidden: flag(&self.hidden), only: None } }
+}
 fn flag(v: &Option<String>) -> bool { matches!(v.as_deref(), Some("1") | Some("true")) }
 
-async fn compile_project(State(s): State<Shared>, Path(id): Path<String>, Query(q): Query<CompileQuery>) -> ApiResult<Json<Value>> {
-    let opts = CompileOptions { ignore_sections: matches!(q.section.as_deref(), Some("0") | Some("false")), show_hidden: flag(&q.hidden), only: None };
-    Ok(Json(serde_json::to_value(s.compile(&id, &opts)?)?))
+async fn compile_project(State(s): State<Shared>, Path(id): Path<String>, Query(q): Query<CompileQuery>) -> ApiResult<Json<plannr_core::CompiledScene>> {
+    Ok(Json(s.compile(&id, &q.options())?))
 }
 
 #[derive(Deserialize)]
 struct CompileBody { document: Document }
-async fn compile_document(State(s): State<Shared>, Json(b): Json<CompileBody>) -> ApiResult<Json<Value>> {
+async fn compile_document(State(s): State<Shared>, Json(b): Json<CompileBody>) -> ApiResult<Json<plannr_core::CompiledScene>> {
     let mut doc = b.document;
     doc.normalize();
     s.registry.on_load(&mut doc);
-    Ok(Json(serde_json::to_value(compile(&doc, &s.registry, &CompileOptions::default()))?))
+    Ok(Json(compile(&doc, &s.registry, &CompileOptions::default())))
 }
 
 #[derive(Deserialize)]

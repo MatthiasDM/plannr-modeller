@@ -67,7 +67,7 @@ export interface ToolContext {
   targets(accept?: (id: string) => boolean): string[];
   /** What is under the cursor for a tool that works on an object. With targets selected (see `targets`) only
    *  they can be hovered or picked, everything else is see-through; with none, anything under the cursor.
-   *  `anywhere`: ignore the selection. Geometry that only exists in the current preview is never picked. */
+   *  `anywhere`: ignore the selection (then `accept` alone decides; what it turns down is see-through). Geometry that only exists in the current preview is never picked. */
   pickTarget(ev: { clientX: number; clientY: number }, opts?: { facesOnly?: boolean; accept?: (id: string) => boolean; anywhere?: boolean }): Pick | null;
   /** False for geometry that exists only in the current preview (a tool's own previewed result). pickTarget
    *  never returns such geometry; pass `!inDocument(id)` as a snap's `ignoreIf` to keep it out of inference. */
@@ -95,6 +95,8 @@ export interface Tool {
   onShiftHold?(ctx: ToolContext): string | null;
   /** True while the tool is in the middle of an operation (first point placed, dragging…). Modifier-hold shortcuts stay out of the way then. */
   busy?(): boolean;
+  /** Modifier keys the tool uses itself (Paint: Ctrl fills, Alt samples): holding one alone does not switch to that key's temporary tool. */
+  ownKeys?: ('Control' | 'Alt' | 'Shift')[];
 }
 
 /** Parse "5;4", "5,4", "5x4", "5 4" into numbers (metres; "250cm"/"2500mm" accepted). */
@@ -105,6 +107,33 @@ export function parseNumbers(v: string): number[] {
     return u === 'mm' ? n / 1000 : u === 'cm' ? n / 100 : n;
   }).filter(n => !isNaN(n));
 }
+
+/** An angle in degrees: "30", "30°", or a slope as rise:run ("1:6"). */
+export function parseAngle(v: string): number | null {
+  const m = v.trim().match(/^(-?\d*\.?\d+)\s*:\s*(\d*\.?\d+)$/);
+  if (m) { const run = parseFloat(m[2]); return run > 0 ? (Math.atan2(parseFloat(m[1]), run) * 180) / Math.PI : null; }
+  const n = parseNumbers(v); return n.length ? n[0] : null;
+}
+/** "3x", "x3", "*3": that many copies, each one step further; "/3", "3/": that many, dividing the step. */
+export function parseArray(v: string): { count: number; divide: boolean } | null {
+  const s = v.replace(/\s+/g, '').toLowerCase(); const n = (m: RegExpMatchArray) => Math.min(500, Math.max(1, +(m[1] ?? m[2])));
+  let m = s.match(/^(?:[x*](\d+)|(\d+)[x*])$/); if (m) return { count: n(m), divide: false };
+  m = s.match(/^(?:\/(\d+)|(\d+)\/)$/); return m ? { count: n(m), divide: true } : null;
+}
+/** "[x; y; z]": a position; "<x; y; z>": a step from the previous point. Model coordinates, as Entity Info shows them (y is up). */
+export function parsePoint(v: string): { relative: boolean; p: THREE.Vector3 } | null {
+  const m = v.trim().match(/^([\[<])(.*?)[\]>]?$/); if (!m) return null;
+  const n = m[2].split(/[;,\s]+/).filter(Boolean).flatMap(s => parseNumbers(s)); if (n.length !== 3) return null;
+  return { relative: m[1] === '<', p: new THREE.Vector3(n[0], n[1], n[2]) };
+}
+/** Sizes typed with a unit ("2m", "150cm; 80cm"), in metres; null when a value has none (then it is a plain factor). */
+export function parseSizes(v: string): number[] | null {
+  const parts = v.split(/[;,\s]+/).map(s => s.trim()).filter(Boolean);
+  if (!parts.length || !parts.every(s => /^\d*\.?\d+(mm|cm|m)$/i.test(s))) return null;
+  return parts.flatMap(s => parseNumbers(s));
+}
+/** The point lies on the segment, between its ends. */
+export const onSegment = (g: { a: THREE.Vector3; b: THREE.Vector3 }, p: THREE.Vector3) => { const ab = g.b.clone().sub(g.a); const t = p.clone().sub(g.a).dot(ab) / ab.lengthSq(); return t > 0 && t < 1 && g.a.clone().addScaledVector(ab, t).distanceTo(p) < 1e-4; };
 
 export const AXIS = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
 export const AXIS_COLOR = { x: 0xd93025, y: 0x1a73e8, z: 0x1e8e3e };

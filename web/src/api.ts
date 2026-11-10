@@ -12,15 +12,22 @@ export interface CompiledScene {
   groups: CompiledGroup[];
   edges: { positions: number[]; ids: string[] };
   guides: { id: string; point: Vec3; direction?: Vec3 | null }[];
-  dimensions: { id: string; a: Vec3; b: Vec3; offset: Vec3; value: number }[];
-  texts: { id: string; position: Vec3; text: string; anchor?: Vec3 | null }[];
+  dimensions: { id: string; a: Vec3; b: Vec3; offset: Vec3; value: number; style?: string | null }[];
+  texts: { id: string; position: Vec3; text: string; anchor?: Vec3 | null; screen?: [number, number] | null }[];
   sections: { id: string; origin: Vec3; normal: Vec3; active: boolean }[];
   /** Centres of circles, arcs and regular polygons (the "Center" inference). */
   centers?: { id: string; point: Vec3; normal: Vec3; radius: number }[];
+  /** The active section planes: what remains is where every one has dot(p - origin, normal) <= 0. The app asks
+   *  for uncut geometry (`section=0`) and cuts on the GPU, so switching a plane needs no new geometry. */
+  cuts?: { origin: Vec3; normal: Vec3 }[];
   bounds: { min: Vec3; max: Vec3 };
   metrics: { faces: number; edges: number; groups: number; area: number; areaByMaterial: Record<string, number>; edgeLength: number };
 }
 export interface OpsResponse { version: number; results: OpResult[] }
+/** With `partial`: what the change did, compiled on its own (`scene` for the top-level ids `dirty`); without
+ *  `scene` the whole scene has to be fetched. `reconcile`: plugin geometry changed, which can depend on its
+ *  neighbours, so fetch the whole scene once idle. */
+export interface Changes { scene?: CompiledScene; dirty?: string[]; reconcile?: boolean }
 export interface PluginInfo { id: string; name: string; entityTypes: string[]; ops: { name: string; description: string }[]; script?: string | null; enabled?: boolean; source?: 'builtIn' | 'installed'; version?: string; description?: string }
 
 /** This browser's key: on a public instance it owns the projects made here (private instances ignore it). */
@@ -34,6 +41,9 @@ export const owner: string = (() => {
     return v;
   } catch { return `tmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`; }
 })();
+
+/** The app's compile options: uncut geometry (cut on the GPU with `cuts`), hidden entities as ghosts on request. */
+const q = (hidden: boolean, more = '') => `?section=0${hidden ? '&hidden=1' : ''}${more}`;
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { 'X-Plannr-Owner': owner };
@@ -59,13 +69,15 @@ export const api = {
   deleteProject: (id: string) => req<void>('DELETE', `/projects/${id}`),
   duplicateProject: (id: string) => req<ProjectSummary>('POST', `/projects/${id}/duplicate`),
   ops: (id: string, ops: Op[], label?: string) => req<OpsResponse>('POST', `/projects/${id}/ops`, { ops, label }),
+  /** Commit, and get back only what changed (see `Changes`). */
+  opsPartial: (id: string, ops: Op[], label?: string, hidden = false) => req<OpsResponse & Changes>('POST', `/projects/${id}/ops${q(hidden)}`, { ops, label, partial: true }),
   /** `partial`: the reply holds only what the ops change (`partial: true`, `dirty`: the top-level ids it replaces),
    *  or the whole scene when the engine can't tell. */
-  preview: (id: string, ops: Op[], hidden = false, partial = false) => req<CompiledScene & { partial?: boolean; dirty?: string[] }>('POST', `/projects/${id}/preview${hidden ? '?hidden=1' : ''}`, { ops, partial }),
-  undo: (id: string) => req<{ version: number; label: string }>('POST', `/projects/${id}/undo`),
-  redo: (id: string) => req<{ version: number; label: string }>('POST', `/projects/${id}/redo`),
+  preview: (id: string, ops: Op[], hidden = false, partial = false) => req<CompiledScene & { partial?: boolean; dirty?: string[] }>('POST', `/projects/${id}/preview${q(hidden)}`, { ops, partial }),
+  undo: (id: string, hidden = false) => req<{ version: number; label: string } & Changes>('POST', `/projects/${id}/undo${q(hidden, '&partial=1')}`),
+  redo: (id: string, hidden = false) => req<{ version: number; label: string } & Changes>('POST', `/projects/${id}/redo${q(hidden, '&partial=1')}`),
   history: (id: string) => req<{ version: number; label: string; at: string }[]>('GET', `/projects/${id}/history`),
-  compile: (id: string, hidden = false) => req<CompiledScene>('GET', `/projects/${id}/compile${hidden ? '?hidden=1' : ''}`),
+  compile: (id: string, hidden = false) => req<CompiledScene>('GET', `/projects/${id}/compile${q(hidden)}`),
   entities: (id: string, q = '') => req<(Entity & { path: string[] })[]>('GET', `/projects/${id}/entities${q}`),
   plugins: () => req<PluginInfo[]>('GET', '/plugins'),
   sample: () => req<ProjectSummary>('POST', '/sample'),

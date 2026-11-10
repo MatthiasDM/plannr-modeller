@@ -26,22 +26,43 @@ fn bare_ids(ids: &[String]) -> Vec<String> {
     out
 }
 
+/// A rotation for `stretch`: about the axis through `origin`, `angle` in degrees.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Turn { pub origin: P3, pub axis: P3, pub angle: f64 }
+/// A scale for `stretch`: about `origin`, by a factor per axis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resize { pub origin: P3, pub factors: P3 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
-    DrawLine { points: Vec<P3>, #[serde(default)] close: bool, #[serde(default)] layer: Option<String> },
-    DrawRectangle { corner: P3, opposite: P3, normal: P3, #[serde(default)] u: Option<P3>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String> },
-    DrawPolygon { points: Vec<P3>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String> },
-    DrawCircle { center: P3, normal: P3, radius: f64, #[serde(default)] segments: Option<usize>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String> },
-    PushPull { face: String, distance: f64 },
+    DrawLine { points: Vec<P3>, #[serde(default)] close: bool, #[serde(default)] layer: Option<String>, #[serde(default)] group: Option<String> },
+    DrawRectangle { corner: P3, opposite: P3, normal: P3, #[serde(default)] u: Option<P3>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String>, #[serde(default)] group: Option<String> },
+    DrawPolygon { points: Vec<P3>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String>, #[serde(default)] group: Option<String> },
+    DrawCircle { center: P3, normal: P3, radius: f64, #[serde(default)] segments: Option<usize>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String>, #[serde(default)] group: Option<String> },
+    /// `newFace`: leave the face where it is and build on it (a prism from it), instead of moving it with its solid.
+    PushPull { face: String, distance: f64, #[serde(default, rename = "newFace")] new_face: bool },
     Offset { face: String, distance: f64 },
     Move { ids: Vec<String>, delta: P3 },
+    /// Move faces, loose edges (`ids`) or single corners (`points`) with everything attached to them in their
+    /// container: neighbours are reshaped, and folded where they stop being flat. `move` moves entities as they are.
+    Stretch { #[serde(default)] ids: Vec<String>, #[serde(default)] points: Vec<P3>, #[serde(default)] delta: Option<P3>, #[serde(default)] rotate: Option<Turn>, #[serde(default)] scale: Option<Resize>, #[serde(default)] group: Option<String> },
     Rotate { ids: Vec<String>, origin: P3, axis: P3, angle: f64 },
     Scale { ids: Vec<String>, origin: P3, factors: P3 },
-    Copy { ids: Vec<String>, delta: P3, #[serde(default)] count: Option<usize> },
+    Copy { ids: Vec<String>, #[serde(default)] delta: P3, #[serde(default)] rotate: Option<Turn>, #[serde(default)] count: Option<usize> },
     Erase { ids: Vec<String> },
+    /// Intersect Faces: where these faces cross other faces of their container, edges are drawn that divide both.
+    IntersectFaces { ids: Vec<String> },
     /// Hide or show entities (groups and components with everything in them); the data stays.
     SetHidden { ids: Vec<String>, hidden: bool },
+    /// Lock or unlock entities: a locked one (and what is inside a locked group) can't be moved, changed or erased.
+    SetLocked { ids: Vec<String>, locked: bool },
+    /// Add ready-made entities (pasted or imported geometry), moved by `delta`: they get new ids, keep their tag and
+    /// materials where the document has them, and go into `group` when given.
+    /// `merge`: the faces of each inserted group that lie in one plane and touch become one face (an imported triangle mesh).
+    Insert { entities: Vec<Entity>, #[serde(default)] delta: P3, #[serde(default)] group: Option<String>, #[serde(default)] merge: bool,
+        /// With `group`: the entities are already in that group's own coordinates (copied inside it); only `delta` is the model's.
+        #[serde(default)] local: bool },
     Paint { ids: Vec<String>, material: String, #[serde(default)] side: Option<String> },
     SetLayer { ids: Vec<String>, layer: String },
     MakeGroup { ids: Vec<String>, #[serde(default)] name: Option<String> },
@@ -52,8 +73,10 @@ pub enum Op {
     AddMaterial { name: String, color: String, #[serde(default)] opacity: Option<f64> },
     UpdateMaterial { id: String, #[serde(default)] name: Option<String>, #[serde(default)] color: Option<String>, #[serde(default)] opacity: Option<f64> },
     AddGuide { point: P3, #[serde(default)] direction: Option<P3>, #[serde(default)] layer: Option<String> },
-    AddDimension { a: P3, b: P3, offset: P3, #[serde(default)] layer: Option<String> },
-    AddText { position: P3, text: String, #[serde(default)] anchor: Option<P3>, #[serde(default)] layer: Option<String> },
+    /// `style`: "radius" (`a` the centre, `b` on the curve) or "diameter" (`a` and `b` across the circle); `offset` then leads from `b` to the label.
+    AddDimension { a: P3, b: P3, offset: P3, #[serde(default)] style: Option<String>, #[serde(default)] layer: Option<String> },
+    /// `screen`: a place on the screen (fractions of its width and height from the top left) instead of one in the model.
+    AddText { #[serde(default)] position: P3, text: String, #[serde(default)] anchor: Option<P3>, #[serde(default)] screen: Option<[f64; 2]>, #[serde(default)] layer: Option<String> },
     AddSection { origin: P3, normal: P3, #[serde(default)] active: Option<bool>, #[serde(default)] layer: Option<String> },
     UpdateSection { id: String, #[serde(default)] origin: Option<P3>, #[serde(default)] normal: Option<P3>, #[serde(default)] active: Option<bool> },
     /// A 2D slice: the cut lines of the whole model at section plane `id`, as a new group of edges.
@@ -70,7 +93,7 @@ pub enum Op {
         #[serde(default)] from: Option<P3>, #[serde(default)] to: Option<P3>, #[serde(default)] bulge: Option<f64>,
         #[serde(default)] normal: Option<P3>, #[serde(default)] segments: Option<usize>,
         #[serde(default)] pie: bool, #[serde(default, rename = "closeChord")] close_chord: bool,
-        #[serde(default)] layer: Option<String>,
+        #[serde(default)] layer: Option<String>, #[serde(default)] group: Option<String>,
     },
     FollowMe { face: String, #[serde(default)] path: Option<Vec<P3>>, #[serde(default, rename = "pathEdges")] path_edges: Option<Vec<String>> },
     Mirror { ids: Vec<String>, origin: P3, normal: P3, #[serde(default)] copy: bool },
@@ -80,6 +103,14 @@ pub enum Op {
     EditComponent { definition: String, ops: Vec<Op> },
     RenameComponent { definition: String, name: String },
     RemoveComponent { definition: String, #[serde(default)] force: bool },
+    /// A closed box solid (its own group) between two opposite corners.
+    SolidBox { min: P3, max: P3, #[serde(default)] name: Option<String>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String> },
+    /// A closed cylinder solid: base circle at `center`, extruded `height` along `axis`.
+    SolidCylinder { center: P3, axis: P3, radius: f64, height: f64, #[serde(default)] segments: Option<usize>, #[serde(default)] name: Option<String>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String> },
+    /// A closed solid from a planar profile (with holes) extruded `distance` along its normal, or by `direction`.
+    Extrude { profile: Vec<P3>, #[serde(default)] holes: Vec<Vec<P3>>, #[serde(default)] distance: Option<f64>, #[serde(default)] direction: Option<P3>, #[serde(default)] name: Option<String>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String> },
+    /// Union, subtract or intersect solids: `target` becomes the result, `tools` are used up (unless `keepTools`).
+    Boolean { mode: String, target: String, tools: Vec<String>, #[serde(default, rename = "keepTools")] keep_tools: bool, #[serde(default)] material: Option<String> },
 }
 
 impl Op {
@@ -87,7 +118,7 @@ impl Op {
         match self {
             Op::DrawLine { .. } => "draw_line", Op::DrawRectangle { .. } => "draw_rectangle", Op::DrawPolygon { .. } => "draw_polygon",
             Op::DrawCircle { .. } => "draw_circle", Op::PushPull { .. } => "push_pull", Op::Offset { .. } => "offset", Op::Move { .. } => "move",
-            Op::Rotate { .. } => "rotate", Op::Scale { .. } => "scale", Op::Copy { .. } => "copy", Op::Erase { .. } => "erase", Op::SetHidden { .. } => "set_hidden", Op::Paint { .. } => "paint",
+            Op::Stretch { .. } => "stretch", Op::Rotate { .. } => "rotate", Op::Scale { .. } => "scale", Op::Copy { .. } => "copy", Op::Erase { .. } => "erase", Op::IntersectFaces { .. } => "intersect_faces", Op::SetHidden { .. } => "set_hidden", Op::SetLocked { .. } => "set_locked", Op::Insert { .. } => "insert", Op::Paint { .. } => "paint",
             Op::SetLayer { .. } => "set_layer", Op::MakeGroup { .. } => "make_group", Op::Explode { .. } => "explode", Op::AddLayer { .. } => "add_layer",
             Op::UpdateLayer { .. } => "update_layer", Op::RemoveLayer { .. } => "remove_layer", Op::AddMaterial { .. } => "add_material",
             Op::UpdateMaterial { .. } => "update_material", Op::AddGuide { .. } => "add_guide", Op::AddDimension { .. } => "add_dimension",
@@ -96,6 +127,7 @@ impl Op {
             Op::DrawArc { .. } => "draw_arc", Op::FollowMe { .. } => "follow_me", Op::Mirror { .. } => "mirror",
             Op::MakeComponent { .. } => "make_component", Op::PlaceComponent { .. } => "place_component", Op::MakeUnique { .. } => "make_unique",
             Op::EditComponent { .. } => "edit_component", Op::RenameComponent { .. } => "rename_component", Op::RemoveComponent { .. } => "remove_component",
+            Op::SolidBox { .. } => "solid_box", Op::SolidCylinder { .. } => "solid_cylinder", Op::Extrude { .. } => "extrude", Op::Boolean { .. } => "boolean",
         }
     }
 }
@@ -126,16 +158,34 @@ pub fn apply_many(doc: &mut Document, ops: &[Op], reg: &Registry) -> OpResult2<V
     Ok(results)
 }
 
+/// The entities an op would change or remove (not the ones it only reads or copies).
+fn changed_by(op: &Op) -> Vec<&str> {
+    fn all(ids: &[String]) -> Vec<&str> { ids.iter().map(|s| s.as_str()).collect() }
+    match op {
+        Op::Move { ids, .. } | Op::Rotate { ids, .. } | Op::Scale { ids, .. } | Op::Stretch { ids, .. } | Op::Erase { ids } | Op::Paint { ids, .. }
+        | Op::SetLayer { ids, .. } | Op::MakeGroup { ids, .. } | Op::MakeComponent { ids, .. } | Op::IntersectFaces { ids } => all(ids),
+        Op::Mirror { ids, copy, .. } => if *copy { vec![] } else { all(ids) },
+        Op::PushPull { face, .. } | Op::Offset { face, .. } | Op::FollowMe { face, .. } => vec![face.as_str()],
+        Op::Explode { id } | Op::UpdateEntity { id, .. } | Op::UpdateSection { id, .. } => vec![id.as_str()],
+        Op::Boolean { target, tools, keep_tools, mode, .. } => { let mut v = vec![target.as_str()]; if !*keep_tools || mode == "split" { v.extend(all(tools)); } v }
+        _ => vec![],
+    }
+}
+
 pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult> {
     doc.normalize();
+    if let Some(id) = changed_by(op).into_iter().map(|id| split_key(id).0).find(|id| doc.is_locked(id)) {
+        let what = match doc.find(id) { Some(Entity::Group(g)) => format!("the group “{}”", g.name), Some(e) => format!("this {}", e.kind()), None => id.to_string() };
+        return err(format!("{what} is locked: unlock it first (Edit → Unlock) [{id}]"));
+    }
     match op {
-        Op::DrawLine { points, close, layer } => draw_line(doc, points, *close, layer.as_deref()),
-        Op::DrawRectangle { corner, opposite, normal, u, layer, material } => draw_rectangle(doc, *corner, *opposite, *normal, *u, layer.as_deref(), material.as_deref()),
-        Op::DrawPolygon { points, layer, material } => {
+        Op::DrawLine { points, close, layer, group } => draw_line(doc, points, *close, layer.as_deref(), group.as_deref()),
+        Op::DrawRectangle { corner, opposite, normal, u, layer, material, group } => draw_rectangle(doc, *corner, *opposite, *normal, *u, layer.as_deref(), material.as_deref(), group.as_deref()),
+        Op::DrawPolygon { points, layer, material, group } => {
             let f = make_face(doc, points.clone(), vec![], layer.as_deref(), material.as_deref())?;
-            Ok(push_created(doc, Entity::Face(f)))
+            place_face(doc, group.as_deref(), f)
         }
-        Op::DrawCircle { center, normal, radius, segments, layer, material } => {
+        Op::DrawCircle { center, normal, radius, segments, layer, material, group } => {
             if *radius <= 0.0 { return err("radius must be positive"); }
             let n = normalize(*normal);
             if len(n) < 0.5 { return err("normal must be non-zero"); }
@@ -149,11 +199,20 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
                 .collect();
             let pts = orient(pts, n);
             let f = make_face(doc, pts, vec![], layer.as_deref(), material.as_deref())?;
-            Ok(push_created(doc, Entity::Face(f)))
+            place_face(doc, group.as_deref(), f)
         }
-        Op::PushPull { face, distance } => push_pull(doc, split_key(face).0, *distance),
+        Op::PushPull { face, distance, new_face } => push_pull(doc, split_key(face).0, *distance, *new_face),
         Op::Offset { face, distance } => offset(doc, split_key(face).0, *distance),
         Op::Move { ids, delta } => transform_ids(doc, ids, &mat_translation(*delta), reg),
+        Op::Stretch { ids, points, delta, rotate, scale, group } => {
+            let world = match (delta, rotate, scale) {
+                (Some(d), None, None) => { if len(*d) < EPS { return err("delta must be non-zero"); } mat_translation(*d) }
+                (None, Some(t), None) => { if len(t.axis) < EPS { return err("axis must be non-zero"); } mat_about(&mat_rotation(t.axis, t.angle.to_radians()), t.origin) }
+                (None, None, Some(s)) => { if s.factors.iter().any(|f| f.abs() < EPS) { return err("scale factors must be non-zero"); } mat_about(&mat_scale(s.factors), s.origin) }
+                _ => return err("stretch takes exactly one of `delta`, `rotate` or `scale`"),
+            };
+            stretch(doc, &bare_ids(ids), points, &world, group.as_deref())
+        }
         Op::Rotate { ids, origin, axis, angle } => {
             if len(*axis) < EPS { return err("axis must be non-zero"); }
             transform_ids(doc, ids, &mat_about(&mat_rotation(*axis, angle.to_radians()), *origin), reg)
@@ -162,7 +221,10 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             if factors.iter().any(|f| f.abs() < EPS) { return err("scale factors must be non-zero"); }
             transform_ids(doc, ids, &mat_about(&mat_scale(*factors), *origin), reg)
         }
-        Op::Copy { ids, delta, count } => copy(doc, ids, *delta, count.unwrap_or(1).max(1), reg),
+        Op::Copy { ids, delta, rotate, count } => {
+            if let Some(t) = rotate { if len(t.axis) < EPS { return err("axis must be non-zero"); } }
+            copy(doc, ids, *delta, rotate.as_ref(), count.unwrap_or(1).max(1), reg)
+        }
         Op::SetHidden { ids, hidden } => {
             let mut r = OpResult::default();
             for id in ids {
@@ -173,14 +235,45 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             }
             Ok(r)
         }
+        Op::SetLocked { ids, locked } => {
+            let mut r = OpResult::default();
+            for id in &bare_ids(ids) {
+                let (e, _) = doc.find_mut(id).ok_or_else(|| OpError(format!("no entity {id}")))?;
+                e.set_locked(*locked);
+                r.modified.push(id.clone()); r.entities.push(e.clone());
+            }
+            Ok(r)
+        }
+        Op::Insert { entities, delta, group, merge, local } => insert(doc, entities, *delta, group.as_deref(), *merge, *local),
+        Op::IntersectFaces { ids } => {
+            let ids = bare_ids(ids);
+            let Some(first) = ids.first() else { return err("intersect_faces needs faces") };
+            let (list, _) = doc.container_mut(first).ok_or_else(|| OpError(format!("no entity {first}")))?;
+            if !ids.iter().any(|id| list.iter().any(|e| e.id() == id && matches!(e, Entity::Face(_)))) { return err("intersect_faces works on drawn faces"); }
+            let mut r = OpResult::default();
+            if !crate::sticky::intersect(list, &ids, &mut r) { return err("these faces do not cross any other face (edges they share, and crossings already drawn, are left alone)"); }
+            Ok(r)
+        }
         Op::Erase { ids } => {
             let mut r = OpResult::default();
             for id in &bare_ids(ids) {
+                if r.removed.contains(id) { continue; } // went with an edge erased before it
+                // a loose edge takes the faces it bounds with it, or lets the two faces of one plane beside it become one
+                if let Some((list, _)) = doc.container_mut(id) {
+                    if let Some(i) = list.iter().position(|e| e.id() == id && matches!(e, Entity::Edge(_))) {
+                        let Entity::Edge(e) = list.remove(i) else { unreachable!() };
+                        r.removed.push(id.clone());
+                        crate::sticky::erase_edge(list, e.a, e.b, &mut r);
+                        continue;
+                    }
+                }
                 match doc.take(id) {
                     Some(e) => { collect_ids(&e, &mut r.removed); }
                     None => return err(format!("no entity {id}")),
                 }
             }
+            r.modified.retain(|m| !r.removed.contains(m));
+            r.entities.retain(|e| !r.removed.iter().any(|x| x == e.id()));
             Ok(r)
         }
         Op::Paint { ids, material, side } => paint(doc, ids, material, side.as_deref().unwrap_or("front"), reg),
@@ -245,13 +338,17 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             let dir = direction.map(normalize).filter(|d| len(*d) > 0.5);
             Ok(push_created(doc, Entity::Guide(Guide { id: new_id(), layer, point: *point, direction: dir, extra: Default::default() })))
         }
-        Op::AddDimension { a, b, offset, layer } => {
+        Op::AddDimension { a, b, offset, style, layer } => {
             let layer = resolve_layer(doc, layer.as_deref())?;
-            Ok(push_created(doc, Entity::Dimension(Dimension { id: new_id(), layer, a: *a, b: *b, offset: *offset, extra: Default::default() })))
+            if let Some(s) = style { if s != "radius" && s != "diameter" { return err(format!("unknown dimension style `{s}` (radius or diameter)")); } }
+            if dist(*a, *b) < 1e-9 { return err("a dimension needs two different points"); }
+            Ok(push_created(doc, Entity::Dimension(Dimension { id: new_id(), layer, a: *a, b: *b, offset: *offset, style: style.clone(), extra: Default::default() })))
         }
-        Op::AddText { position, text, anchor, layer } => {
+        Op::AddText { position, text, anchor, screen, layer } => {
             let layer = resolve_layer(doc, layer.as_deref())?;
-            Ok(push_created(doc, Entity::Text(Text { id: new_id(), layer, position: *position, text: text.clone(), anchor: *anchor, extra: Default::default() })))
+            if let Some(s) = screen { if s.iter().any(|v| !(0.0..=1.0).contains(v)) { return err("`screen` is a pair of fractions between 0 and 1"); } }
+            let anchor = if screen.is_some() { None } else { *anchor };
+            Ok(push_created(doc, Entity::Text(Text { id: new_id(), layer, position: *position, text: text.clone(), anchor, screen: *screen, extra: Default::default() })))
         }
         Op::AddSection { origin, normal, active, layer } => {
             let layer = resolve_layer(doc, layer.as_deref())?;
@@ -276,8 +373,8 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             Ok(OpResult::default())
         }
         Op::Custom { type_, data } => reg.apply(type_, data.clone(), doc),
-        Op::DrawArc { center, start, end, through, from, to, bulge, normal, segments, pie, close_chord, layer } =>
-            draw_arc(doc, &ArcSpec { center: *center, start: *start, end: *end, through: through.clone(), from: *from, to: *to, bulge: *bulge, normal: *normal, segments: *segments, pie: *pie, close_chord: *close_chord }, layer.as_deref()),
+        Op::DrawArc { center, start, end, through, from, to, bulge, normal, segments, pie, close_chord, layer, group } =>
+            draw_arc(doc, &ArcSpec { center: *center, start: *start, end: *end, through: through.clone(), from: *from, to: *to, bulge: *bulge, normal: *normal, segments: *segments, pie: *pie, close_chord: *close_chord }, layer.as_deref(), group.as_deref()),
         Op::FollowMe { face, path, path_edges } => follow_me(doc, split_key(face).0, path.as_deref(), path_edges.as_deref()),
         Op::Mirror { ids, origin, normal, copy } => mirror(doc, ids, *origin, *normal, *copy, reg),
         Op::MakeComponent { ids, name, description } => make_component(doc, &bare_ids(ids), name, description.clone()),
@@ -289,6 +386,28 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             c.name = name.clone();
             Ok(OpResult { modified: vec![c.id.clone()], ..Default::default() })
         }
+        Op::SolidBox { min, max, name, layer, material } => {
+            if (0..3).any(|i| (max[i] - min[i]).abs() < 1e-7) { return err("a box needs a size in all three directions"); }
+            new_solid(doc, name.as_deref().unwrap_or("Box"), layer.as_deref(), material.as_deref(), |l, m| crate::solid::box_faces(*min, *max, m, l))
+        }
+        Op::SolidCylinder { center, axis, radius, height, segments, name, layer, material } => {
+            if *radius <= 0.0 || height.abs() < 1e-7 { return err("radius and height must be non-zero"); }
+            if len(*axis) < EPS { return err("axis must be non-zero"); }
+            let segs = segments.unwrap_or(32).clamp(3, 512);
+            new_solid(doc, name.as_deref().unwrap_or("Cylinder"), layer.as_deref(), material.as_deref(), |l, m| crate::solid::cylinder_faces(*center, *axis, *radius, *height, segs, m, l))
+        }
+        Op::Extrude { profile, holes, distance, direction, name, layer, material } => {
+            let outer = dedupe_loop(profile);
+            if outer.len() < 3 || !is_planar(&outer) || area(&outer) < 1e-12 { return err("profile must be a planar loop of at least 3 points"); }
+            let holes: Vec<Vec<P3>> = holes.iter().map(|h| dedupe_loop(h)).collect();
+            let n = normal(&outer);
+            for h in &holes { if h.len() < 3 || plane_deviation(h, outer[0], n) > PLANE_TOL { return err("every hole must be a loop in the profile's plane"); } }
+            let d = match (direction, distance) { (Some(d), _) => *d, (None, Some(k)) => scale(n, *k), (None, None) => return err("give distance (along the profile normal) or direction") };
+            if dot(d, n).abs() < 1e-9 { return err("the extrusion must leave the profile's plane"); }
+            new_solid(doc, name.as_deref().unwrap_or("Extrusion"), layer.as_deref(), material.as_deref(), |l, m| crate::solid::extrude_faces(&outer, &holes, d, m, l))
+        }
+        Op::Boolean { mode, target, tools, keep_tools, material } if mode == "split" => split(doc, split_key(target).0, &bare_ids(tools), material.as_deref(), reg),
+        Op::Boolean { mode, target, tools, keep_tools, material } => boolean(doc, mode, split_key(target).0, &bare_ids(tools), *keep_tools, material.as_deref()),
         Op::RemoveComponent { definition, force } => {
             let cid = doc.component(definition).map(|c| c.id.clone()).ok_or_else(|| OpError(format!("no component {definition}")))?;
             let inst = doc.instances_of(&cid);
@@ -300,6 +419,147 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             Ok(r)
         }
     }
+}
+
+// ---- solids ------------------------------------------------------------------------
+
+fn new_solid(doc: &mut Document, name: &str, layer: Option<&str>, material: Option<&str>, faces: impl FnOnce(&str, Option<String>) -> Vec<Face>) -> OpResult2<OpResult> {
+    let layer = resolve_layer(doc, layer)?;
+    let mat = match material { Some(m) => Some(resolve_material(doc, m)?), None => None };
+    let fs = faces(&layer, mat);
+    let g = Group { id: new_id(), layer, name: name.into(), transform: mat_identity(), entities: fs.into_iter().map(Entity::Face).collect(), extra: Default::default() };
+    // only the id: a solid's faces are no use to the caller and can be large
+    let id = g.id.clone(); doc.entities.push(Entity::Group(g));
+    Ok(OpResult { created: vec![id], ..Default::default() })
+}
+
+/// Bounding box of polygons.
+fn bbox(ps: &[crate::solid::Poly]) -> (P3, P3) {
+    let mut lo = [f64::MAX; 3]; let mut hi = [f64::MIN; 3];
+    for p in ps { for v in p.points() { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } }
+    (lo, hi)
+}
+
+fn boolean(doc: &mut Document, mode: &str, target: &str, tools: &[String], keep: bool, material: Option<&str>) -> OpResult2<OpResult> {
+    use crate::solid::*;
+    let mode = match mode { "union" | "add" | "join" => BoolMode::Union, "subtract" | "difference" | "cut" => BoolMode::Subtract, "intersect" | "intersection" => BoolMode::Intersect, m => return err(format!("mode must be union, subtract or intersect, not {m}")) };
+    if tools.is_empty() { return err("boolean needs at least one tool"); }
+    if tools.iter().any(|t| t == target) { return err("the target can't be one of its own tools"); }
+    let mat_override = match material { Some(m) => Some(resolve_material(doc, m)?), None => None };
+    // the target, in world coordinates
+    let (te, parent) = doc.find_mut(target).ok_or_else(|| OpError(format!("no entity {target}")))?;
+    let Entity::Group(tg) = &*te else { return err(format!("{target} is not a solid group (make one with solid_box, solid_cylinder, extrude or make_group)")) };
+    let world = mat_mul(&parent, &tg.transform);
+    let layer = tg.layer.clone();
+    let mut a = polys_of(te, &parent);
+    let solid_check = |ps: &mut Vec<Poly>, what: &str| -> OpResult2<()> {
+        let v = volume(ps);
+        if v.abs() < 1e-15 { return err(format!("{what} is not a closed solid")); }
+        if v < 0.0 { for p in ps.iter_mut() { p.flip(); } } // faces pointing in: turn them out
+        Ok(())
+    };
+    solid_check(&mut a, "the target")?;
+    // the dominant material of the target paints the new faces a cut makes
+    let mut count: HashMap<Option<String>, usize> = HashMap::new();
+    for p in &a { *count.entry(p.material().clone()).or_insert(0) += 1; }
+    let main = count.into_iter().max_by_key(|x| x.1).and_then(|x| x.0);
+    let mut tps: Vec<Vec<Poly>> = vec![];
+    for t in tools {
+        let (e, parent) = doc.find_mut(t).ok_or_else(|| OpError(format!("no entity {t}")))?;
+        if !matches!(e, Entity::Group(_)) { return err(format!("tool {t} is not a solid group")); }
+        let mut ps = polys_of(e, &parent);
+        solid_check(&mut ps, &format!("tool {t}"))?;
+        if mode == BoolMode::Subtract { for p in ps.iter_mut() { p.set_material(main.clone()); } }
+        tps.push(ps);
+    }
+    // tools that don't overlap each other go through together
+    let mut batches: Vec<(Vec<Poly>, Vec<(P3, P3)>)> = vec![];
+    for ps in tps {
+        let bb = bbox(&ps);
+        // overlapping or touching (a shared face makes the combined tool invalid for the BSP): separate passes
+        let hit = |b: &(P3, P3)| (0..3).all(|k| b.0[k] <= bb.1[k] + 1e-7 && bb.0[k] <= b.1[k] + 1e-7);
+        match (mode != BoolMode::Intersect).then(|| batches.iter_mut().find(|(_, bbs)| !bbs.iter().any(hit))).flatten() {
+            Some(b) => { b.0.extend(ps); b.1.push(bb); }
+            None => batches.push((ps, vec![bb])),
+        }
+    }
+    for (ps, _) in batches { a = csg(a, ps, mode); }
+    if a.is_empty() || volume(&a).abs() < 1e-15 { return err("the result is empty"); }
+    if let Some(m) = &mat_override { for p in a.iter_mut() { p.set_material(Some(m.clone())); } }
+    let inv = mat_inverse(&world);
+    let faces: Vec<Entity> = merge_faces(a, &layer).into_iter().map(|mut f| {
+        for p in f.outer.iter_mut() { *p = mat_apply(&inv, *p); }
+        for h in f.holes.iter_mut() { for p in h.iter_mut() { *p = mat_apply(&inv, *p); } }
+        Entity::Face(f)
+    }).collect();
+    let (te, _) = doc.find_mut(target).unwrap();
+    let Entity::Group(tg) = te else { unreachable!() };
+    tg.entities = faces;
+    // only the id: the result's faces can be large
+    let mut r = OpResult { modified: vec![target.to_string()], ..Default::default() };
+    // the tools used up (not every face inside them)
+    if !keep { for t in tools { if doc.take(t).is_some() { r.removed.push(t.clone()); } } }
+    Ok(r)
+}
+
+/// Split: the two solids are cut along each other. The target keeps what is only in it, the tool what is only in
+/// it, and the part they share becomes a solid of its own (`created`).
+fn split(doc: &mut Document, target: &str, tools: &[String], material: Option<&str>, reg: &Registry) -> OpResult2<OpResult> {
+    let [tool] = tools else { return err("split takes one tool: the solid to split the target with") };
+    if tool == target { return err("the target can't be its own tool"); }
+    let dup = |doc: &mut Document, id: &str| -> OpResult2<String> { Ok(copy(doc, &[id.to_string()], [0.0; 3], None, 1, reg)?.created.remove(0)) };
+    let before = doc.clone();
+    let mut run = || -> OpResult2<OpResult> {
+        let (shared, other) = (dup(doc, target)?, dup(doc, tool)?);
+        boolean(doc, "intersect", &shared, &[other], false, material)?;
+        let whole = dup(doc, target)?;
+        boolean(doc, "subtract", target, &[tool.clone()], true, material)?;
+        boolean(doc, "subtract", tool, &[whole], false, material)?;
+        Ok(OpResult { created: vec![shared], modified: vec![target.to_string(), tool.clone()], ..Default::default() })
+    };
+    let r = run();
+    if r.is_err() { *doc = before; } // (one solid inside the other, or not touching: nothing is left half done)
+    r
+}
+
+/// Entities from elsewhere (the clipboard, an imported file) are added: new ids all the way down, a tag or material
+/// the document doesn't have falls back to the default, component instances without their definition are left out.
+fn insert(doc: &mut Document, entities: &[Entity], delta: P3, group: Option<&str>, merge: bool, local: bool) -> OpResult2<OpResult> {
+    if entities.is_empty() { return err("insert needs at least one entity"); }
+    let layers: HashSet<String> = doc.layers.iter().map(|l| l.id.clone()).collect();
+    let materials: HashSet<String> = doc.materials.iter().map(|m| m.id.clone()).collect();
+    let defs: HashSet<String> = doc.components.iter().map(|c| c.id.clone()).collect();
+    let default = doc.default_layer().to_string();
+    fn fit(e: &mut Entity, layers: &HashSet<String>, materials: &HashSet<String>, defs: &HashSet<String>, default: &str) -> bool {
+        if !layers.contains(e.layer()) { e.set_layer(default.to_string()); }
+        match e {
+            Entity::Face(f) => { for m in [&mut f.material, &mut f.back_material] { if m.as_ref().map_or(false, |m| !materials.contains(m)) { *m = None; } } true }
+            Entity::Group(g) => { g.entities.retain_mut(|c| fit(c, layers, materials, defs, default)); true }
+            Entity::Instance(i) => defs.contains(&i.definition),
+            _ => true,
+        }
+    }
+    let m = mat_translation(delta);
+    let (list, inv) = target(doc, group)?;
+    let mut r = OpResult::default();
+    for e in entities {
+        let mut e = e.clone();
+        if !fit(&mut e, &layers, &materials, &defs, &default) { continue; }
+        if merge { if let Entity::Group(g) = &e {
+            // triangles of one plane become the faces they were cut from
+            let inv = mat_inverse(&g.transform);
+            let faces: Vec<Entity> = crate::solid::merge_faces(crate::solid::polys_of(&e, &mat_identity()), &g.layer).into_iter().map(|mut f| {
+                for p in f.outer.iter_mut().chain(f.holes.iter_mut().flatten()) { *p = mat_apply(&inv, *p); }
+                Entity::Face(f)
+            }).collect();
+            if let Entity::Group(g) = &mut e { g.entities.retain(|c| !matches!(c, Entity::Face(_))); g.entities.extend(faces); }
+        } }
+        reassign_ids(&mut e); e.set_locked(false);
+        if local { e.transform(&mat_translation(inv.as_ref().map_or(delta, |i| mat_apply_dir(i, delta)))); } else { e.transform(&m); localize(&mut e, &inv); }
+        r.created.push(e.id().to_string()); list.push(e);
+    }
+    if r.created.is_empty() { return err("nothing to insert: the components these instances belong to are not in this document"); }
+    Ok(r)
 }
 
 // ---- helpers ----------------------------------------------------------------------
@@ -328,6 +588,30 @@ fn push_created(doc: &mut Document, e: Entity) -> OpResult {
     let r = OpResult { created: vec![id], entities: vec![e.clone()], ..Default::default() };
     doc.entities.push(e);
     r
+}
+
+/// Where a draw op puts its geometry: the top level, or inside group `group`. With a group, the matrix
+/// that brings world coordinates into the group's own.
+fn target<'a>(doc: &'a mut Document, group: Option<&str>) -> OpResult2<(&'a mut Vec<Entity>, Option<Mat4>)> {
+    let Some(gid) = group else { return Ok((&mut doc.entities, None)) };
+    let (e, parent) = doc.find_mut(gid).ok_or_else(|| OpError(format!("no group {gid}")))?;
+    let Entity::Group(g) = e else { return err(format!("{gid} is not a group")) };
+    let world = mat_mul(&parent, &g.transform);
+    Ok((&mut g.entities, if mat_is_identity(&world) { None } else { Some(mat_inverse(&world)) }))
+}
+/// Entities given in world coordinates, in the coordinates of the container they go into.
+fn localize(e: &mut Entity, inv: &Option<Mat4>) {
+    if let Some(m) = inv { e.transform(m); if mat_det3(m) < 0.0 { e.reverse_winding(); } }
+}
+/// Add a face (world coordinates) to the top level or a group; it is cut into the faces it lies on.
+fn place_face(doc: &mut Document, group: Option<&str>, f: Face) -> OpResult2<OpResult> {
+    let (list, inv) = target(doc, group)?;
+    let mut e = Entity::Face(f);
+    localize(&mut e, &inv);
+    let Entity::Face(f) = e else { unreachable!() };
+    let mut r = OpResult::default();
+    crate::sticky::insert_face(list, f, &mut r);
+    Ok(r)
 }
 
 fn collect_ids(e: &Entity, out: &mut Vec<String>) {
@@ -382,46 +666,43 @@ fn key(p: P3) -> (i64, i64, i64) {
     (q(p[0]), q(p[1]), q(p[2]))
 }
 
-fn draw_line(doc: &mut Document, points: &[P3], close: bool, layer: Option<&str>) -> OpResult2<OpResult> {
+fn draw_line(doc: &mut Document, points: &[P3], close: bool, layer: Option<&str>, group: Option<&str>) -> OpResult2<OpResult> {
     let pts = dedupe_loop(points);
     if pts.len() < 2 { return err("draw_line needs at least 2 distinct points"); }
     let layer = resolve_layer(doc, layer)?;
+    let (list, inv) = target(doc, group)?;
     let mut r = OpResult::default();
     let mut new_edges: Vec<Edge> = vec![];
-    for w in pts.windows(2) {
-        new_edges.push(Edge { id: new_id(), layer: layer.clone(), a: w[0], b: w[1], extra: Default::default() });
-    }
-    if close && pts.len() >= 3 {
-        new_edges.push(Edge { id: new_id(), layer: layer.clone(), a: *pts.last().unwrap(), b: pts[0], extra: Default::default() });
-    }
+    let mut add_edge = |a: P3, b: P3| {
+        let mut e = Entity::Edge(Edge { id: new_id(), layer: layer.clone(), a, b, extra: Default::default() });
+        localize(&mut e, &inv);
+        if let Entity::Edge(e) = e { new_edges.push(e); }
+    };
+    for w in pts.windows(2) { add_edge(w[0], w[1]); }
+    if close && pts.len() >= 3 { add_edge(*pts.last().unwrap(), pts[0]); }
     for e in new_edges.iter() {
         r.created.push(e.id.clone());
-        r.entities.push(Entity::Edge(e.clone()));
-        doc.entities.push(Entity::Edge(e.clone()));
+        list.push(Entity::Edge(e.clone()));
     }
-    // face from loop: for each new edge, look for the shortest cycle through it among loose top-level edges
-    let existing_faces: HashSet<Vec<(i64, i64, i64)>> = doc
-        .entities
-        .iter()
-        .filter_map(|e| if let Entity::Face(f) = e { Some(face_key(&f.outer)) } else { None })
-        .collect();
-    let mut made: HashSet<Vec<(i64, i64, i64)>> = HashSet::new();
+    // the faces the new edges lie on are divided where the edges (with those already there) close off part of them
+    let segs: Vec<(P3, P3)> = new_edges.iter().map(|e| (e.a, e.b)).collect();
+    crate::sticky::imprint_edges(list, &segs, &mut r);
+    // face from loop: for each new edge, look for the shortest cycle through it among the loose edges of the container
+    let mut have: HashSet<Vec<(i64, i64, i64)>> = list.iter().filter_map(|e| if let Entity::Face(f) = e { Some(face_key(&f.outer)) } else { None }).collect();
     for ne in &new_edges {
-        if let Some(cycle) = find_loop(&doc.entities, ne) {
+        if let Some(cycle) = find_loop(list, ne) {
             let k = face_key(&cycle);
-            if existing_faces.contains(&k) || made.contains(&k) { continue; }
+            if have.contains(&k) || crate::sticky::covered(list, &cycle) { continue; }
             let n = normal(&cycle);
             // prefer faces that look up / toward the viewer
             let up = if n[1].abs() > 1e-6 { [0.0, 1.0, 0.0] } else if n[2].abs() > 1e-6 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
-            let cycle = orient(cycle, up);
-            if let Ok(f) = make_face(doc, cycle, vec![], Some(&layer), None) {
-                made.insert(k);
-                r.created.push(f.id.clone());
-                r.entities.push(Entity::Face(f.clone()));
-                doc.entities.push(Entity::Face(f));
-            }
+            let f = Face { id: new_id(), layer: layer.clone(), outer: orient(cycle, up), holes: vec![], material: None, back_material: None, extra: Default::default() };
+            have.insert(k);
+            r.created.push(f.id.clone());
+            list.push(Entity::Face(f));
         }
     }
+    r.entities = r.created.iter().chain(r.modified.iter()).filter_map(|id| list.iter().find(|e| e.id() == id).cloned()).collect();
     Ok(r)
 }
 
@@ -480,7 +761,7 @@ fn find_loop(list: &[Entity], edge: &Edge) -> Option<Vec<P3>> {
     Some(cycle)
 }
 
-fn draw_rectangle(doc: &mut Document, corner: P3, opposite: P3, normal_in: P3, u_in: Option<P3>, layer: Option<&str>, material: Option<&str>) -> OpResult2<OpResult> {
+fn draw_rectangle(doc: &mut Document, corner: P3, opposite: P3, normal_in: P3, u_in: Option<P3>, layer: Option<&str>, material: Option<&str>, group: Option<&str>) -> OpResult2<OpResult> {
     let n = normalize(normal_in);
     if len(n) < 0.5 { return err("normal must be non-zero"); }
     let project = |d: P3| sub(d, scale(n, dot(d, n)));
@@ -495,12 +776,12 @@ fn draw_rectangle(doc: &mut Document, corner: P3, opposite: P3, normal_in: P3, u
     if du.abs() < 1e-6 || dv.abs() < 1e-6 { return err("rectangle is degenerate"); }
     let pts = vec![corner, add(corner, scale(u, du)), add(add(corner, scale(u, du)), scale(v, dv)), add(corner, scale(v, dv))];
     let f = make_face(doc, orient(pts, n), vec![], layer, material)?;
-    Ok(push_created(doc, Entity::Face(f)))
+    place_face(doc, group, f)
 }
 
 // ---- push/pull & offset ------------------------------------------------------------
 
-fn push_pull(doc: &mut Document, face_id: &str, distance: f64) -> OpResult2<OpResult> {
+fn push_pull(doc: &mut Document, face_id: &str, distance: f64, new_face: bool) -> OpResult2<OpResult> {
     if distance.abs() < 1e-9 { return err("distance must be non-zero"); }
     let (list, _) = doc.container_mut(face_id).ok_or_else(|| OpError(format!("no entity {face_id}")))?;
     let idx = list.iter().position(|e| e.id() == face_id).unwrap();
@@ -509,6 +790,9 @@ fn push_pull(doc: &mut Document, face_id: &str, distance: f64) -> OpResult2<OpRe
         Entity::Custom(c) => return err(format!("push/pull works on drawn faces; {face_id} is a {} (change its size in its settings)", c.type_)),
         _ => return err(format!("{face_id} is not a face")),
     };
+    // part of a shape: the face moves, its neighbours follow (see `sticky`); on its own it becomes a prism
+    // (`new_face`: it stays as it is and a prism is built on it, as a face on its own gets)
+    if !new_face { if let Some(r) = crate::sticky::push_pull(list, idx, distance) { return Ok(r); } }
     let n = normal(&orig.outer);
     let d = scale(n, distance);
     let shift = |l: &[P3]| l.iter().map(|p| add(*p, d)).collect::<Vec<_>>();
@@ -564,8 +848,9 @@ fn offset(doc: &mut Document, face_id: &str, distance: f64) -> OpResult2<OpResul
     if !is_planar(&outer) || area(&outer) < 1e-8 { return err("offset collapses the face"); }
     let holes: Vec<Vec<P3>> = orig.holes.iter().map(|h| offset_polygon(h, -distance)).filter(|h| area(h) > 1e-8).collect();
     let f = Face { id: new_id(), layer: orig.layer.clone(), outer, holes, material: orig.material.clone(), back_material: orig.back_material.clone(), extra: Default::default() };
-    let r = OpResult { created: vec![f.id.clone()], entities: vec![Entity::Face(f.clone())], ..Default::default() };
-    list.push(Entity::Face(f));
+    // cut into the face it was offset from: inward leaves a border around a new inner face, outward a border around the face
+    let mut r = OpResult::default();
+    crate::sticky::insert_face(list, f, &mut r);
     Ok(r)
 }
 
@@ -588,12 +873,38 @@ fn transform_ids(doc: &mut Document, ids: &[String], world: &Mat4, reg: &Registr
     Ok(r)
 }
 
+/// Move, turn or scale faces, edges or corners with what is attached to them (see `sticky::stretch`). `points`
+/// and `world` are in world coordinates.
+fn stretch(doc: &mut Document, ids: &[String], points: &[P3], world: &Mat4, group: Option<&str>) -> OpResult2<OpResult> {
+    if ids.is_empty() && points.is_empty() { return err("stretch needs `ids` or `points`"); }
+    for id in ids {
+        match doc.find(id) {
+            Some(Entity::Face(_)) | Some(Entity::Edge(_)) => {}
+            Some(e) => return err(format!("stretch works on faces and loose edges, with what is attached to them; {id} is a {}: use move, rotate or scale", e.kind())),
+            None => return err(format!("no entity {id}")),
+        }
+    }
+    // everything named must share one container: that of the first id, else `group` or the top level
+    let (list, inv) = match ids.first() {
+        Some(first) => { let (l, m) = doc.container_mut(first).unwrap(); let inv = if mat_is_identity(&m) { None } else { Some(mat_inverse(&m)) }; (l, inv) }
+        None => target(doc, group)?,
+    };
+    if let Some(id) = ids.iter().find(|id| !list.iter().any(|e| e.id() == id.as_str())) { return err(format!("{id} is not in the same group as {}", ids[0])); }
+    // (in a group: the same change, in the group's own coordinates)
+    let (points, local): (Vec<P3>, Mat4) = match &inv { Some(m) => (points.iter().map(|p| mat_apply(m, *p)).collect(), mat_mul(m, &mat_mul(world, &mat_inverse(m)))), None => (points.to_vec(), *world) };
+    let mut r = OpResult::default();
+    crate::sticky::stretch(list, ids, &points, &local, &mut r);
+    if r.modified.is_empty() && r.removed.is_empty() { return err("nothing to move at those points"); }
+    Ok(r)
+}
+
 fn reassign_ids(e: &mut Entity) {
     e.set_id(new_id());
     if let Entity::Group(g) = e { for c in g.entities.iter_mut() { reassign_ids(c); } }
 }
 
-fn copy(doc: &mut Document, ids: &[String], delta: P3, count: usize, reg: &Registry) -> OpResult2<OpResult> {
+/// Copies of `ids`: the i-th one moved by i × `delta` and, with `turn`, turned by i × its angle (a radial array).
+fn copy(doc: &mut Document, ids: &[String], delta: P3, turn: Option<&Turn>, count: usize, reg: &Registry) -> OpResult2<OpResult> {
     let mut r = OpResult::default();
     let snapshot = doc.clone();
     for id in &bare_ids(ids) {
@@ -602,7 +913,8 @@ fn copy(doc: &mut Document, ids: &[String], delta: P3, count: usize, reg: &Regis
         for i in 1..=count {
             let mut c = src.clone();
             reassign_ids(&mut c);
-            let world = mat_translation(scale(delta, i as f64));
+            let mut world = mat_translation(scale(delta, i as f64));
+            if let Some(t) = turn { world = mat_mul(&world, &mat_about(&mat_rotation(t.axis, (t.angle * i as f64).to_radians()), t.origin)); }
             let local = if mat_is_identity(&parent) { world } else { mat_mul(&mat_inverse(&parent), &mat_mul(&world, &parent)) };
             if let Entity::Custom(cu) = &mut c {
                 reg.transform(cu, &local, &snapshot)?;
@@ -770,7 +1082,7 @@ fn ccw_angle(a: P3, b: P3, n: P3) -> f64 {
     if ang <= 1e-12 { ang + std::f64::consts::TAU } else { ang }
 }
 
-fn draw_arc(doc: &mut Document, a: &ArcSpec, layer: Option<&str>) -> OpResult2<OpResult> {
+fn draw_arc(doc: &mut Document, a: &ArcSpec, layer: Option<&str>, group: Option<&str>) -> OpResult2<OpResult> {
     let pick_normal = |given: Option<P3>, fallback: P3| -> OpResult2<P3> {
         let n = normalize(given.unwrap_or(fallback));
         if len(n) < 0.5 { err("cannot derive the arc plane: pass `normal`") } else { Ok(n) }
@@ -793,7 +1105,7 @@ fn draw_arc(doc: &mut Document, a: &ArcSpec, layer: Option<&str>) -> OpResult2<O
         let n = pick_normal(a.normal, if chord[1].abs() < 0.999 * l { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] })?;
         if bulge.abs() < 1e-9 {
             // a straight segment
-            let mut r = draw_line(doc, &[from, to], false, layer)?;
+            let mut r = draw_line(doc, &[from, to], false, layer, group)?;
             r.measurement = Some(l);
             return Ok(r);
         }
@@ -825,24 +1137,27 @@ fn draw_arc(doc: &mut Document, a: &ArcSpec, layer: Option<&str>) -> OpResult2<O
         // pie: centre → arc → centre, closed, so the sector face forms
         let mut poly = vec![center];
         poly.extend(pts.iter().copied());
-        draw_line(doc, &poly, true, layer)?
+        draw_line(doc, &poly, true, layer, group)?
     } else {
-        draw_line(doc, &pts, false, layer)?
+        draw_line(doc, &pts, false, layer, group)?
     };
     if let Some((a2, b2)) = chord {
-        let r2 = draw_line(doc, &[a2, b2], false, layer)?;
+        let r2 = draw_line(doc, &[a2, b2], false, layer, group)?;
         r.created.extend(r2.created);
-        r.entities.extend(r2.entities);
+        for m in r2.modified { if !r.modified.contains(&m) { r.modified.push(m); } }
     }
     // tag the arc edges (both ends on the circle) so tools can recognise them later
-    let meta = serde_json::json!({ "center": center, "radius": radius, "normal": n });
-    let on_circle = |p: P3| (dist(p, center) - radius).abs() < 1e-6;
+    // (inside a group the edges are in its coordinates: so are the centre, the normal and the radius they carry)
+    let inv = target(doc, group)?.1;
+    let (lc, ln, lr) = match &inv { Some(m) => { let c = mat_apply(m, center); (c, normalize(mat_apply_dir(m, n)), dist(mat_apply(m, start), c)) } None => (center, n, radius) };
+    let meta = serde_json::json!({ "center": lc, "radius": lr, "normal": ln });
+    let on_circle = |p: P3| (dist(p, lc) - lr).abs() < 1e-6 * lr.max(1.0);
     for id in r.created.clone() {
         if let Some((Entity::Edge(e), _)) = doc.find_mut(&id) {
             if on_circle(e.a) && on_circle(e.b) { e.extra.insert("arc".into(), meta.clone()); }
         }
     }
-    r.entities = r.created.iter().filter_map(|id| doc.find(id).cloned()).collect();
+    r.entities = r.created.iter().chain(r.modified.iter()).filter_map(|id| doc.find(id).cloned()).collect();
     r.measurement = Some(radius);
     Ok(r)
 }

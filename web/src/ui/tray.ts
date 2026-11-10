@@ -2,13 +2,15 @@ import { FACE_STYLES, type FaceStyle } from '../scene';
 import { MOD_LABEL, THEMES, type App, type ModKey, type Theme } from '../main';
 function loadCollapsed(): Set<string> { try { const v = JSON.parse(localStorage.getItem('plannr.trayCollapsed') ?? 'null'); if (v?.collapsed) return new Set([...v.collapsed, ...(v.known ?? []).filter((k: string) => !v.collapsed.includes(k)).map((k: string) => `!${k}`)]); } catch { /* ignore */ } return new Set(); }
 import { icon } from './icons';
-import { findEntity, materialOf, layerOf, walk, fmt, fmtM, fmtM2, KIND_LABEL, polygonNormal, type Entity, type FaceEntity, type Vec3 } from '../model';
+import { findEntity, materialOf, layerOf, walk, fmt, fmtM, fmtM2, lengthUnit, UNITS, KIND_LABEL, polygonNormal, type Entity, type FaceEntity, type Vec3 } from '../model';
 import { getPlugins, partsFor } from '../plugins';
 
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const num = (k: string, v: number, label: string, step = 0.01) => `<label>${label}</label><input type="number" step="${step}" data-field="${k}" value="${+v.toFixed(4)}">`;
 const vec = (k: string, p: Vec3, label: string) => `<label>${label}</label><div class="row">${[0, 1, 2].map(i => `<input type="number" step="0.01" data-field="${k}.${i}" value="${+p[i].toFixed(4)}">`).join('')}</div>`;
 
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const hourLabel = (h: number) => `Time ${String(Math.floor(h)).padStart(2, '0')}:${String(Math.round((h % 1) * 60)).padStart(2, '0')}`;
 export class Tray {
   /** Collapsed panel ids. Everything starts collapsed; the choice is remembered per browser. */
   collapsed: Set<string> = loadCollapsed();
@@ -83,7 +85,7 @@ export class Tray {
     if (e.kind === 'custom') { const pid = e.type.split('.')[0]; const p = getPlugins().find(p => p.id === pid); if (p?.renderEntity) return `<div data-plugin-entity="${pid}"></div>`; }
     const layerSel = `<label>Tag</label><select data-field="layer">${a.doc.layers.map(l => `<option value="${l.id}" ${l.id === e.layer ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`;
     const matSel = (k: 'material' | 'backMaterial', label: string, cur?: string | null) => `<label>${label}</label><select data-field="${k}"><option value="">(default)</option>${a.doc.materials.map(m => `<option value="${m.id}" ${m.id === cur ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select>`;
-    let body = `<div class="kv"><label>Type</label><div><b>${KIND_LABEL[e.kind]}</b> <span class="muted">${e.id.slice(0, 8)}</span></div>${layerSel}`;
+    let body = `<div class="kv"><label>Type</label><div><b>${KIND_LABEL[e.kind]}</b> <span class="muted">${e.id.slice(0, 8)}${e.locked === true ? ' · locked' : ''}</span></div>${layerSel}`;
     switch (e.kind) {
       case 'face': { const f = e as FaceEntity; const n = polygonNormal(f.outer);
         body += `${matSel('material', 'Material', f.material)}${matSel('backMaterial', 'Back material', f.backMaterial)}<label>Vertices</label><div>${f.outer.length}${f.holes?.length ? ` + ${f.holes.length} hole(s)` : ''}</div><label>Normal</label><div class="muted">${n.map(x => x.toFixed(2)).join(', ')}</div><label>Area</label><div>${fmtM2(this.faceArea(f))}</div>`; break; }
@@ -158,7 +160,11 @@ export class Tray {
   private display(): string {
     const a = this.app; const row = (k: string, label: string, on: boolean) => `<div class="layer-row"><button class="icon-btn" data-display="${k}">${icon(on ? 'eye' : 'eyeOff')}</button><span class="name">${label}</span></div>`;
     return row('grid', 'Grid', a.display.grid) + row('axes', 'Axes', a.display.axes) + row('edges', 'Edges', a.display.edges) + row('figure', 'Scale figure', a.display.figure) + row('shadows', 'Shadows', a.display.shadows) +
-      `<div class="layer-row"><span class="name">Face style</span><select data-opt="faceStyle">${FACE_STYLES.map(s => `<option value="${s.id}" ${a.faceStyle === s.id ? 'selected' : ''}>${s.label}</option>`).join('')}</select></div>
+      `<div class="layer-row"><span class="name">Sun</span><select data-opt="sunMode"><option value="fixed" ${a.sun.byTime ? '' : 'selected'}>Studio light</option><option value="time" ${a.sun.byTime ? 'selected' : ''}>By date and time</option></select></div>
+      ${a.sun.byTime ? `<div class="layer-row"><span class="name" data-sun-label="hour">${hourLabel(a.sun.hour)}</span><input type="range" data-sun="hour" min="4" max="22" step="0.25" value="${a.sun.hour}"></div>
+      <div class="layer-row"><span class="name" data-sun-label="month">${MONTHS[a.sun.month - 1]}</span><input type="range" data-sun="month" min="1" max="12" step="1" value="${a.sun.month}"></div>
+      <div class="layer-row"><span class="name" title="North is where the Front view looks">Latitude</span><input type="number" data-sun="latitude" min="-66" max="66" step="1" value="${a.sun.latitude}" style="width:64px"></div>` : ''}
+      <div class="layer-row"><span class="name">Face style</span><select data-opt="faceStyle">${FACE_STYLES.map(s => `<option value="${s.id}" ${a.faceStyle === s.id ? 'selected' : ''}>${s.label}</option>`).join('')}</select></div>
       <div class="layer-row"><input type="checkbox" data-opt="backEdges" ${a.backEdges ? 'checked' : ''}><span class="name">Back edges</span></div>
       <div class="layer-row"><input type="checkbox" data-opt="hiddenGeometry" ${a.hiddenGeometry ? 'checked' : ''}><span class="name">Hidden geometry (${a.hiddenIds.length})</span>${a.hiddenIds.length ? '<button class="btn" data-act="unhideAll">Unhide all</button>' : ''}</div>
       <div class="layer-row"><input type="checkbox" data-opt="gridSnap" ${a.options.gridSnap ? 'checked' : ''}><span class="name">Snap to 1 cm grid</span></div>
@@ -167,8 +173,9 @@ export class Tray {
   private modelInfo(): string {
     const m = this.app.scene.compiled?.metrics; if (!m) return `<div class="empty">Compiling…</div>`;
     const stat = (v: string, l: string) => `<div class="stat"><div class="v">${v}</div><div class="l">${l}</div></div>`;
-    return `<div class="stats">${stat(String(m.faces), 'Faces')}${stat(String(m.edges), 'Edges')}${stat(String(m.groups), 'Groups')}${stat(fmtM2(m.area), 'Face area')}${stat(fmtM(m.edgeLength), 'Edge length')}${stat(`v${this.app.doc.version}`, 'Version')}</div>
-      ${Object.keys(m.areaByMaterial).length ? `<table class="data"><tr><th>Material</th><th>Area</th></tr>${Object.entries(m.areaByMaterial).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${fmt(v, 2)} m²</td></tr>`).join('')}</table>` : ''}`;
+    const units = `<div class="kv"><label>Units</label><select data-opt="units">${Object.keys(UNITS).map(u => `<option value="${u}" ${lengthUnit.name === u ? 'selected' : ''}>${({ m: 'Metres', cm: 'Centimetres', mm: 'Millimetres' } as Record<string, string>)[u]}</option>`).join('')}</select><label>Decimals</label><select data-opt="precision">${[0, 1, 2, 3, 4].map(d => `<option value="${d}" ${lengthUnit.digits === d ? 'selected' : ''}>${d}</option>`).join('')}</select></div>`;
+    return `${units}<div class="stats">${stat(String(m.faces), 'Faces')}${stat(String(m.edges), 'Edges')}${stat(String(m.groups), 'Groups')}${stat(fmtM2(m.area), 'Face area')}${stat(fmtM(m.edgeLength), 'Edge length')}${stat(`v${this.app.doc.version}`, 'Version')}</div>
+      ${Object.keys(m.areaByMaterial).length ? `<table class="data"><tr><th>Material</th><th>Area</th></tr>${Object.entries(m.areaByMaterial).sort((x, y) => y[1] - x[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${fmtM2(v)}</td></tr>`).join('')}</table>` : ''}`;
   }
   private history(): string {
     const h = this.app.historyList; if (!h.length) return `<div class="empty">No changes yet.</div>`;
@@ -248,6 +255,14 @@ export class Tray {
     el.querySelectorAll<HTMLElement>('[data-display]').forEach(b => b.onclick = () => a.toggleDisplay(b.dataset.display as any));
     el.querySelector<HTMLInputElement>('[data-opt="gridSnap"]')?.addEventListener('change', (e) => { a.options.gridSnap = (e.target as HTMLInputElement).checked; });
     el.querySelector<HTMLSelectElement>('[data-opt="theme"]')?.addEventListener('change', (e) => a.setTheme((e.target as HTMLSelectElement).value as Theme));
+    el.querySelector<HTMLSelectElement>('[data-opt="sunMode"]')?.addEventListener('change', (e) => a.setSun({ byTime: (e.target as HTMLSelectElement).value === 'time' }));
+    el.querySelectorAll<HTMLInputElement>('[data-sun]').forEach(inp => inp.addEventListener('input', () => {
+      const k = inp.dataset.sun as 'hour' | 'month' | 'latitude'; const v = parseFloat(inp.value); if (isNaN(v)) return;
+      a.setSun({ [k]: k === 'latitude' ? Math.max(-66, Math.min(66, v)) : v }, false); // (the slider stays under the finger: only its label is rewritten)
+      const lab = el.querySelector(`[data-sun-label="${k}"]`); if (lab) lab.textContent = k === 'hour' ? hourLabel(v) : MONTHS[v - 1];
+    }));
+    el.querySelector<HTMLSelectElement>('[data-opt="units"]')?.addEventListener('change', (e) => a.setUnits((e.target as HTMLSelectElement).value));
+    el.querySelector<HTMLSelectElement>('[data-opt="precision"]')?.addEventListener('change', (e) => a.setUnits(lengthUnit.name, +(e.target as HTMLSelectElement).value));
     el.querySelectorAll<HTMLSelectElement>('[data-modtool]').forEach(s => s.onchange = () => a.setModifierTool(s.dataset.modtool as ModKey, s.value));
   }
 }
