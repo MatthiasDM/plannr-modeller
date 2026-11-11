@@ -3,7 +3,7 @@ import type { Tool, ToolContext, Plane, Snap } from './base';
 import { partsRefused, parseNumbers, parseArray, parseAngle, onSegment, drawSnap, lineColor, planeFromSnap, isPointSnap, GROUND, arr, INK, MAGENTA, SELECT, AXIS, AXIS_COLOR } from './base';
 import { planeBasis } from './draw';
 import { fmt, fmtM, fmtM2, fmtDeg, findEntity, materialOf, walk, type Vec3, type Entity } from '../model';
-import { V, COLOR, type Pick } from '../scene';
+import { V, COLOR, angleArc, type Pick } from '../scene';
 import { getPlugins } from '../plugins';
 import type { Op } from '../model';
 
@@ -758,5 +758,67 @@ export class DimensionTool implements Tool {
     if (this.curve && ev.type === 'keydown' && (k === 'r' || k === 'd')) { this.curve.style = k === 'r' ? 'radius' : 'diameter'; ctx.setHint(`Click where the ${this.curve.style} goes. R and D switch between radius and diameter.`); return true; }
     return false;
   }
+}
+/** Angular Dimension: the angle between two edges, or between two legs from a corner; it stays in the model
+ *  as an arc with the angle in degrees. Which side of each edge is clicked decides which of the angles is meant. */
+export class AngleDimensionTool implements Tool {
+  id = 'angledim'; label = 'Angular Dimension'; hint = 'Click the two edges of the angle (or its corner, then a point on each leg), then click where the arc goes.'; cursor = 'crosshair';
+  private edge: { a: THREE.Vector3; b: THREE.Vector3; p: THREE.Vector3 } | null = null;
+  private c: THREE.Vector3 | null = null; private legs: THREE.Vector3[] = [];
+  busy() { return !!this.c || !!this.edge; }
+  private reset(ctx: ToolContext) { this.edge = null; this.c = null; this.legs = []; ctx.scene.clearOverlay(); ctx.setHint(this.hint); }
+  activate(ctx: ToolContext) { this.reset(ctx); ctx.setVCB('', 'Angle'); }
+  deactivate(ctx: ToolContext) { this.reset(ctx); }
+  private segAt(ctx: ToolContext, p: THREE.Vector3) { return ctx.scene.segments.find(g => onSegment(g, p)) ?? ctx.scene.segments.find(g => g.a.distanceTo(p) < 1e-4 || g.b.distanceTo(p) < 1e-4); }
+  /** Where two edges meet: the corner they share, or where their lines cross. */
+  private corner(g: { a: THREE.Vector3; b: THREE.Vector3 }, h: { a: THREE.Vector3; b: THREE.Vector3 }): THREE.Vector3 | null {
+    for (const p of [g.a, g.b]) for (const q of [h.a, h.b]) if (p.distanceTo(q) < 1e-4) return p.clone();
+    const d1 = g.b.clone().sub(g.a), d2 = h.b.clone().sub(h.a), w = g.a.clone().sub(h.a); const n = d1.clone().cross(d2);
+    if (n.lengthSq() < 1e-12 * d1.lengthSq() * d2.lengthSq()) return null; // parallel
+    if (Math.abs(w.dot(n.clone().normalize())) > 1e-3) return null; // they pass each other
+    const t = d2.clone().cross(n).dot(w) / -n.lengthSq(); return g.a.clone().addScaledVector(d1, t);
+  }
+  private snap(ev: { clientX: number; clientY: number }, ctx: ToolContext) { return ctx.snap(ev, { faces: true, from: this.c ?? undefined }); }
+  onMove(ev: PointerEvent, ctx: ToolContext) {
+    const s = this.snap(ev, ctx); ctx.scene.clearOverlay(); drawSnap(ctx, s);
+    if (this.edge) ctx.scene.addLine([this.edge.a, this.edge.b], MAGENTA, false, 2);
+    if (!this.c) return;
+    const to = s.point.clone().sub(this.c); const r = to.length(); if (r < 1e-4) return;
+    if (this.legs.length < 2) { // the legs so far, and the one towards the cursor
+      for (const l of this.legs) ctx.scene.addLine([this.c, this.c.clone().addScaledVector(l, r)], INK, false, 2);
+      ctx.scene.addLine([this.c, s.point], INK, true);
+      if (this.legs.length === 1) { const w = to.clone().normalize(); const arc = angleArc(this.c, this.legs[0], w, r * 0.6); ctx.scene.addLine(arc, INK); ctx.scene.addLabel(arc[arc.length >> 1], fmtDeg(THREE.MathUtils.radToDeg(this.legs[0].angleTo(w))), 'dim'); }
+      return;
+    }
+    const [u, w] = this.legs; const arc = angleArc(this.c, u, w, r);
+    ctx.scene.addLine([this.c, this.c.clone().addScaledVector(u, r)], INK); ctx.scene.addLine([this.c, this.c.clone().addScaledVector(w, r)], INK); ctx.scene.addLine(arc, INK, false, 2);
+    ctx.scene.addLabel(arc[arc.length >> 1], fmtDeg(THREE.MathUtils.radToDeg(u.angleTo(w))), 'dim');
+  }
+  async onDown(ev: PointerEvent, ctx: ToolContext) {
+    if (ev.button !== 0) return; const s = this.snap(ev, ctx); const p = s.point.clone();
+    if (!this.c && !this.edge) {
+      const g = s.kind === 'edge' || s.kind === 'midpoint' ? ctx.scene.segments.find(g => onSegment(g, p)) : undefined;
+      if (g) { this.edge = { a: g.a.clone(), b: g.b.clone(), p }; ctx.setHint('Click the other edge of the angle.'); }
+      else { this.c = p; ctx.setHint('Click a point on the first leg of the angle.'); }
+      return;
+    }
+    if (this.edge && !this.c) {
+      const h = this.segAt(ctx, p); const c = h ? this.corner(this.edge, h) : null;
+      if (!h || !c) { ctx.toast(h ? 'These two edges do not meet at a corner: click the corner and a point on each leg instead.' : 'Click the other edge of the angle.'); return; }
+      // each leg runs from the corner towards where its edge was clicked (or along the edge, when clicked at the corner)
+      const leg = (g: { a: THREE.Vector3; b: THREE.Vector3 }, at: THREE.Vector3) => (at.distanceTo(c) > 1e-4 ? at : g.a.distanceTo(c) > g.b.distanceTo(c) ? g.a : g.b).clone().sub(c).normalize();
+      const [u, w] = [leg(this.edge, this.edge.p), leg(h, p)];
+      if (u.clone().cross(w).lengthSq() < 1e-10) { ctx.toast('These two edges run along one line: there is no angle between them.'); return; }
+      this.c = c; this.legs = [u, w]; this.edge = null; ctx.setHint('Click where the arc goes.'); return;
+    }
+    const c = this.c!; const to = p.clone().sub(c); if (to.length() < 1e-4) return;
+    if (this.legs.length < 2) {
+      const d = to.normalize(); if (this.legs.length === 1 && this.legs[0].clone().cross(d).lengthSq() < 1e-10) { ctx.toast('The two legs point along one line: click a point off the first leg.'); return; }
+      this.legs.push(d); ctx.setHint(this.legs.length === 1 ? 'Click a point on the second leg.' : 'Click where the arc goes.'); return;
+    }
+    const r = to.length(); const [u, w] = this.legs; this.reset(ctx);
+    await ctx.ops([{ op: 'add_dimension', a: arr(c), b: arr(c.clone().addScaledVector(u, r)), offset: arr(w.clone().multiplyScalar(r)), style: 'angle' }], 'Angular dimension');
+  }
+  onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.busy()) { this.reset(ctx); return true; } return false; }
 }
 void SELECT; void LegacyScaleTool;

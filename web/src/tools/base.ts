@@ -72,6 +72,8 @@ export interface ToolContext {
   /** False for geometry that exists only in the current preview (a tool's own previewed result). pickTarget
    *  never returns such geometry; pass `!inDocument(id)` as a snap's `ignoreIf` to keep it out of inference. */
   inDocument(id: string): boolean;
+  /** Move the drawing axes (origin, red axis, blue axis), or put them back with null. Stored with the document. */
+  setAxes(origin: THREE.Vector3 | null, x?: THREE.Vector3, y?: THREE.Vector3): Promise<void>;
 }
 
 export interface Tool {
@@ -120,7 +122,7 @@ export function parseArray(v: string): { count: number; divide: boolean } | null
   let m = s.match(/^(?:[x*](\d+)|(\d+)[x*])$/); if (m) return { count: n(m), divide: false };
   m = s.match(/^(?:\/(\d+)|(\d+)\/)$/); return m ? { count: n(m), divide: true } : null;
 }
-/** "[x; y; z]": a position; "<x; y; z>": a step from the previous point. Model coordinates, as Entity Info shows them (y is up). */
+/** "[x; y; z]": a position; "<x; y; z>": a step from the previous point. Along the drawing axes, from their origin (y is up). */
 export function parsePoint(v: string): { relative: boolean; p: THREE.Vector3 } | null {
   const m = v.trim().match(/^([\[<])(.*?)[\]>]?$/); if (!m) return null;
   const n = m[2].split(/[;,\s]+/).filter(Boolean).flatMap(s => parseNumbers(s)); if (n.length !== 3) return null;
@@ -173,6 +175,17 @@ export function planeFromSnap(s: Snap, fallback: Plane): Plane {
   return s.kind === 'face' && s.normal ? { origin: s.point.clone(), normal: s.normal.clone() } : { origin: s.point.clone(), normal: fallback.normal.clone() };
 }
 export const GROUND: Plane = { origin: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0) };
+/** Put the drawing axes somewhere else (the Axes tool): `x` is the red axis, `y` the blue one (up), green follows
+ *  from them. The AXIS vectors and the GROUND plane are changed in place, so inference, axis locks, the plane
+ *  free points land on and the way shapes are squared up all follow. */
+export function setDrawingAxes(origin: THREE.Vector3, x: THREE.Vector3, y: THREE.Vector3) {
+  const X = x.clone().normalize(), Z = X.clone().cross(y).normalize(), Y = Z.clone().cross(X).normalize();
+  if (!(X.lengthSq() > 0.5 && Z.lengthSq() > 0.5)) return;
+  AXIS.x.copy(X); AXIS.y.copy(Y); AXIS.z.copy(Z); GROUND.origin.copy(origin); GROUND.normal.copy(Y);
+}
+/** A point in the coordinates of the drawing axes (x red, y blue, z green), and back to the model's. */
+export const toAxes = (p: THREE.Vector3) => { const d = p.clone().sub(GROUND.origin); return new THREE.Vector3(d.dot(AXIS.x), d.dot(AXIS.y), d.dot(AXIS.z)); };
+export const fromAxes = (q: THREE.Vector3) => GROUND.origin.clone().addScaledVector(AXIS.x, q.x).addScaledVector(AXIS.y, q.y).addScaledVector(AXIS.z, q.z);
 export const arr = (p: THREE.Vector3): [number, number, number] => [+p.x.toFixed(5), +p.y.toFixed(5), +p.z.toFixed(5)];
 
 /** The plane a shape is drawn on, SketchUp-style: the face under the first point, also when that point

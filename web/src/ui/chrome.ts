@@ -47,6 +47,7 @@ export function renderMenubar(app: App, el: HTMLElement) {
     ]],
     ['View', () => [
       ...(['grid', 'axes', 'edges', 'figure', 'shadows', 'sectionPlanes'] as const).map(k => ({ label: `${app.display[k] ? '✓ ' : '   '}${({ grid: 'Grid', axes: 'Axes', edges: 'Edges', figure: 'Scale figure', shadows: 'Shadows', sectionPlanes: 'Section planes' })[k]}`, act: () => app.toggleDisplay(k) })),
+      { label: '   Reset axes', act: () => app.setAxes(null), disabled: !app.axesMoved },
       'sep', ...FACE_STYLES.map((s, i) => ({ label: `${app.faceStyle === s.id ? '✓ ' : '   '}Face style: ${s.label}`, key: `⌥${i + 1}`, act: () => app.setFaceStyle(s.id) })),
       { label: `${app.backEdges ? '✓ ' : '   '}Back edges`, act: () => app.setBackEdges(!app.backEdges) },
       { label: `${app.hiddenGeometry ? '✓ ' : '   '}Hidden geometry`, act: () => app.setHiddenGeometry(!app.hiddenGeometry) },
@@ -131,6 +132,7 @@ export function showContextMenu(app: App, x: number, y: number) {
     { label: 'Select all', key: `${KEY}A`, act: () => app.selectAll() },
     { label: 'Unhide all', key: `⇧${KEY}E`, act: () => app.unhideAll(), disabled: !app.hiddenIds.length }, 'sep',
     { label: 'Zoom Extents', key: '⇧Z', act: () => app.zoomExtents() },
+    ...(app.axesMoved ? [{ label: 'Reset axes', act: () => app.setAxes(null) }] : []),
     ...(app.enteredGroup ? [{ label: 'Close group', key: 'Esc', act: () => app.exitGroup() }] : []),
   ];
   const el = document.createElement('div'); el.className = 'dropdown context-menu';

@@ -1,7 +1,7 @@
 // Scale with handles, Follow Me, Flip (mirror) and Place Component.
 import * as THREE from 'three';
 import type { Tool, ToolContext, Snap } from './base';
-import { partsRefused, parseNumbers, parseSizes, onSegment, drawSnap, arr, INK, MAGENTA, SELECT, AXIS } from './base';
+import { partsRefused, parseNumbers, parseSizes, onSegment, drawSnap, arr, INK, MAGENTA, SELECT, AXIS, AXIS_COLOR, GROUND } from './base';
 import { findEntity, fmt, lengthUnit, type Vec3, type Op, type Entity } from '../model';
 import { text3dDialog, type Text3dSpec } from '../ui/dialog';
 import { stickyOps } from './edit';
@@ -243,10 +243,10 @@ export class Text3dTool implements Tool {
     const s = ctx.snap(ev, { faces: true, ignoreIf: id => !ctx.inDocument(id) });
     // the face under the cursor, when the point lies on it (never the letters being previewed)
     const pk = ctx.pickTarget(ev, { facesOnly: true, anywhere: true });
-    let n = new THREE.Vector3(0, 1, 0);
+    let n = GROUND.normal.clone();
     if (pk) { const fn = pk.back ? pk.normal.clone().negate() : pk.normal.clone(); if (Math.abs(fn.dot(s.point.clone().sub(pk.point))) < 1e-3) n = fn.normalize(); }
     const { text, height, depth, font, bold, align } = this.spec;
-    return { snap: s, ops: [{ op: 'text3d', text, position: arr(s.point), normal: arr(n), height: +height.toFixed(5), ...(depth > 0 ? { depth: +depth.toFixed(5) } : {}), font, bold, align, layer: ctx.options.layer }] };
+    return { snap: s, ops: [{ op: 'text3d', text, position: arr(s.point), normal: arr(n), height: +height.toFixed(5), ...(depth > 0 ? { depth: +depth.toFixed(5) } : {}), font, bold, align, layer: ctx.options.layer, ...(n.dot(GROUND.normal) > 0.999 ? { u: arr(AXIS.x) } : {}) }] }; // (on the ground it reads along the red axis)
   }
   onMove(ev: PointerEvent, ctx: ToolContext) {
     if (!this.ready) return; const { ops, snap } = this.op(ev, ctx); ctx.scene.clearOverlay(); drawSnap(ctx, snap); ctx.preview(ops);
@@ -256,6 +256,47 @@ export class Text3dTool implements Tool {
     const r = await ctx.ops(ops, '3D Text'); ctx.setTool('select'); if (r[0]?.created?.length) ctx.select(r[0].created);
   }
   onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape') { ctx.setTool('select'); return true; } return false; }
+}
+/** Axes: put the drawing axes somewhere else, as SketchUp's Axes tool. Click the new origin, a point along the
+ *  red axis, then a point on the side the green axis goes; blue stands square on both. Enter after the origin
+ *  keeps the directions. Inference, axis locks, the grid, typed positions and the way shapes are squared up follow. */
+export class AxesTool implements Tool {
+  id = 'axes'; label = 'Axes'; hint = 'Click where the origin of the axes goes. (View → Reset axes puts them back.)'; cursor = 'crosshair';
+  private o: THREE.Vector3 | null = null; private x: THREE.Vector3 | null = null;
+  busy() { return !!this.o; }
+  private reset(ctx: ToolContext) { this.o = this.x = null; ctx.scene.clearOverlay(); ctx.setHint(this.hint); }
+  activate(ctx: ToolContext) { this.reset(ctx); ctx.setVCB('', 'Measurements'); }
+  deactivate(ctx: ToolContext) { this.reset(ctx); }
+  /** The green and blue directions for the cursor at `p`: green is its side of the red axis, blue square on both. */
+  private rest(p: THREE.Vector3) {
+    const g = p.clone().sub(this.o!); g.addScaledVector(this.x!, -g.dot(this.x!)); const len = g.length(); if (len < 1e-4) return null;
+    g.normalize(); return { g, y: g.clone().cross(this.x!).normalize(), len };
+  }
+  onMove(ev: PointerEvent, ctx: ToolContext) {
+    const s = ctx.snap(ev, { faces: true, from: this.o ?? undefined }); ctx.scene.clearOverlay(); drawSnap(ctx, s);
+    if (!this.o) return;
+    if (!this.x) { ctx.scene.addLine([this.o, s.point], AXIS_COLOR.x, false, 2); return; }
+    const r = this.rest(s.point); const L = Math.max(r?.len ?? 0, 1);
+    ctx.scene.addLine([this.o, this.o.clone().addScaledVector(this.x, L)], AXIS_COLOR.x, false, 2);
+    if (r) { ctx.scene.addLine([this.o, this.o.clone().addScaledVector(r.g, r.len)], AXIS_COLOR.z, false, 2); ctx.scene.addLine([this.o, this.o.clone().addScaledVector(r.y, L)], AXIS_COLOR.y, false, 2); }
+  }
+  private async done(ctx: ToolContext, o: THREE.Vector3, x: THREE.Vector3, y: THREE.Vector3) {
+    this.reset(ctx); await ctx.setAxes(o, x, y); ctx.setTool('select');
+    ctx.toast('The axes are moved: drawing, inference and typed positions follow them. View → Reset axes puts them back.');
+  }
+  async onDown(ev: PointerEvent, ctx: ToolContext) {
+    if (ev.button !== 0) return; const s = ctx.snap(ev, { faces: true, from: this.o ?? undefined });
+    if (!this.o) { this.o = s.point.clone(); ctx.setHint('Click a point along the red axis (Enter keeps the directions and only moves the origin).'); return; }
+    if (!this.x) { const d = s.point.clone().sub(this.o); if (d.length() < 1e-4) return; this.x = d.normalize(); ctx.setHint('Click a point on the side the green axis goes.'); return; }
+    const r = this.rest(s.point); if (!r) { ctx.toast('Click a point off the red axis: it sets which way the green axis goes.'); return; }
+    await this.done(ctx, this.o, this.x, r.y);
+  }
+  onKey(ev: KeyboardEvent, ctx: ToolContext) {
+    if (ev.type !== 'keydown') return false;
+    if (ev.key === 'Escape' && this.o) { this.reset(ctx); return true; }
+    if (ev.key === 'Enter' && this.o && !this.x) { void this.done(ctx, this.o, AXIS.x.clone(), AXIS.y.clone()); return true; }
+    return false;
+  }
 }
 export const fmtFactor = (f: number) => `×${fmt(f, 2)}`;
 void INK;

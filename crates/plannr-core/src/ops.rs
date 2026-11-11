@@ -372,8 +372,10 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
         }
         Op::AddDimension { a, b, offset, style, layer } => {
             let layer = resolve_layer(doc, layer.as_deref())?;
-            if let Some(s) = style { if s != "radius" && s != "diameter" { return err(format!("unknown dimension style `{s}` (radius or diameter)")); } }
+            if let Some(s) = style { if s != "radius" && s != "diameter" && s != "angle" { return err(format!("unknown dimension style `{s}` (radius, diameter or angle)")); } }
             if dist(*a, *b) < 1e-9 { return err("a dimension needs two different points"); }
+            // an angle: `a` is the corner, `b` lies on the first leg, `offset` leads from the corner along the second
+            if style.as_deref() == Some("angle") && len(cross(sub(*b, *a), *offset)) < 1e-9 * dist(*a, *b).max(1.0) { return err("the two legs of an angle must point different ways (`b` on the first, `offset` from the corner along the second)"); }
             Ok(push_created(doc, Entity::Dimension(Dimension { id: new_id(), layer, a: *a, b: *b, offset: *offset, style: style.clone(), extra: Default::default() })))
         }
         Op::AddText { position, text, anchor, screen, layer } => {
@@ -1420,7 +1422,7 @@ fn bounds_of(doc: &Document, list: &[Entity], m: &Mat4, bb: &mut Option<(P3, P3)
             Entity::Group(g) => bounds_of(doc, &g.entities, &mat_mul(m, &g.transform), bb),
             Entity::Instance(i) => { if let Some(d) = doc.component(&i.definition) { let im = mat_mul(m, &i.transform); let ents = d.entities.clone(); bounds_of(doc, &ents, &im, bb); } }
             Entity::Guide(g) => grow_bb(bb, mat_apply(m, g.point)),
-            Entity::Dimension(d) => { grow_bb(bb, mat_apply(m, d.a)); grow_bb(bb, mat_apply(m, d.b)); }
+            Entity::Dimension(d) => { grow_bb(bb, mat_apply(m, d.a)); grow_bb(bb, mat_apply(m, d.b)); if d.style.as_deref() == Some("angle") { grow_bb(bb, mat_apply(m, add(d.a, d.offset))); } }
             Entity::Text(t) => grow_bb(bb, mat_apply(m, t.position)),
             Entity::Section(s) => grow_bb(bb, mat_apply(m, s.origin)),
             Entity::Custom(_) => {}

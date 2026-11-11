@@ -5,6 +5,7 @@ use plannr_core::model::{Document, Entity, Face};
 use plannr_core::{apply, Op, Registry};
 
 fn reg() -> Registry { Registry::new() }
+fn op(v: serde_json::Value) -> Op { serde_json::from_value(v).unwrap() }
 fn rect(doc: &mut Document, a: P3, b: P3, n: P3) -> String {
     apply(doc, &Op::DrawRectangle { corner: a, opposite: b, normal: n, u: None, layer: None, material: None, group: None }, &reg()).unwrap().created[0].clone()
 }
@@ -93,4 +94,23 @@ fn radius_dimensions_and_screen_text() {
     let scene = plannr_core::compile(&doc, &reg(), &Default::default());
     assert_eq!(scene.texts.iter().filter(|t| t.screen.is_some()).count(), 1);
     assert_eq!(scene.dimensions.iter().filter(|d| d.style.as_deref() == Some("radius")).count(), 1);
+}
+
+#[test]
+fn an_angular_dimension_reads_the_angle_between_its_legs() {
+    let mut doc = Document::default();
+    let r = apply(&mut doc, &op(serde_json::json!({ "op": "add_dimension", "a": [1, 0, 1], "b": [3, 0, 1], "offset": [2, 0, 2], "style": "angle" })), &reg()).unwrap();
+    let s = plannr_core::compile::compile(&doc, &reg(), &Default::default());
+    assert_eq!(s.dimensions.len(), 1);
+    assert!((s.dimensions[0].value - 45.0).abs() < 1e-9, "{}", s.dimensions[0].value);
+    assert_eq!(s.dimensions[0].style.as_deref(), Some("angle"));
+    // turning it keeps the angle; the corner and both legs move together
+    apply(&mut doc, &op(serde_json::json!({ "op": "rotate", "ids": [r.created[0]], "origin": [0, 0, 0], "axis": [0, 1, 0], "angle": 30 })), &reg()).unwrap();
+    apply(&mut doc, &op(serde_json::json!({ "op": "scale", "ids": [r.created[0]], "origin": [0, 0, 0], "factors": [2, 2, 2] })), &reg()).unwrap();
+    let s = plannr_core::compile::compile(&doc, &reg(), &Default::default());
+    assert!((s.dimensions[0].value - 45.0).abs() < 1e-9);
+    assert!((dist(s.dimensions[0].a, s.dimensions[0].b) - 4.0).abs() < 1e-9);
+    // legs along one line make no angle
+    assert!(apply(&mut doc, &op(serde_json::json!({ "op": "add_dimension", "a": [0, 0, 0], "b": [1, 0, 0], "offset": [2, 0, 0], "style": "angle" })), &reg()).is_err());
+    assert!(apply(&mut doc, &op(serde_json::json!({ "op": "add_dimension", "a": [0, 0, 0], "b": [1, 0, 0], "offset": [0, 0, 1], "style": "slope" })), &reg()).is_err());
 }

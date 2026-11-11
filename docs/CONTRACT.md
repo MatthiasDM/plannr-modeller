@@ -18,6 +18,7 @@ z green. All points are `[x, y, z]`. Ids are strings (UUID v4). JSON is camelCas
 {
   "version": 12,                       // increments on every committed change
   "units": "m",                // "m" | "cm" | "mm": how lengths are shown and typed in the app (`precision`: decimals); coordinates are always metres
+  "axes": { "origin": [x,y,z], "x": [x,y,z], "y": [x,y,z] }, // optional: where the app's drawing axes were moved to (Axes tool): origin, red axis, blue axis. Only the app's drawing aids follow it; coordinates in the document and in ops stay the model's
   "layers":    [{ "id": "uuid", "name": "Layer0", "visible": true, "color": "#7a8aa0" }],
   "materials": [{ "id": "uuid", "name": "Brick", "color": "#B0623F", "opacity": 1.0 }],
   "entities":  [ /* Entity, see below */ ],
@@ -37,7 +38,7 @@ The default document has one layer `Layer0` and one material `Default` (`#F4F2EE
 | `edge` | `a`, `b` | a line segment; faces also own their outline implicitly, edges are the "loose" lines |
 | `group` | `name`, `transform: [16 numbers, column-major]`, `entities: [Entity…]` | children in local coordinates |
 | `guide` | `point`, `direction?` | guide point, or an infinite guide line when `direction` is set |
-| `dimension` | `a`, `b`, `offset: [x,y,z]`, `style?` | linear dimension between two points, drawn offset from them; `style: "radius"` (`a` the centre, `b` on the curve) or `"diameter"` (`a`, `b` across the circle), with `offset` leading from `b` to the label |
+| `dimension` | `a`, `b`, `offset: [x,y,z]`, `style?` | linear dimension between two points, drawn offset from them; `style: "radius"` (`a` the centre, `b` on the curve) or `"diameter"` (`a`, `b` across the circle), with `offset` leading from `b` to the label; `"angle"`: `a` is the corner, `b` a point on the first leg, `offset` the vector from the corner to a point on the second (the arc is drawn as far from the corner as `b`) |
 | `text` | `position`, `text`, `anchor?`, `screen?` | a label; with `anchor` a leader is drawn to that point; with `screen: [fx, fy]` it is screen text, fixed at that fraction of the view |
 | `section` | `origin`, `normal`, `active: bool` | section plane; when active, geometry on the +normal side is cut away (several active planes combine) |
 | `custom` | `type: "<plugin>.<name>"`, `data: {}` | plugin entity; the core stores it and asks the plugin registry to expand it into core entities at compile time |
@@ -92,7 +93,7 @@ coordinates); without it they draw at the top level.
 | `add_layer` / `update_layer` / `remove_layer` | `name`, `color?` / `id`, `name?`, `visible?`, `color?` / `id` | entities on a removed layer go to the first layer. |
 | `add_material` / `update_material` | `name`, `color`, `opacity?` / `id`, … | |
 | `add_guide` | `point`, `direction?` | |
-| `add_dimension` | `a`, `b`, `offset`, `style?` | linear by default. `style: "radius"`: `a` is the centre, `b` a point on the curve; `"diameter"`: `a` and `b` are opposite points of the circle; for both `offset` leads from `b` to the label |
+| `add_dimension` | `a`, `b`, `offset`, `style?` | linear by default. `style: "radius"`: `a` is the centre, `b` a point on the curve; `"diameter"`: `a` and `b` are opposite points of the circle; for both `offset` leads from `b` to the label. `"angle"`: `a` is the corner, `b` a point on the first leg, `offset` the vector from the corner to a point on the second leg; the compiled `value` is the angle between the legs in degrees |
 | `add_text` | `position?`, `text`, `anchor?`, `screen?` | `screen: [fx, fy]` (fractions of the view, from the top left) makes screen text: it stays there however the camera moves and has no leader |
 | `add_section` / `update_section` | `origin`, `normal`, `active?` / `id`, `origin?`, `normal?`, `active?` | every active section cuts; several combine, keeping only what all of them keep. |
 | `soften` | `ids?`, `angle?` (degrees, default 20), `edges?: [[p, p]…]`, `group?` | Soften Edges. With `ids`: the faces, and every face inside the groups among them, get `smooth: angle`; `angle: 0` takes it off (hard edges again). With `edges` (pairs of points, in `group` or the top level): the two faces that share each edge get a `smooth` just above the angle they meet at, or lose it with `angle: 0`. `modified` lists the faces, or the groups given. An edge between two faces of one plane is never softened |

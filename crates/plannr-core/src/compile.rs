@@ -354,7 +354,16 @@ impl<'a> Builder<'a> {
                 for c in &g.entities { self.entity(c, &gm); }
             }
             Entity::Guide(g) => { let p = mat_apply(m, g.point); self.grow(p); self.out.guides.push(CompiledGuide { id: g.id.clone(), point: p, direction: g.direction.map(|d| normalize(mat_apply_dir(m, d))) }); }
-            Entity::Dimension(d) => { let a = mat_apply(m, d.a); let b = mat_apply(m, d.b); self.grow(a); self.grow(b); self.out.dimensions.push(CompiledDimension { id: d.id.clone(), a, b, offset: mat_apply_dir(m, d.offset), value: dist(a, b), style: d.style.clone() }); }
+            Entity::Dimension(d) => {
+                let (a, b, offset) = (mat_apply(m, d.a), mat_apply(m, d.b), mat_apply_dir(m, d.offset));
+                self.grow(a); self.grow(b);
+                // an angle (the corner at `a`, legs to `b` and along `offset`) is measured in degrees
+                let value = if d.style.as_deref() == Some("angle") {
+                    self.grow(add(a, offset));
+                    dot(normalize(sub(b, a)), normalize(offset)).clamp(-1.0, 1.0).acos().to_degrees()
+                } else { dist(a, b) };
+                self.out.dimensions.push(CompiledDimension { id: d.id.clone(), a, b, offset, value, style: d.style.clone() });
+            }
             Entity::Text(t) => { let p = mat_apply(m, t.position); if t.screen.is_none() { self.grow(p); } self.out.texts.push(CompiledText { id: t.id.clone(), position: p, text: t.text.clone(), anchor: t.anchor.map(|a| mat_apply(m, a)), screen: t.screen }); }
             Entity::Section(s) => self.out.sections.push(CompiledSection { id: s.id.clone(), origin: mat_apply(m, s.origin), normal: normalize(mat_apply_dir(m, s.normal)), active: s.active }),
             Entity::Custom(_) => {} // expanded by the registry before compile

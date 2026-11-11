@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Tool, ToolContext, Plane, Snap } from './base';
-import { parseNumbers, parsePoint, lineColor, drawSnap, planeFromSnap, surfacePlane, GROUND, arr, INK, AXIS, DrawPlane } from './base';
+import { parseNumbers, parsePoint, lineColor, drawSnap, planeFromSnap, surfacePlane, fromAxes, GROUND, arr, INK, AXIS, DrawPlane } from './base';
 import { fmtM } from '../model';
 
 /** In-plane basis (u, w) for a plane normal, u following world x where possible. */
@@ -42,7 +42,8 @@ export class LineTool implements Tool {
   private next = 'Click the end of the line, or type a length. [x; y; z] goes to a position, <x; y; z> steps from the last point (y is up). Esc ends the chain.';
   onVCB(v: string, ctx: ToolContext) {
     const c = parsePoint(v);
-    if (c) { // a typed position, or a step from the last point
+    if (c) { // a typed position, or a step from the last point (both along the drawing axes)
+      if (c.relative) c.p.copy(fromAxes(c.p).sub(GROUND.origin)); else c.p.copy(fromAxes(c.p));
       if (this.start) { this.place(ctx, c.relative ? this.start.clone().add(c.p) : c.p); return; }
       if (c.relative) return;
       this.start = c.p; this.first = c.p.clone(); this.plane = { origin: c.p.clone(), normal: GROUND.normal.clone() }; ctx.setHint(this.next); return;

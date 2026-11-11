@@ -9,7 +9,7 @@ export interface FaceEntity extends Base { kind: 'face'; outer: Vec3[]; holes: V
 export interface EdgeEntity extends Base { kind: 'edge'; a: Vec3; b: Vec3 }
 export interface GroupEntity extends Base { kind: 'group'; name: string; transform: number[]; entities: Entity[] }
 export interface GuideEntity extends Base { kind: 'guide'; point: Vec3; direction?: Vec3 | null }
-export interface DimensionEntity extends Base { kind: 'dimension'; a: Vec3; b: Vec3; offset: Vec3; style?: 'radius' | 'diameter' | null }
+export interface DimensionEntity extends Base { kind: 'dimension'; a: Vec3; b: Vec3; offset: Vec3; style?: 'radius' | 'diameter' | 'angle' | null }
 export interface TextEntity extends Base { kind: 'text'; position: Vec3; text: string; anchor?: Vec3 | null; screen?: [number, number] | null }
 export interface SectionEntity extends Base { kind: 'section'; origin: Vec3; normal: Vec3; active: boolean }
 export interface CustomEntity extends Base { kind: 'custom'; type: string; data: unknown }
@@ -55,7 +55,7 @@ export type Op =
   | { op: 'add_material'; name: string; color: string; opacity?: number }
   | { op: 'update_material'; id: string; name?: string; color?: string; opacity?: number }
   | { op: 'add_guide'; point: Vec3; direction?: Vec3 }
-  | { op: 'add_dimension'; a: Vec3; b: Vec3; offset: Vec3; style?: 'radius' | 'diameter' }
+  | { op: 'add_dimension'; a: Vec3; b: Vec3; offset: Vec3; style?: 'radius' | 'diameter' | 'angle' }
   | { op: 'add_text'; position?: Vec3; text: string; anchor?: Vec3; screen?: [number, number] }
   | { op: 'add_section'; origin: Vec3; normal: Vec3; active?: boolean }
   | { op: 'update_section'; id: string; origin?: Vec3; normal?: Vec3; active?: boolean }

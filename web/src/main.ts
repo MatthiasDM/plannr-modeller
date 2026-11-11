@@ -9,7 +9,7 @@ import { BUILTIN_TOOLS, EMBED_TOOLS, placeComponentTool, pasteTool } from './too
 import { zoomWindow } from './tools/arc';
 import { connectedTo } from './tools/edit';
 import type { Tool, ToolContext, Snap, SnapKind, SnapOptions, AxisLock, Plane } from './tools/base';
-import { AXIS, AXIS_COLOR, GROUND, MAGENTA, snapColor, snapLabel } from './tools/base';
+import { AXIS, AXIS_COLOR, GROUND, MAGENTA, snapColor, snapLabel, setDrawingAxes, toAxes, fromAxes } from './tools/base';
 import { Tray } from './ui/tray';
 import { renderMenubar, renderToolbar, renderHud, renderToolOptions, renderWelcome, layoutToolbar, showContextMenu } from './ui/chrome';
 import { registerPlugin, getPlugins, partsFor, onPlugin, type PluginHost, type CameraController } from './plugins';
@@ -570,6 +570,22 @@ export class App {
     if (!this.projectId || !UNITS[unit]) return;
     await api.putDocument(this.projectId, { ...this.doc, units: unit, precision: digits ?? UNITS[unit].digits }); await this.refresh('Units');
   }
+  /** The drawing axes were moved (the Axes tool). */
+  get axesMoved() { return !!this.doc.axes; }
+  /** Move the drawing axes (origin, red axis, blue axis), or put them back with null; stored with the document. */
+  async setAxes(origin: THREE.Vector3 | null, x?: THREE.Vector3, y?: THREE.Vector3) {
+    if (!this.projectId) return; const doc: Document = { ...this.doc };
+    const r = (v: THREE.Vector3) => [+v.x.toFixed(6), +v.y.toFixed(6), +v.z.toFixed(6)];
+    if (origin && x && y) doc.axes = { origin: r(origin), x: r(x.clone().normalize()), y: r(y.clone().normalize()) }; else delete doc.axes;
+    await api.putDocument(this.projectId, doc); await this.refresh(origin ? 'Axes' : 'Reset axes');
+  }
+  private axesKey = '';
+  private syncAxes() {
+    const a = this.doc.axes as { origin?: Vec3; x?: Vec3; y?: Vec3 } | undefined; const ok = !!a && [a.origin, a.x, a.y].every(v => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number'));
+    const key = ok ? JSON.stringify(a) : ''; if (key === this.axesKey) return; this.axesKey = key;
+    if (ok) setDrawingAxes(V(a!.origin!), V(a!.x!), V(a!.y!)); else setDrawingAxes(new THREE.Vector3(), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0));
+    this.scene.setAxes(GROUND.origin, AXIS.x, AXIS.y, AXIS.z);
+  }
   private syncUnits() {
     const was = `${lengthUnit.name}/${lengthUnit.digits}`; setLengthUnit(this.doc.units, this.doc.precision as number | undefined);
     if (was !== `${lengthUnit.name}/${lengthUnit.digits}`) this.scene.relabel();
@@ -702,7 +718,7 @@ export class App {
       select: (ids, mode) => app.select(ids, mode), selection: () => app.selection, resolve: (id) => app.resolve(id),
       setHint: (t) => { app.els.statusbar.querySelector('.hint')!.textContent = t; },
       setVCB: (v, label) => { const vcb = app.els.statusbar.querySelector<HTMLInputElement>('.vcb input')!; const lab = app.els.statusbar.querySelector('.vcb label')!; if (label) lab.textContent = label; if (document.activeElement !== vcb) vcb.value = shownLength(v, lab.textContent ?? ''); },
-      snap: (ev, opts) => app.snap(ev, opts), setTool: (id) => app.setTool(id),
+      snap: (ev, opts) => app.snap(ev, opts), setTool: (id) => app.setTool(id), setAxes: (o, x, y) => app.setAxes(o, x, y),
       options: this.options, toast: (t) => app.toast(t), prompt: (l, v) => app.promptText(l, v), confirm: (t, ok, danger) => app.confirm(t, ok, danger),
       get lock() { return app.lock; }, set lock(v: AxisLock) { app.lock = v; },
       faceNormal: (ev, at) => app.faceNormal(ev, at),
@@ -866,13 +882,15 @@ export class App {
     let p = sc.planePoint(ev, plane.origin, plane.normal) ?? from?.clone() ?? new THREE.Vector3();
     let kind: SnapKind = 'plane';
     if (this.options.gridSnap) {
-      const g = step(); p.set(Math.round(p.x / g) * g, Math.round(p.y / g) * g, Math.round(p.z / g) * g);
+      // (counted along the drawing axes, from their origin: the grid lies there)
+      const g = step(); const q = toAxes(p); q.set(Math.round(q.x / g) * g, Math.round(q.y / g) * g, Math.round(q.z / g) * g);
       if (this.display.grid) {
-        const G = 1; const gx = Math.round(p.x / G) * G, gz = Math.round(p.z / G) * G; let onGrid = false;
-        if (px(new THREE.Vector3(gx, p.y, p.z)) < 5) { p.x = gx; onGrid = true; }
-        if (px(new THREE.Vector3(p.x, p.y, gz)) < 5) { p.z = gz; onGrid = true; }
+        const G = 1; const gx = Math.round(q.x / G) * G, gz = Math.round(q.z / G) * G; let onGrid = false;
+        if (px(fromAxes(new THREE.Vector3(gx, q.y, q.z))) < 5) { q.x = gx; onGrid = true; }
+        if (px(fromAxes(new THREE.Vector3(q.x, q.y, gz))) < 5) { q.z = gz; onGrid = true; }
         if (onGrid) kind = 'grid';
       }
+      p.copy(fromAxes(q));
     }
     return { point: p, kind };
   }
@@ -1101,7 +1119,7 @@ export class App {
   }
 
   // ---- ui -----------------------------------------------------------------------------------------------
-  refreshUI() { this.syncUnits(); renderMenubar(this, this.els.menubar); renderToolbar(this, this.els.toolbar); renderHud(this, this.els['view-hud']); renderToolOptions(this, this.els['tool-options']); this.tray.render(); if (this.embed && this.embedPlugins.size) this.tray.renderFloating(this.els['embed-panel'], this.embedPlugins); }
+  refreshUI() { this.syncUnits(); this.syncAxes(); renderMenubar(this, this.els.menubar); renderToolbar(this, this.els.toolbar); renderHud(this, this.els['view-hud']); renderToolOptions(this, this.els['tool-options']); this.tray.render(); if (this.embed && this.embedPlugins.size) this.tray.renderFloating(this.els['embed-panel'], this.embedPlugins); }
   private toastTimer: any = null;
   toast(text: string, ms = 2600) { const t = this.els.toast; t.textContent = text; t.classList.add('show'); clearTimeout(this.toastTimer); this.toastTimer = setTimeout(() => t.classList.remove('show'), ms); }
   promptText(label: string, value = ''): Promise<string | null> { return promptText(label, value); }

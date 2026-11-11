@@ -1,8 +1,22 @@
 import * as THREE from 'three';
 import type { CompiledScene } from './api';
-import { fmtM, type Vec3 } from './model';
+import { fmtM, fmtDeg, type Vec3 } from './model';
 
 export const V = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
+/** The arc of an angle: points at distance `r` from the corner `c`, from the direction `u` round to `w` (unit vectors). */
+export function angleArc(c: THREE.Vector3, u: THREE.Vector3, w: THREE.Vector3, r: number): THREE.Vector3[] {
+  const n = u.clone().cross(w); if (n.lengthSq() < 1e-12) return [c.clone().addScaledVector(u, r)];
+  n.normalize(); const ang = u.angleTo(w); const steps = Math.max(2, Math.ceil(ang / (Math.PI / 36)));
+  return Array.from({ length: steps + 1 }, (_, i) => c.clone().add(u.clone().applyAxisAngle(n, ang * i / steps).multiplyScalar(r)));
+}
+type Dim = { a: Vec3; b: Vec3; offset: Vec3; value: number; style?: string | null };
+/** Where a dimension's label sits, and what it says. */
+function dimLabel(d: Dim): { pos: THREE.Vector3; text: string } {
+  const a = V(d.a), b = V(d.b), o = V(d.offset);
+  if (d.style === 'angle') { const arc = angleArc(a, b.clone().sub(a).normalize(), o.clone().normalize(), a.distanceTo(b)); return { pos: arc[arc.length >> 1], text: fmtDeg(d.value) }; }
+  if (d.style) return { pos: b.add(o), text: `${d.style === 'radius' ? 'R ' : '⌀ '}${fmtM(d.value)}` };
+  return { pos: a.add(o).lerp(b.add(o), 0.5), text: fmtM(d.value) };
+}
 export const A = (p: THREE.Vector3): Vec3 => [p.x, p.y, p.z];
 
 /** How faces are drawn, as in SketchUp's Face Style. */
@@ -170,6 +184,12 @@ export class Viewport {
     if (this.backLines) (this.backLines.material as THREE.LineDashedMaterial).color.set(this.edgeColor);
   }
 
+  /** Put the drawn axes and the grid where the drawing axes are. */
+  setAxes(origin: THREE.Vector3, x: THREE.Vector3, y: THREE.Vector3, z: THREE.Vector3) {
+    const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+    this.axes.position.copy(origin); this.axes.quaternion.copy(q);
+    this.grid.quaternion.copy(q); this.grid.position.copy(origin).addScaledVector(y, -0.006);
+  }
   private makeAxes(): THREE.Group {
     const g = new THREE.Group(); const L = 800;
     const mk = (dir: THREE.Vector3, color: number) => {
@@ -391,9 +411,14 @@ export class Viewport {
       const a = V(d.a), b = V(d.b), o = V(d.offset); const a2 = a.clone().add(o), b2 = b.clone().add(o);
       const mat = new THREE.LineBasicMaterial({ color: COLOR.ink });
       // a radius or diameter: the line across (or out from the centre), then the leader from the curve to the label
-      const geo = new THREE.BufferGeometry().setFromPoints(d.style ? [a, b, b, b2] : [a, a2, b, b2, a2, b2]);
+      let pts = d.style ? [a, b, b, b2] : [a, a2, b, b2, a2, b2];
+      if (d.style === 'angle') { // both legs out to the arc, and the arc between them
+        const u = b.clone().sub(a).normalize(), w = o.clone().normalize(), r = a.distanceTo(b); const arc = angleArc(a, u, w, r);
+        pts = [a, b, a, a.clone().addScaledVector(w, r)]; for (let i = 0; i + 1 < arc.length; i++) pts.push(arc[i], arc[i + 1]);
+      }
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
       const ls = new THREE.LineSegments(geo, mat); this.modelGroup.add(ls); this.guideObjects.push(ls); this.guideIds.set(ls, d.id);
-      this.textObjects.push({ id: d.id, pos: d.style ? b2 : a2.clone().lerp(b2, 0.5) });
+      this.textObjects.push({ id: d.id, pos: dimLabel(d).pos });
     }
     for (const t of c.texts) {
       if (t.screen) continue; // screen text: a label only, at a fixed place of the view
@@ -433,7 +458,7 @@ export class Viewport {
   relabel() { this.renderStaticLabels(); }
   private renderStaticLabels() {
     for (const el of Array.from(this.labels.querySelectorAll('.vlabel.static'))) el.remove();
-    for (const d of this.compiled?.dimensions ?? []) this.addLabel(d.style ? V(d.b).add(V(d.offset)) : V(d.a).add(V(d.offset)).lerp(V(d.b).add(V(d.offset)), 0.5), `${d.style === 'radius' ? 'R ' : d.style === 'diameter' ? '⌀ ' : ''}${fmtM(d.value)}`, 'static dim', d.id);
+    for (const d of this.compiled?.dimensions ?? []) { const l = dimLabel(d); this.addLabel(l.pos, l.text, 'static dim', d.id); }
     for (const t of this.compiled?.texts ?? []) { const el = this.addLabel(V(t.position), t.text, t.screen ? 'static text screen' : 'static text', t.id); if (t.screen) (el as any).__screen = t.screen; }
   }
 
