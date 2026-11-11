@@ -142,7 +142,9 @@ export class Viewport {
     this.clips.length = 0;
     for (const c of cuts ?? []) { const n = V(c.normal).normalize(); this.clips.push(new THREE.Plane(n.clone().negate(), n.dot(V(c.origin)))); }
   }
-  edgesVisible = true; edgeColor = COLOR.ink; private sun: THREE.DirectionalLight;
+  edgesVisible = true; edgeColor = COLOR.ink;
+  /** The colour of lines no face draws: loose edges, dimensions, the tools' own lines. Lighter in the dark theme. */
+  ink = COLOR.ink; private sun: THREE.DirectionalLight;
   private clock = new THREE.Clock();
 
   constructor(container: HTMLElement, labels: HTMLElement) {
@@ -178,11 +180,41 @@ export class Viewport {
     const css = getComputedStyle(document.documentElement); const dark = css.getPropertyValue('--dark').trim() === '1';
     (this.ground.material as THREE.MeshLambertMaterial).color.set(css.getPropertyValue('--ground').trim() || '#e9e5da');
     const g = this.grid.material as THREE.LineBasicMaterial; g.color.set(css.getPropertyValue('--grid-3d').trim() || (dark ? '#27405f' : '#c3d2e6')); g.opacity = dark ? 0.75 : 0.8;
-    // dark edges in both themes: they read on the lit faces and still show against the dark sky
+    // the borders of faces are dark in both themes: they read on the lit faces. A line no face draws takes the
+    // theme's ink, or it would vanish against the dark ground.
     this.edgeColor = dark ? 0x101216 : COLOR.ink;
-    if (this.edgeLines) (this.edgeLines.material as THREE.LineBasicMaterial).color.set(this.edgeColor);
+    this.ink = new THREE.Color(css.getPropertyValue('--ink-3d').trim() || (dark ? '#a6b6d0' : '#1b1b1b')).getHex();
+    this.paintEdges();
     if (this.backLines) (this.backLines.material as THREE.LineDashedMaterial).color.set(this.edgeColor);
+    for (const o of this.guideObjects) if (o.userData.ink) ((o as THREE.Line).material as THREE.LineBasicMaterial).color.set(this.ink);
   }
+  /** A colour for both ends of every edge segment: the edge colour for the borders of faces and for lines lying on
+   *  a face, the theme's ink for the other lines, and for everything in wireframe, where no face is behind them. */
+  private edgeColors(c: Drawn): THREE.Float32BufferAttribute {
+    const ids = c.edges.ids, P = c.edges.positions as ArrayLike<number>, n = ids.length, light = new Uint8Array(n);
+    if (this.ink !== this.edgeColor && this.faceStyle === 'wireframe') light.fill(1);
+    else if (this.ink !== this.edgeColor) {
+      const faces = new Set<string>(); for (const g of c.groups) for (const id of g.ids) faces.add(id);
+      const q = (v: number) => Math.round(v * 1e4), h = (o: number) => Math.imul(q(P[o]), 73856093) ^ Math.imul(q(P[o + 1]), 19349663) ^ Math.imul(q(P[o + 2]), 83492791);
+      const key = (i: number) => (h(i * 6) + h(i * 6 + 3)) | 0;
+      const loose = new Map<number, number[]>(); let count = 0;
+      for (let i = 0; i < n; i++) if (!faces.has(ids[i])) { light[i] = 1; count++; const k = key(i), l = loose.get(k); if (l) l.push(i); else loose.set(k, [i]); }
+      if (count) {
+        // a loose line that runs along the border of a face (the line that split it) is drawn as that border
+        const near = (a: number, b: number) => Math.abs(P[a] - P[b]) < 1e-4 && Math.abs(P[a + 1] - P[b + 1]) < 1e-4 && Math.abs(P[a + 2] - P[b + 2]) < 1e-4;
+        for (let i = 0; i < n; i++) {
+          if (light[i]) continue;
+          for (const j of loose.get(key(i)) ?? []) if ((near(i * 6, j * 6) && near(i * 6 + 3, j * 6 + 3)) || (near(i * 6, j * 6 + 3) && near(i * 6 + 3, j * 6))) light[j] = 0;
+        }
+        // and so is one that lies on a face, as long as looking for the face stays cheap enough to do on every change
+        if (count * triangles(c) <= 2e6) for (let i = 0; i < n; i++) if (light[i] && onFace(c, (P[i * 6] + P[i * 6 + 3]) / 2, (P[i * 6 + 1] + P[i * 6 + 4]) / 2, (P[i * 6 + 2] + P[i * 6 + 5]) / 2)) light[i] = 0;
+      }
+    }
+    const col = new Float32Array(n * 6), edge = new THREE.Color(this.edgeColor), ink = new THREE.Color(this.ink);
+    for (let i = 0; i < n; i++) { const k = light[i] ? ink : edge; for (let o = i * 6; o < i * 6 + 6; o += 3) { col[o] = k.r; col[o + 1] = k.g; col[o + 2] = k.b; } }
+    return new THREE.Float32BufferAttribute(col, 3);
+  }
+  private paintEdges() { if (this.edgeLines && this.compiled) this.edgeLines.geometry.setAttribute('color', this.edgeColors(this.compiled)); }
 
   /** Put the drawn axes and the grid where the drawing axes are. */
   setAxes(origin: THREE.Vector3, x: THREE.Vector3, y: THREE.Vector3, z: THREE.Vector3) {
@@ -228,7 +260,7 @@ export class Viewport {
   }
   /** The face style of the whole model; `backEdges` adds dashed lines for edges behind faces. */
   faceStyle: FaceStyle = 'shaded'; backEdges = false; private backLines: THREE.LineSegments | null = null;
-  setFaceStyle(s: FaceStyle) { this.faceStyle = s; this.applyFaceStyles(); }
+  setFaceStyle(s: FaceStyle) { this.faceStyle = s; this.applyFaceStyles(); this.paintEdges(); }
   setBackEdges(on: boolean) { this.backEdges = on; this.applyFaceStyles(); }
   private applyFaceStyles() {
     for (const m of this.meshes) this.applyFaceStyle(m);
@@ -282,10 +314,10 @@ export class Viewport {
         const m = new THREE.Mesh(geo, mesh.material); m.castShadow = mesh.castShadow; m.receiveShadow = mesh.receiveShadow; m.renderOrder = mesh.renderOrder; this.previewGroup.add(m);
       }
       if (this.edgeLines && this.edgeLines.visible && this.edgeIds.some(gone)) {
-        const P = this.edgeLines.geometry.getAttribute('position').array; const keep: number[] = [];
-        this.edgeIds.forEach((id, i) => { if (!gone(id)) for (let k = i * 6; k < i * 6 + 6; k++) keep.push(P[k]); });
+        const P = this.edgeLines.geometry.getAttribute('position').array, C = this.edgeLines.geometry.getAttribute('color').array; const keep: number[] = [], cols: number[] = [];
+        this.edgeIds.forEach((id, i) => { if (!gone(id)) for (let k = i * 6; k < i * 6 + 6; k++) { keep.push(P[k]); cols.push(C[k]); } });
         this.edgeLines.visible = false; this.swapped.add(this.edgeLines); if (this.backLines?.visible) { this.backLines.visible = false; this.swapped.add(this.backLines); }
-        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(keep, 3));
+        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(keep, 3)); geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
         const l = new THREE.LineSegments(geo, this.edgeLines.material); l.renderOrder = 1; this.previewGroup.add(l);
       }
       this.highlight(this.lastSelection);
@@ -297,8 +329,8 @@ export class Viewport {
       this.applyFaceStyle(mesh); this.applyXray(mesh); this.previewGroup.add(mesh); this.previewOwn.push(mesh);
     }
     if (c.edges.positions.length && this.edgesVisible) {
-      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(c.edges.positions, 3));
-      const l = new THREE.LineSegments(geo, this.clip(new THREE.LineBasicMaterial({ color: this.edgeColor }))); l.renderOrder = 1; this.previewGroup.add(l); this.previewOwn.push(l);
+      const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(c.edges.positions, 3)); geo.setAttribute('color', this.edgeColors(c));
+      const l = new THREE.LineSegments(geo, this.clip(new THREE.LineBasicMaterial({ vertexColors: true }))); l.renderOrder = 1; this.previewGroup.add(l); this.previewOwn.push(l);
     }
   }
   private dropPreviewOwn() {
@@ -374,10 +406,10 @@ export class Viewport {
       this.applyFaceStyle(mesh); this.applyXray(mesh);
     }
     for (const m of old.values()) disposeObject(m); // groups that went: free their GPU buffers
-    // edges: one black segment list with ids
+    // edges: one segment list with ids, coloured end by end
     this.edgeIds = c.edges.ids;
-    const eg = new THREE.BufferGeometry(); eg.setAttribute('position', new THREE.Float32BufferAttribute(c.edges.positions, 3));
-    this.edgeLines = new THREE.LineSegments(eg, this.clip(new THREE.LineBasicMaterial({ color: this.edgeColor }))); this.edgeLines.renderOrder = 1; this.edgeLines.visible = this.edgesVisible;
+    const eg = new THREE.BufferGeometry(); eg.setAttribute('position', new THREE.Float32BufferAttribute(c.edges.positions, 3)); eg.setAttribute('color', this.edgeColors(c));
+    this.edgeLines = new THREE.LineSegments(eg, this.clip(new THREE.LineBasicMaterial({ vertexColors: true }))); this.edgeLines.renderOrder = 1; this.edgeLines.visible = this.edgesVisible;
     this.modelGroup.add(this.edgeLines);
     this.backLines = null; this.applyFaceStyles();
     // snapping data
@@ -409,7 +441,7 @@ export class Viewport {
     // dimensions
     for (const d of c.dimensions) {
       const a = V(d.a), b = V(d.b), o = V(d.offset); const a2 = a.clone().add(o), b2 = b.clone().add(o);
-      const mat = new THREE.LineBasicMaterial({ color: COLOR.ink });
+      const mat = new THREE.LineBasicMaterial({ color: this.ink });
       // a radius or diameter: the line across (or out from the centre), then the leader from the curve to the label
       let pts = d.style ? [a, b, b, b2] : [a, a2, b, b2, a2, b2];
       if (d.style === 'angle') { // both legs out to the arc, and the arc between them
@@ -417,13 +449,13 @@ export class Viewport {
         pts = [a, b, a, a.clone().addScaledVector(w, r)]; for (let i = 0; i + 1 < arc.length; i++) pts.push(arc[i], arc[i + 1]);
       }
       const geo = new THREE.BufferGeometry().setFromPoints(pts);
-      const ls = new THREE.LineSegments(geo, mat); this.modelGroup.add(ls); this.guideObjects.push(ls); this.guideIds.set(ls, d.id);
+      const ls = new THREE.LineSegments(geo, mat); ls.userData.ink = true; this.modelGroup.add(ls); this.guideObjects.push(ls); this.guideIds.set(ls, d.id);
       this.textObjects.push({ id: d.id, pos: dimLabel(d).pos });
     }
     for (const t of c.texts) {
       if (t.screen) continue; // screen text: a label only, at a fixed place of the view
       this.textObjects.push({ id: t.id, pos: V(t.position) });
-      if (t.anchor) { const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([V(t.anchor), V(t.position)]), new THREE.LineBasicMaterial({ color: COLOR.ink })); this.modelGroup.add(l); this.guideObjects.push(l); this.guideIds.set(l, t.id); }
+      if (t.anchor) { const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([V(t.anchor), V(t.position)]), new THREE.LineBasicMaterial({ color: this.ink })); l.userData.ink = true; this.modelGroup.add(l); this.guideObjects.push(l); this.guideIds.set(l, t.id); }
     }
     this.bounds = c.bounds && isFinite(c.bounds.min[0]) && c.bounds.max[0] >= c.bounds.min[0] ? c.bounds : undefined;
     for (const s of c.sections) {
@@ -730,9 +762,9 @@ export class Viewport {
     const flat = (geo: THREE.BufferGeometry, c: number, order: number) => { const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: c, depthTest: false, transparent: true })); m.position.copy(p); m.quaternion.copy(this.cam.camera.quaternion); m.renderOrder = order; this.snapGroup.add(m); };
     if (s.kind === 'plane' || s.kind === 'free') {
       // a small cross on the working plane: where the click lands when nothing else catches it
-      const r = px * 7; const pts = [p.clone().add(new THREE.Vector3(-r, 0, 0)), p.clone().add(new THREE.Vector3(r, 0, 0)), p.clone().add(new THREE.Vector3(0, 0, -r)), p.clone().add(new THREE.Vector3(0, 0, r))];
-      const l = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x3c4148, depthTest: false })); l.renderOrder = 7; this.snapGroup.add(l);
-      flat(new THREE.CircleGeometry(px * 2, 12), 0x3c4148, 8);
+      const r = px * 7; const cross = this.ink === COLOR.ink ? 0x3c4148 : this.ink; const pts = [p.clone().add(new THREE.Vector3(-r, 0, 0)), p.clone().add(new THREE.Vector3(r, 0, 0)), p.clone().add(new THREE.Vector3(0, 0, -r)), p.clone().add(new THREE.Vector3(0, 0, r))];
+      const l = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: cross, depthTest: false })); l.renderOrder = 7; this.snapGroup.add(l);
+      flat(new THREE.CircleGeometry(px * 2, 12), cross, 8);
     } else if (s.kind === 'intersection') {
       // a cross, like SketchUp's
       const r = px * 6; const q = this.cam.camera.quaternion; const pts = [new THREE.Vector3(-r, -r, 0), new THREE.Vector3(r, r, 0), new THREE.Vector3(-r, r, 0), new THREE.Vector3(r, -r, 0)].map(v => v.applyQuaternion(q).add(p));
@@ -770,7 +802,13 @@ export class Viewport {
   }
   // overlay helpers ------------------------------------------------------------
   clearOverlay() { this.overlay.clear(); for (const el of Array.from(this.labels.querySelectorAll('.vlabel:not(.static)'))) el.remove(); }
+  /** Ink asked for by a tool is the theme's ink, or the dark of the edges for something drawn on a face. */
+  private themed(color: number, at?: THREE.Vector3) {
+    if (color !== COLOR.ink || this.ink === COLOR.ink) return color;
+    return at && this.compiled && this.faceStyle !== 'wireframe' && onFace(this.compiled, at.x, at.y, at.z) ? this.edgeColor : this.ink;
+  }
   addLine(points: THREE.Vector3[], color = COLOR.ink, dashed = false, width = 1): THREE.Line {
+    color = this.themed(color, points.length > 1 ? points[0].clone().lerp(points[1], 0.5) : points[0]);
     const mat = dashed ? new THREE.LineDashedMaterial({ color, dashSize: 0.15, gapSize: 0.1, linewidth: width }) : new THREE.LineBasicMaterial({ color, linewidth: width });
     const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), mat); if (dashed) line.computeLineDistances();
     line.renderOrder = 5; this.overlay.add(line); return line;
@@ -788,11 +826,11 @@ export class Viewport {
     mesh.renderOrder = 4; this.overlay.add(mesh);
   }
   addDot(p: THREE.Vector3, color = COLOR.green, px = 7) {
-    const s = this.pixelSize(p) * px;
+    const s = this.pixelSize(p) * px; color = this.themed(color, p);
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(s * 0.5, 10, 8), new THREE.MeshBasicMaterial({ color, depthTest: false })); mesh.position.copy(p); mesh.renderOrder = 6; this.overlay.add(mesh);
   }
   addSquare(p: THREE.Vector3, color = COLOR.red, px = 7) {
-    const s = this.pixelSize(p) * px; const m = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), new THREE.MeshBasicMaterial({ color, depthTest: false })); m.position.copy(p); m.renderOrder = 6; this.overlay.add(m);
+    const s = this.pixelSize(p) * px; color = this.themed(color, p); const m = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), new THREE.MeshBasicMaterial({ color, depthTest: false })); m.position.copy(p); m.renderOrder = 6; this.overlay.add(m);
   }
   addLabel(p: THREE.Vector3, text: string, cls = '', id?: string) {
     const el = document.createElement('div'); el.className = `vlabel ${cls}`; el.textContent = text; if (id) el.dataset.id = id;
@@ -843,6 +881,27 @@ export class Viewport {
 }
 
 /** Free an object's GPU buffers (and its material unless shared). */
+/** The faces and edges of a compiled scene, whole or the part a preview redraws. */
+type Drawn = { groups: CompiledScene['groups']; edges: CompiledScene['edges'] };
+/** The faces a line can lie on: drawn solid, front side. */
+const solid = (c: Drawn) => c.groups.filter(g => !g.back && g.material !== '__hidden' && g.opacity >= 1);
+const triangles = (c: Drawn) => solid(c).reduce((t, g) => t + g.indices.length / 3, 0);
+/** Whether a point lies on a face of the scene (within a millimetre of its plane). */
+function onFace(c: Drawn, x: number, y: number, z: number): boolean {
+  for (const g of solid(c)) {
+    const V = g.positions, I = g.indices;
+    for (let t = 0; t < I.length; t += 3) {
+      const a = I[t] * 3, b = I[t + 1] * 3, d = I[t + 2] * 3;
+      const ux = V[b] - V[a], uy = V[b + 1] - V[a + 1], uz = V[b + 2] - V[a + 2], vx = V[d] - V[a], vy = V[d + 1] - V[a + 1], vz = V[d + 2] - V[a + 2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, nn = nx * nx + ny * ny + nz * nz; if (nn < 1e-18) continue;
+      const wx = x - V[a], wy = y - V[a + 1], wz = z - V[a + 2], off = wx * nx + wy * ny + wz * nz; if (off * off > 1e-6 * nn) continue;
+      const uu = ux * ux + uy * uy + uz * uz, uv = ux * vx + uy * vy + uz * vz, vv = vx * vx + vy * vy + vz * vz, wu = wx * ux + wy * uy + wz * uz, wv = wx * vx + wy * vy + wz * vz;
+      const s = (vv * wu - uv * wv) / nn, r = (uu * wv - uv * wu) / nn;
+      if (s >= -1e-3 && r >= -1e-3 && s + r <= 1.001) return true;
+    }
+  }
+  return false;
+}
 function disposeObject(o: THREE.Object3D, keepGeometry = false) {
   o.traverse(x => {
     const m = x as THREE.Mesh; if (!keepGeometry) m.geometry?.dispose();

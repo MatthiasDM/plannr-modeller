@@ -13,7 +13,7 @@
   --accent-soft: color-mix(in srgb, var(--accent) 11%, transparent); --accent-ring: color-mix(in srgb, var(--accent) 45%, transparent);
   --amber: #d18a00;
   --red: #c2362b; --green: #1f8a5a; --blue: #1f5fa8; --magenta: #b4458f; --cyan: #1397b0;
-  --grid: rgba(43, 95, 166, .09); --grid-3d: #c3d2e6;
+  --grid: rgba(43, 95, 166, .09); --grid-3d: #c3d2e6; --ink-3d: #1b1b1b;
   /* the tool palette (also toasts and tooltips): white paper here, night-blue in dark */
   --side-bg: #ffffff; --side-surface: #f5f8fc; --side-line: #cfdae9; --side-text: #0f1b2d; --side-strong: #0a1422; --side-muted: #4f6382; --side-faint: #8a9bb5;
   --side-active: rgba(31, 95, 168, .09); --side-accent: #1f5fa8; --side-paper: #ffffff; --side-grid: rgba(43, 95, 166, .07);
@@ -40,7 +40,7 @@
     --ink: #e6eefb; --ink-2: #8fa3c0; --ink-3: #587195;
     --accent: #5ad1f0; --accent-ink: #8ae0f7; --accent-on: #07131f;
     --amber: #f2b544; --red: #ff6b5c; --green: #3ddc97; --blue: #5ad1f0; --magenta: #ff7ac6; --cyan: #5ad1f0;
-    --grid: rgba(90, 209, 240, .07); --grid-3d: #27405f;
+    --grid: rgba(90, 209, 240, .07); --grid-3d: #27405f; --ink-3d: #a6b6d0;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3); --shadow-md: 0 2px 6px rgba(0, 0, 0, .35), 0 14px 36px -20px rgba(0, 0, 0, .8);
     --shadow-lg: 0 4px 14px rgba(0, 0, 0, .45), 0 34px 80px -24px rgba(0, 0, 0, .95);
     --glass: rgba(21, 36, 58, .9); --glass-border: #27405f;
@@ -56,7 +56,7 @@
   --ink: #e6eefb; --ink-2: #8fa3c0; --ink-3: #587195;
   --accent: #5ad1f0; --accent-ink: #8ae0f7; --accent-on: #07131f;
   --amber: #f2b544; --red: #ff6b5c; --green: #3ddc97; --blue: #5ad1f0; --magenta: #ff7ac6; --cyan: #5ad1f0;
-  --grid: rgba(90, 209, 240, .07); --grid-3d: #27405f;
+  --grid: rgba(90, 209, 240, .07); --grid-3d: #27405f; --ink-3d: #a6b6d0;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3); --shadow-md: 0 2px 6px rgba(0, 0, 0, .35), 0 14px 36px -20px rgba(0, 0, 0, .8);
   --shadow-lg: 0 4px 14px rgba(0, 0, 0, .45), 0 34px 80px -24px rgba(0, 0, 0, .95);
   --glass: rgba(21, 36, 58, .9); --glass-border: #27405f;
