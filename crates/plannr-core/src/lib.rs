@@ -13,6 +13,7 @@ pub mod sample;
 pub mod slice;
 pub mod solid;
 pub mod sticky;
+pub mod text3d;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

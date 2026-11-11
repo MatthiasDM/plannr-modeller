@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import type { Tool, ToolContext, Snap } from './base';
 import { partsRefused, parseNumbers, parseSizes, onSegment, drawSnap, arr, INK, MAGENTA, SELECT, AXIS } from './base';
-import { findEntity, fmt, type Vec3, type Op, type Entity } from '../model';
+import { findEntity, fmt, lengthUnit, type Vec3, type Op, type Entity } from '../model';
+import { text3dDialog, type Text3dSpec } from '../ui/dialog';
 import { stickyOps } from './edit';
 
 /** Axis-aligned bounds of the selection from the compiled segments. */
@@ -217,6 +218,42 @@ export class PasteTool implements Tool {
   async onDown(ev: PointerEvent, ctx: ToolContext) {
     if (ev.button !== 0 || !this.clip) return; const s = ctx.snap(ev, { faces: true, ignoreIf: id => !ctx.inDocument(id) }); ctx.preview([]);
     const r = await ctx.ops(this.op(s.point), 'Paste'); ctx.setTool('select'); if (r[0]?.created?.length) ctx.select(r[0].created);
+  }
+  onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape') { ctx.setTool('select'); return true; } return false; }
+}
+/** 3D Text: type the text and its size, then click where it goes. On a face the letters lie on that face
+ *  (upright on a wall), elsewhere on the ground. */
+export class Text3dTool implements Tool {
+  id = 'text3d'; label = '3D Text'; hint = 'Click where the text goes: on a face it lies on that face, elsewhere on the ground. Esc cancels.'; cursor = 'copy';
+  private spec: Text3dSpec = { text: '', height: 0.25, depth: 0.05, font: 'sans', bold: false, align: 'left' };
+  private ready = false; private session = 0;
+  activate(ctx: ToolContext) {
+    this.ready = false; const mine = ++this.session; ctx.setVCB('', 'Measurements'); ctx.setHint('3D Text: type the text and its size.');
+    // lengths are typed in the document's unit; a unit after the number wins ("25cm")
+    const show = (m: number) => `${+(m * lengthUnit.factor).toFixed(Math.max(lengthUnit.digits, 3))} ${lengthUnit.name}`;
+    const read = (v: string) => { const m = v.trim().match(/^(\d*\.?\d+)\s*(mm|cm|m)?$/i); if (!m) return NaN; const u = (m[2] ?? lengthUnit.name).toLowerCase(); return parseFloat(m[1]) / (u === 'mm' ? 1000 : u === 'cm' ? 100 : 1); };
+    text3dDialog(this.spec, show, read).then(s => {
+      if (mine !== this.session) return;
+      if (!s) { ctx.setTool('select'); return; }
+      this.spec = s; this.ready = true; ctx.setHint(this.hint);
+    });
+  }
+  deactivate(ctx: ToolContext) { this.session++; this.ready = false; ctx.preview([]); ctx.scene.clearOverlay(); }
+  private op(ev: PointerEvent, ctx: ToolContext): { ops: Op[]; snap: Snap } {
+    const s = ctx.snap(ev, { faces: true, ignoreIf: id => !ctx.inDocument(id) });
+    // the face under the cursor, when the point lies on it (never the letters being previewed)
+    const pk = ctx.pickTarget(ev, { facesOnly: true, anywhere: true });
+    let n = new THREE.Vector3(0, 1, 0);
+    if (pk) { const fn = pk.back ? pk.normal.clone().negate() : pk.normal.clone(); if (Math.abs(fn.dot(s.point.clone().sub(pk.point))) < 1e-3) n = fn.normalize(); }
+    const { text, height, depth, font, bold, align } = this.spec;
+    return { snap: s, ops: [{ op: 'text3d', text, position: arr(s.point), normal: arr(n), height: +height.toFixed(5), ...(depth > 0 ? { depth: +depth.toFixed(5) } : {}), font, bold, align, layer: ctx.options.layer }] };
+  }
+  onMove(ev: PointerEvent, ctx: ToolContext) {
+    if (!this.ready) return; const { ops, snap } = this.op(ev, ctx); ctx.scene.clearOverlay(); drawSnap(ctx, snap); ctx.preview(ops);
+  }
+  async onDown(ev: PointerEvent, ctx: ToolContext) {
+    if (ev.button !== 0 || !this.ready) return; const { ops } = this.op(ev, ctx); ctx.preview([]);
+    const r = await ctx.ops(ops, '3D Text'); ctx.setTool('select'); if (r[0]?.created?.length) ctx.select(r[0].created);
   }
   onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape') { ctx.setTool('select'); return true; } return false; }
 }

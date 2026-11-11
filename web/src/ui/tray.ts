@@ -85,7 +85,7 @@ export class Tray {
     if (e.kind === 'custom') { const pid = e.type.split('.')[0]; const p = getPlugins().find(p => p.id === pid); if (p?.renderEntity) return `<div data-plugin-entity="${pid}"></div>`; }
     const layerSel = `<label>Tag</label><select data-field="layer">${a.doc.layers.map(l => `<option value="${l.id}" ${l.id === e.layer ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`;
     const matSel = (k: 'material' | 'backMaterial', label: string, cur?: string | null) => `<label>${label}</label><select data-field="${k}"><option value="">(default)</option>${a.doc.materials.map(m => `<option value="${m.id}" ${m.id === cur ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select>`;
-    let body = `<div class="kv"><label>Type</label><div><b>${KIND_LABEL[e.kind]}</b> <span class="muted">${e.id.slice(0, 8)}${e.locked === true ? ' · locked' : ''}</span></div>${layerSel}`;
+    let body = `<div class="kv"><label>Type</label><div><b>${KIND_LABEL[e.kind]}</b> <span class="muted">${e.id.slice(0, 8)}${e.locked === true ? ' · locked' : ''}${e.kind === 'face' && typeof e.smooth === 'number' ? ` · soft to ${e.smooth}°` : ''}</span></div>${layerSel}`;
     switch (e.kind) {
       case 'face': { const f = e as FaceEntity; const n = polygonNormal(f.outer);
         body += `${matSel('material', 'Material', f.material)}${matSel('backMaterial', 'Back material', f.backMaterial)}<label>Vertices</label><div>${f.outer.length}${f.holes?.length ? ` + ${f.holes.length} hole(s)` : ''}</div><label>Normal</label><div class="muted">${n.map(x => x.toFixed(2)).join(', ')}</div><label>Area</label><div>${fmtM2(this.faceArea(f))}</div>`; break; }

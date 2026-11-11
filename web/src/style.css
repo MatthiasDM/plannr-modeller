@@ -270,6 +270,12 @@ table.data tr:hover td { background: var(--surface-2); }
 .dlg-title { color: var(--accent); }
 .dlg-text { font-size: 13px; line-height: 1.5; }
 .dlg-input { width: 100%; font-size: 13px; padding: 7px 10px; }
+.dlg-form { display: grid; grid-template-columns: 76px 1fr; gap: 8px 10px; align-items: center; font-size: 13px; }
+.dlg-form > label { color: var(--ink-2); }
+.dlg-form textarea { resize: vertical; min-height: 56px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--chrome); line-height: 1.4; }
+.dlg-form textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
+.dlg-form input[type=text], .dlg-form select { width: 100%; }
+.dlg-form .row { display: flex; gap: 12px; align-items: center; } .dlg-form .row select { flex: 1; } .dlg-form .check { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
 .dlg.wide { width: 620px; max-height: 94vh; overflow: auto; gap: 10px; padding: 14px 16px 12px; }
 .dlg-head { display: flex; align-items: center; justify-content: space-between; }

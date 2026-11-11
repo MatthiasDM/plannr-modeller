@@ -127,18 +127,50 @@ export class SelectTool implements Tool {
 }
 
 export class EraserTool implements Tool {
-  id = 'eraser'; label = 'Eraser'; hint = 'Click an edge, face or object to erase it; drag to erase several. Hold Shift to hide instead of erase.'; cursor = 'crosshair'; shortcut = 'e';
+  id = 'eraser'; label = 'Eraser'; hint = 'Click an edge, face or object to erase it; drag to erase several. Shift hides instead. Ctrl (or Alt) softens the edges you go over, Shift+Ctrl makes them hard again (View → Hidden Geometry shows soft edges).'; cursor = 'crosshair'; shortcut = 'e';
+  ownKeys: ('Control' | 'Alt')[] = ['Control', 'Alt'];
   private dragging = false; private pending = new Set<string>();
+  /** What the drag does (set when it starts), and the edges gone over while softening. */
+  private mode: 'erase' | 'hide' | 'soften' | 'harden' = 'erase'; private edges: { a: THREE.Vector3; b: THREE.Vector3; group?: string }[] = [];
   activate(ctx: ToolContext) { ctx.setHint(this.hint); ctx.setVCB('', 'Measurements'); }
-  deactivate(ctx: ToolContext) { ctx.scene.highlight(new Set(), true); }
-  onMove(ev: PointerEvent, ctx: ToolContext) {
-    const p = hoverPick(ev, ctx);
-    if (this.dragging && p) { this.pending.add(ctx.resolve(p.id)); ctx.scene.highlight(this.pending); }
+  deactivate(ctx: ToolContext) { ctx.scene.highlight(new Set(), true); ctx.scene.clearOverlay(); }
+  /** The edge under the cursor, for softening: its ends and the group it is in. */
+  private edgeAt(ev: PointerEvent, ctx: ToolContext) {
+    const p = ctx.scene.pick(ev); if (!p || p.kind !== 'edge' || p.id.includes('#')) return;
+    const segs = ctx.scene.segments.filter(g => g.id === p.id); if (!segs.length) return;
+    const far = (g: { a: THREE.Vector3; b: THREE.Vector3 }) => new THREE.Line3(g.a, g.b).closestPointToPoint(p.point, true, new THREE.Vector3()).distanceTo(p.point);
+    const g = segs.reduce((x, y) => far(y) < far(x) ? y : x);
+    if (this.edges.some(e => (e.a.distanceTo(g.a) < 1e-6 && e.b.distanceTo(g.b) < 1e-6) || (e.a.distanceTo(g.b) < 1e-6 && e.b.distanceTo(g.a) < 1e-6))) return;
+    let group: string | undefined; for (const { entity, path } of walk(ctx.doc().entities)) if (entity.id === p.id) { group = path[path.length - 1]; break; }
+    this.edges.push({ a: g.a.clone(), b: g.b.clone(), group });
+    ctx.scene.addLine([g.a, g.b], this.mode === 'soften' ? COLOR.cyan : COLOR.magenta, false, 2);
   }
-  onDown(ev: PointerEvent, ctx: ToolContext) { if (ev.button !== 0) return; this.dragging = true; this.pending.clear(); const p = ctx.scene.pick(ev); if (p) this.pending.add(ctx.resolve(p.id)); ctx.scene.highlight(this.pending); }
+  private take(ev: PointerEvent, ctx: ToolContext) {
+    if (this.mode === 'soften' || this.mode === 'harden') { this.edgeAt(ev, ctx); return; }
+    const p = ctx.scene.pick(ev); if (p) this.pending.add(ctx.resolve(p.id)); ctx.scene.highlight(this.pending);
+  }
+  onMove(ev: PointerEvent, ctx: ToolContext) {
+    if (this.dragging) { this.take(ev, ctx); return; }
+    hoverPick(ev, ctx);
+  }
+  onDown(ev: PointerEvent, ctx: ToolContext) {
+    if (ev.button !== 0) return; this.dragging = true; this.pending.clear(); this.edges = []; ctx.scene.clearOverlay();
+    const soft = ev.ctrlKey || ev.metaKey || ev.altKey;
+    this.mode = soft ? (ev.shiftKey ? 'harden' : 'soften') : ev.shiftKey ? 'hide' : 'erase';
+    this.take(ev, ctx);
+  }
   async onUp(ev: PointerEvent, ctx: ToolContext) {
-    if (ev.button !== 0 || !this.dragging) return; this.dragging = false;
-    if (this.pending.size) { const ids = [...this.pending]; await ctx.ops([ev.shiftKey ? { op: 'set_hidden', ids, hidden: true } : { op: 'erase', ids }], ev.shiftKey ? 'Hide' : 'Erase'); ctx.select([]); }
+    if (ev.button !== 0 || !this.dragging) return; this.dragging = false; ctx.scene.clearOverlay();
+    if (this.mode === 'soften' || this.mode === 'harden') {
+      const edges = this.edges; this.edges = [];
+      if (!edges.length) { ctx.toast(this.mode === 'soften' ? 'Go over the edge between two faces to soften it.' : 'Go over a soft edge to make it hard again (View → Hidden Geometry shows them).'); return; }
+      // one op per group the edges are in
+      const groups = [...new Set(edges.map(e => e.group))];
+      const ops: Op[] = groups.map(g => ({ op: 'soften', edges: edges.filter(e => e.group === g).map(e => [arr(e.a), arr(e.b)] as [Vec3, Vec3]), ...(this.mode === 'harden' ? { angle: 0 } : {}), ...(g ? { group: g } : {}) }));
+      await ctx.ops(ops, this.mode === 'soften' ? 'Soften edges' : 'Unsoften edges');
+      return;
+    }
+    if (this.pending.size) { const ids = [...this.pending]; const hide = this.mode === 'hide'; await ctx.ops([hide ? { op: 'set_hidden', ids, hidden: true } : { op: 'erase', ids }], hide ? 'Hide' : 'Erase'); ctx.select([]); }
     this.pending.clear();
   }
 }

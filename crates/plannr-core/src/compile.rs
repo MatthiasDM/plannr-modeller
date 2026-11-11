@@ -105,6 +105,19 @@ pub struct CompileOptions {
     pub only: Option<std::collections::HashSet<String>>,
 }
 
+/// Faces closer to one plane than this (degrees) are not softened into each other: the edge between them is a
+/// drawn line, not a bend in a surface.
+pub const SOFT_MIN: f64 = 0.1;
+
+type PKey = (i64, i64, i64);
+fn pkey(p: P3) -> PKey { let q = |x: f64| (x * 1e6).round() as i64; (q(p[0]), q(p[1]), q(p[2])) }
+fn ekey(a: P3, b: P3) -> (PKey, PKey) { let (a, b) = (pkey(a), pkey(b)); if a <= b { (a, b) } else { (b, a) } }
+
+/// What softening does to one face (world coordinates): the edges it does not draw, and the normal its
+/// corners on those edges are shaded with.
+#[derive(Default)]
+struct Smoothing { soft: HashSet<(PKey, PKey)>, normals: HashMap<PKey, P3> }
+
 const BACK_ID: &str = "back";
 /// The material group of ghosts (hidden geometry on show).
 const GHOST_ID: &str = "__hidden";
@@ -128,6 +141,8 @@ struct Builder<'a> {
     depth: usize,
     /// Centres already emitted (quantised point + radius): an arc's segments share one.
     centers: HashSet<[i64; 4]>,
+    /// Softened faces of the containers being compiled, by face id.
+    smooth: HashMap<String, Smoothing>,
 }
 
 impl<'a> Builder<'a> {
@@ -151,7 +166,7 @@ impl<'a> Builder<'a> {
         });
     }
 
-    fn push_triangles(&mut self, gi: usize, id: &str, tris: &[[P3; 3]], n: P3) {
+    fn push_triangles(&mut self, gi: usize, id: &str, tris: &[[P3; 3]], n: P3, round: Option<(&HashMap<PKey, P3>, f64)>) {
         if tris.is_empty() { return; }
         let id = if self.prefix.is_empty() { id.to_string() } else { format!("{}{}", self.prefix, id) };
         let g = &mut self.groups[gi];
@@ -160,6 +175,7 @@ impl<'a> Builder<'a> {
             for p in t {
                 let vi = (g.positions.len() / 3) as u32;
                 g.positions.extend_from_slice(&[p[0] as f32, p[1] as f32, p[2] as f32]);
+                let n = round.and_then(|(m, sign)| m.get(&pkey(*p)).map(|x| scale(*x, sign))).unwrap_or(n);
                 g.normals.extend_from_slice(&[n[0] as f32, n[1] as f32, n[2] as f32]);
                 g.indices.push(vi);
             }
@@ -224,10 +240,11 @@ impl<'a> Builder<'a> {
         let mname = f.material.as_deref().and_then(|m| self.doc.material_by_ref(m)).map(|m| m.name.clone()).unwrap_or_else(|| self.doc.default_material().name.clone());
         *self.out.metrics.area_by_material.entry(mname).or_default() += a;
         let gi = self.group_index(f.material.as_deref(), false);
-        self.push_triangles(gi, &f.id, &tris, n);
+        let sm = self.smooth.remove(&f.id);
+        self.push_triangles(gi, &f.id, &tris, n, sm.as_ref().map(|s| (&s.normals, 1.0)));
         let back: Vec<[P3; 3]> = tris.iter().map(|t| [t[0], t[2], t[1]]).collect();
         let bi = self.group_index(f.back_material.as_deref(), true);
-        self.push_triangles(bi, &f.id, &back, scale(n, -1.0));
+        self.push_triangles(bi, &f.id, &back, scale(n, -1.0), sm.as_ref().map(|s| (&s.normals, -1.0)));
         // outline segments carry the face id; `soft` (outer-loop edge indices, edge i runs from corner i to i+1)
         // leaves edges out of the drawing, as SketchUp's softened edges: a swept surface shows no seams
         let soft: Vec<usize> = f.extra.get("soft").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|x| x as usize)).collect()).unwrap_or_default();
@@ -240,8 +257,60 @@ impl<'a> Builder<'a> {
                     let orig = if flipped { (2 * n - 2 - i) % n } else { i };
                     if soft.contains(&orig) { continue; }
                 }
+                // a softened edge shows only as hidden geometry
+                if !self.show_hidden && sm.as_ref().map_or(false, |s| s.soft.contains(&ekey(lp[i], lp[(i + 1) % n]))) { continue; }
                 self.push_segment(&f.id, lp[i], lp[(i + 1) % n]);
             }
+        }
+    }
+
+    /// Work out the softening among the faces of one container (`m` takes it to world coordinates): an edge
+    /// that exactly two softened faces share, meeting at an angle within both their limits, is soft. Around
+    /// each corner the faces that soft edges join are shaded with one normal.
+    fn soften(&mut self, list: &[Entity], m: &Mat4) {
+        let faces: Vec<&Face> = list.iter().filter_map(|e| match e { Entity::Face(f) if f.outer.len() >= 3 && f.smooth().is_some() => Some(f), _ => None }).collect();
+        if faces.len() < 2 { return; }
+        let flip = mat_det3(m) < 0.0;
+        let world: Vec<(P3, f64, Vec<Vec<P3>>)> = faces.iter().map(|f| {
+            let loops: Vec<Vec<P3>> = std::iter::once(&f.outer).chain(f.holes.iter()).map(|l| l.iter().map(|p| mat_apply(m, *p)).collect()).collect();
+            let n = normal(&loops[0]);
+            (if flip { scale(n, -1.0) } else { n }, f.smooth().unwrap_or(0.0), loops)
+        }).collect();
+        // every edge with the faces that have it, and which way each runs along it
+        let mut by_edge: HashMap<(PKey, PKey), Vec<(usize, bool)>> = HashMap::new();
+        for (fi, (_, _, loops)) in world.iter().enumerate() {
+            for l in loops { for i in 0..l.len() {
+                let (a, b) = (pkey(l[i]), pkey(l[(i + 1) % l.len()]));
+                if a != b { by_edge.entry(if a <= b { (a, b) } else { (b, a) }).or_default().push((fi, a <= b)); }
+            } }
+        }
+        // per face: its soft edges, each with the face across it (sign -1 when that face is wound the other way round)
+        let mut links: Vec<Vec<((PKey, PKey), usize, f64)>> = vec![vec![]; world.len()];
+        for (k, v) in &by_edge {
+            if v.len() != 2 || v[0].0 == v[1].0 { continue; }
+            let ((f, df), (g, dg)) = (v[0], v[1]);
+            let sign = if df == dg { -1.0 } else { 1.0 };
+            let deg = (dot(world[f].0, world[g].0) * sign).clamp(-1.0, 1.0).acos().to_degrees();
+            if deg <= SOFT_MIN || deg > world[f].1.min(world[g].1) + 1e-9 { continue; }
+            links[f].push((*k, g, sign)); links[g].push((*k, f, sign));
+        }
+        for (fi, f) in faces.iter().enumerate() {
+            if links[fi].is_empty() { self.smooth.remove(&f.id); continue; }
+            let mut s = Smoothing::default();
+            let mut corners: Vec<PKey> = vec![];
+            for (k, _, _) in &links[fi] { s.soft.insert(*k); for c in [k.0, k.1] { if !corners.contains(&c) { corners.push(c); } } }
+            for c in corners {
+                let (mut sum, mut seen, mut todo) = (world[fi].0, vec![fi], vec![(fi, 1.0)]);
+                while let Some((x, sx)) = todo.pop() {
+                    for (k, y, sg) in &links[x] {
+                        if (k.0 != c && k.1 != c) || seen.contains(y) { continue; }
+                        seen.push(*y); todo.push((*y, sx * sg)); sum = add(sum, scale(world[*y].0, sx * sg));
+                    }
+                }
+                let n = normalize(sum);
+                if len(n) > 0.5 { s.normals.insert(c, n); }
+            }
+            self.smooth.insert(f.id.clone(), s);
         }
     }
 
@@ -281,6 +350,7 @@ impl<'a> Builder<'a> {
             Entity::Group(g) => {
                 self.out.metrics.groups += 1;
                 let gm = mat_mul(m, &g.transform);
+                self.soften(&g.entities, &gm);
                 for c in &g.entities { self.entity(c, &gm); }
             }
             Entity::Guide(g) => { let p = mat_apply(m, g.point); self.grow(p); self.out.guides.push(CompiledGuide { id: g.id.clone(), point: p, direction: g.direction.map(|d| normalize(mat_apply_dir(m, d))) }); }
@@ -296,6 +366,7 @@ impl<'a> Builder<'a> {
                 let saved = std::mem::replace(&mut self.prefix, format!("{}#", i.id));
                 self.out.metrics.instances += 1;
                 self.depth += 1;
+                self.soften(&entities, &im);
                 for c in &entities { self.entity(c, &im); }
                 self.depth -= 1;
                 self.prefix = saved;
@@ -320,9 +391,11 @@ pub fn compile(doc: &Document, reg: &Registry, opts: &CompileOptions) -> Compile
         }
     });
     let cuts = if opts.ignore_sections { vec![] } else { all_cuts.clone() };
-    let mut b = Builder { doc, groups: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cuts, show_hidden: opts.show_hidden, ghost: 0, bb: None, hidden, prefix: String::new(), depth: 0, centers: HashSet::new() };
+    let mut b = Builder { doc, groups: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cuts, show_hidden: opts.show_hidden, ghost: 0, bb: None, hidden, prefix: String::new(), depth: 0, centers: HashSet::new(), smooth: HashMap::new() };
     b.out.metrics.definitions = doc.components.len();
     let m = mat_identity();
+    // (from the whole document: a partial compile still sees the neighbours of the faces it draws)
+    b.soften(&original.entities, &m);
     for e in &doc.entities { b.entity(e, &m); }
     let mut out = b.out;
     out.version = doc.version;

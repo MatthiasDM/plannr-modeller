@@ -143,6 +143,7 @@ impl AppState {
             }
         }
         if !known || dirty.is_empty() { return Ok((compile(&doc, reg, opts), None)); }
+        soft_neighbours(&base, &doc, &mut dirty);
         let only: std::collections::HashSet<String> = dirty.iter().filter(|t| after.contains_key(*t)).cloned().collect();
         Ok((compile(&doc, reg, &CompileOptions { only: Some(only), ..opts.clone() }), Some(dirty)))
     }
@@ -248,6 +249,7 @@ fn changes(before: &Document, after: &Document, results: &[OpResult], reg: &Regi
             if let Some(t) = na.get(bare).or_else(|| nb.get(bare)) { if !dirty.contains(t) { dirty.push(t.clone()); } }
         }
     }
+    soft_neighbours(before, after, &mut dirty);
     let n = after.entities.len().max(before.entities.len()).max(1);
     if dirty.len() as f64 > n as f64 * MAX_DIRTY_SHARE && dirty.len() > 8 { return None; }
     let touched = || dirty.iter().filter_map(|id| a.get(id.as_str()).or_else(|| b.get(id.as_str())));
@@ -257,6 +259,16 @@ fn changes(before: &Document, after: &Document, results: &[OpResult], reg: &Regi
     let only: std::collections::HashSet<String> = dirty.iter().filter(|id| a.contains_key(id.as_str())).cloned().collect();
     let scene = compile(after, reg, &CompileOptions { only: Some(only), ..opts.clone() });
     Some(Changes { scene, dirty, reconcile })
+}
+
+/// A softened face at the top level is drawn by what its neighbours are (which edges show, how it is shaded):
+/// when one of them changed, all of them are redrawn.
+fn soft_neighbours(before: &Document, after: &Document, dirty: &mut Vec<String>) {
+    let soft = |e: &&Entity| matches!(e, Entity::Face(f) if f.smooth().is_some());
+    let all = || before.entities.iter().chain(after.entities.iter()).filter(soft);
+    if !all().any(|e| dirty.iter().any(|d| d == e.id())) { return; }
+    let more: Vec<String> = all().map(|e| e.id().to_string()).collect();
+    for id in more { if !dirty.contains(&id) { dirty.push(id); } }
 }
 
 /// Does `e`, or anything inside it (a group), match?

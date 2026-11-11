@@ -157,6 +157,16 @@ pub enum Entity {
     Instance(Instance),
 }
 
+impl Face {
+    /// Softened (Edit → Soften Edges): the angle in degrees up to which this face runs on smoothly into a
+    /// neighbour. The edge between two such faces that meet within both their angles is not drawn, and the
+    /// surface is shaded round across it.
+    pub fn smooth(&self) -> Option<f64> { self.extra.get("smooth").and_then(|v| v.as_f64()).filter(|a| *a > 0.0) }
+    pub fn set_smooth(&mut self, angle: f64) {
+        if angle > 0.0 { self.extra.insert("smooth".into(), Value::from(angle)); } else { self.extra.remove("smooth"); }
+    }
+}
+
 impl Entity {
     pub fn id(&self) -> &str {
         match self {

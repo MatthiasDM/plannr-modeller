@@ -58,7 +58,7 @@ Tests: `cargo test`. Type-check: `cd web && npx tsc --noEmit`.
 | Tool | Key | Notes |
 |---|---|---|
 | Select | Space | Shift adds, Ctrl toggles, Shift+Ctrl takes away, triple-click selects every drawn face and edge connected to the one clicked, drag a window (left→right) or crossing box (right→left), double-click enters a group or opens a plugin object (a construction wall or roof: select one face; a framed wall: single studs and plates), Esc leaves |
-| Eraser | E | Click or drag over edges, faces, objects; with Shift held they are hidden instead. Erasing the edge between two faces of one plane joins them |
+| Eraser | E | Click or drag over edges, faces, objects; with Shift held they are hidden instead. Erasing the edge between two faces of one plane joins them. With Ctrl (or Alt) held the edges you go over are softened, with Shift+Ctrl made hard again |
 | Freehand | — | Press and drag to draw by hand on the face or the ground under the first point; let go where you began to close the shape into a face |
 | Line | L | Chained edges; a closed coplanar loop becomes a face, a line across a face divides it. Type a length, a position `[x;y;z]` or a step from the last point `<x;y;z>` (model coordinates, y is up) |
 | Rectangle | R | Two corners on the ground or on any face; type `w;h` |
@@ -84,6 +84,7 @@ Tests: `cargo test`. Type-check: `cd web && npx tsc --noEmit`.
 | Dimension | D | Two points (or click an edge for its length), then the offset. Click a circle for its diameter or an arc for its radius (R and D switch), then where the label goes |
 | Protractor | — | Vertex, reference direction, angle: places an angled guide line; type degrees or a slope (`1:6`) |
 | Text | X | Click a point, an edge or a face for a label with a leader: it starts as the position, the length or the area. Click empty space for screen text, which stays in place in the view |
+| 3D Text | — | Type the text, pick font, height and how far the letters stand out, then click where it goes: on a face the letters lie on that face (upright on a wall), elsewhere on the ground. The result is a group; extruded letters are solids, so they can be cut out of something with Subtract |
 | Paint Bucket | B | Active material onto a face. Ctrl: every connected face with the same material; Shift+Ctrl: every such face of the shape; Shift: whole object; Alt: sample. (Ctrl and Alt do not switch to Orbit and Pan while this tool is active) |
 | Orbit / Pan / Zoom | O / H / Z | Middle-drag (or right-drag) orbits, Shift+middle pans, wheel zooms in any tool; Shift+Z zoom extents |
 | Zoom Window | — | Drag a rectangle to fill the view with it; ⌘[ and ⌘] step through previous and next views |
@@ -92,6 +93,12 @@ Tests: `cargo test`. Type-check: `cd web && npx tsc --noEmit`.
 **Edit:** Cut, Copy and Paste (⌘X / ⌘C / ⌘V) work on the selection, also between projects: the copy follows the
 cursor by its lowest corner until you click; ⇧⌘V pastes in place. **Lock** (Edit menu, right-click) keeps something
 from being moved, changed or erased until it is unlocked; it can still be selected, copied and hidden.
+
+**Soften edges** (Edit menu, right-click) makes a faceted surface look round: where the selected faces, or the faces
+inside the selected groups, meet at up to the angle you give (20° suits most curves), the edge between them is no
+longer drawn and the surface is shaded smooth across it. Sharper edges stay, so a cylinder softened at 35° loses its
+seams and keeps its rims. **Unsoften edges** makes them hard again. The softening is kept per face, so it survives
+moving, copying and reshaping; View → Hidden Geometry shows the soft edges.
 
 **Camera:** Camera → Parallel projection shows the model without perspective (a 1° lens from far away), Field of
 view sets the lens (35° by default). **Shadows:** Display → Sun → By date and time puts the sun where it stands at
@@ -108,7 +115,7 @@ joined into faces; you are asked for the file's unit). File → Export writes `.
 
 **Right-click** something for its menu: Cut, Copy, Erase, Hide, Lock, Select connected, Select all with the same tag, Make group,
 Make Component, Explode, Edit group, Intersect faces (edges where the selected faces cross others, dividing both),
-Reverse faces, Zoom Selection. Over empty space: Undo, Redo, Paste, Select all, Unhide all, Zoom Extents. Dragging with
+Reverse faces, Soften edges, Unsoften edges, Zoom Selection. Over empty space: Undo, Redo, Paste, Select all, Unhide all, Zoom Extents. Dragging with
 the right button still orbits.
 
 **Hold a modifier for a tool:** holding Ctrl orbits and holding Option/Alt pans until you release the key,
@@ -145,7 +152,7 @@ beside it. See [docs/EMBED.md](docs/EMBED.md) and `web/public/embed-example.html
 Every tool is an MCP tool with the same semantics (`draw_line`, `draw_rectangle`, `draw_circle`,
 `draw_polygon`, `push_pull`, `offset`, `move`, `rotate`, `scale`, `copy`, `erase`, `paint`, `make_group`,
 `explode`, `draw_arc`, `follow_me`, `mirror`, `solid_box`, `solid_cylinder`, `extrude`, `boolean`, `make_component`, `place_component`, `edit_component`, `make_unique`,
-`add_guide`, `add_dimension`, `add_text`, `add_section`, `measure`, …), plus project tools
+`add_guide`, `add_dimension`, `add_text`, `text3d`, `soften`, `add_section`, `measure`, …), plus project tools
 (`list_projects`, `create_project`, `use_project`, `get_document`, `list_entities`, `undo`, `redo`),
 viewport tools that drive the open browser (`screenshot`, `set_view`, `set_camera`, `zoom_extents`,
 `zoom_to`, `zoom_window`, `previous_view`, `next_view`, `orbit`, `pan`, `zoom`, `select`, `activate_tool`, `get_view_state`) and `export_glb`.

@@ -405,7 +405,7 @@ export class App {
   /** What a tool draws while a group is open for editing goes into that group (and sticks to its faces), as in SketchUp. */
   inContext(ops: Op[]): Op[] {
     const g = this.enteredGroup ? findEntity(this.doc, this.enteredGroup) : undefined; if (g?.kind !== 'group') return ops;
-    return ops.map(o => ['draw_line', 'draw_rectangle', 'draw_polygon', 'draw_circle', 'draw_arc', 'stretch', 'insert'].includes(o.op) && !(o as any).group ? { ...o, group: g.id } as Op : o);
+    return ops.map(o => ['draw_line', 'draw_rectangle', 'draw_polygon', 'draw_circle', 'draw_arc', 'stretch', 'insert', 'text3d'].includes(o.op) && !(o as any).group ? { ...o, group: g.id } as Op : o);
   }
   async commitOps(ops: Op[], label: string): Promise<OpResult[]> {
     if (!this.projectId || !ops.length) return [];
@@ -580,6 +580,19 @@ export class App {
     if (!faces.length) { this.toast('Intersect Faces works on drawn faces: select them first (open a group to reach the faces inside it).', 5000); return; }
     const r = await this.commitOps([{ op: 'intersect_faces', ids: faces }], 'Intersect faces');
     const edges = (r[0]?.created ?? []).filter(id => findEntity(this.doc, id)?.kind === 'edge'); if (edges.length) this.select(edges);
+  }
+  /** Soften Edges: the selected faces (and those inside selected groups) run on smoothly into each other where
+   *  they meet at up to an angle; 0 makes their edges hard again. Asks for the angle unless it is given. */
+  private softAngle = 20;
+  async softenEdges(angle?: number) {
+    const ids = [...new Set([...this.selection].map(id => id.split('#')[0]))].filter(id => ['face', 'group'].includes(findEntity(this.doc, id)?.kind ?? ''));
+    if (!ids.length) { this.toast('Soften Edges works on drawn faces and groups: select them first.'); return; }
+    if (angle === undefined) {
+      const v = await this.promptText('Soften the edges where faces meet at up to this many degrees (20 suits most curves; 0 makes them hard again)', String(this.softAngle)); if (v === null) return;
+      angle = parseFloat(v); if (!(angle >= 0 && angle <= 180)) { this.toast('The angle is a number of degrees between 0 and 180.'); return; }
+      if (angle > 0) this.softAngle = angle;
+    }
+    await this.commitOps([{ op: 'soften', ids, angle }], angle > 0 ? 'Soften edges' : 'Unsoften edges');
   }
   /** Turn the selected faces inside out: the front becomes the back (each side keeps its material). */
   async reverseFaces() {

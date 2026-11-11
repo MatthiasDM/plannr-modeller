@@ -57,6 +57,13 @@ pub enum Op {
     SetHidden { ids: Vec<String>, hidden: bool },
     /// Lock or unlock entities: a locked one (and what is inside a locked group) can't be moved, changed or erased.
     SetLocked { ids: Vec<String>, locked: bool },
+    /// Soften Edges: the faces `ids` (and every face inside the groups among them) run on smoothly into their
+    /// neighbours up to `angle` degrees (default 20); 0 makes their edges hard again. Or single `edges` (pairs of
+    /// points, in `group` or the top level): the two faces of each become smooth enough to soften it, or hard with 0.
+    Soften { #[serde(default)] ids: Vec<String>, #[serde(default)] edges: Vec<[P3; 2]>, #[serde(default)] angle: Option<f64>, #[serde(default)] group: Option<String> },
+    /// 3D Text: the letters of `text` as faces in a new group, or as solids when `depth` is given.
+    Text3d { text: String, #[serde(default)] position: P3, #[serde(default)] height: Option<f64>, #[serde(default)] depth: Option<f64>, #[serde(default)] font: Option<String>, #[serde(default)] bold: bool,
+        #[serde(default)] normal: Option<P3>, #[serde(default)] u: Option<P3>, #[serde(default)] align: Option<String>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String>, #[serde(default)] group: Option<String> },
     /// Add ready-made entities (pasted or imported geometry), moved by `delta`: they get new ids, keep their tag and
     /// materials where the document has them, and go into `group` when given.
     /// `merge`: the faces of each inserted group that lie in one plane and touch become one face (an imported triangle mesh).
@@ -118,7 +125,7 @@ impl Op {
         match self {
             Op::DrawLine { .. } => "draw_line", Op::DrawRectangle { .. } => "draw_rectangle", Op::DrawPolygon { .. } => "draw_polygon",
             Op::DrawCircle { .. } => "draw_circle", Op::PushPull { .. } => "push_pull", Op::Offset { .. } => "offset", Op::Move { .. } => "move",
-            Op::Stretch { .. } => "stretch", Op::Rotate { .. } => "rotate", Op::Scale { .. } => "scale", Op::Copy { .. } => "copy", Op::Erase { .. } => "erase", Op::IntersectFaces { .. } => "intersect_faces", Op::SetHidden { .. } => "set_hidden", Op::SetLocked { .. } => "set_locked", Op::Insert { .. } => "insert", Op::Paint { .. } => "paint",
+            Op::Stretch { .. } => "stretch", Op::Rotate { .. } => "rotate", Op::Scale { .. } => "scale", Op::Copy { .. } => "copy", Op::Erase { .. } => "erase", Op::IntersectFaces { .. } => "intersect_faces", Op::SetHidden { .. } => "set_hidden", Op::SetLocked { .. } => "set_locked", Op::Soften { .. } => "soften", Op::Text3d { .. } => "text3d", Op::Insert { .. } => "insert", Op::Paint { .. } => "paint",
             Op::SetLayer { .. } => "set_layer", Op::MakeGroup { .. } => "make_group", Op::Explode { .. } => "explode", Op::AddLayer { .. } => "add_layer",
             Op::UpdateLayer { .. } => "update_layer", Op::RemoveLayer { .. } => "remove_layer", Op::AddMaterial { .. } => "add_material",
             Op::UpdateMaterial { .. } => "update_material", Op::AddGuide { .. } => "add_guide", Op::AddDimension { .. } => "add_dimension",
@@ -163,7 +170,7 @@ fn changed_by(op: &Op) -> Vec<&str> {
     fn all(ids: &[String]) -> Vec<&str> { ids.iter().map(|s| s.as_str()).collect() }
     match op {
         Op::Move { ids, .. } | Op::Rotate { ids, .. } | Op::Scale { ids, .. } | Op::Stretch { ids, .. } | Op::Erase { ids } | Op::Paint { ids, .. }
-        | Op::SetLayer { ids, .. } | Op::MakeGroup { ids, .. } | Op::MakeComponent { ids, .. } | Op::IntersectFaces { ids } => all(ids),
+        | Op::SetLayer { ids, .. } | Op::MakeGroup { ids, .. } | Op::MakeComponent { ids, .. } | Op::IntersectFaces { ids } | Op::Soften { ids, .. } => all(ids),
         Op::Mirror { ids, copy, .. } => if *copy { vec![] } else { all(ids) },
         Op::PushPull { face, .. } | Op::Offset { face, .. } | Op::FollowMe { face, .. } => vec![face.as_str()],
         Op::Explode { id } | Op::UpdateEntity { id, .. } | Op::UpdateSection { id, .. } => vec![id.as_str()],
@@ -243,6 +250,31 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
                 r.modified.push(id.clone()); r.entities.push(e.clone());
             }
             Ok(r)
+        }
+        Op::Soften { ids, edges, angle, group } => soften(doc, &bare_ids(ids), edges, *angle, group.as_deref()),
+        Op::Text3d { text, position, height, depth, font, bold, normal, u, align, layer, material, group } => {
+            if text.trim().is_empty() { return err("text3d needs a text"); }
+            if text.chars().count() > 400 { return err("the text is too long (at most 400 characters)"); }
+            let (height, depth) = (height.unwrap_or(0.25), depth.unwrap_or(0.0));
+            if !(height > 1e-4) || depth < 0.0 || !depth.is_finite() || !height.is_finite() { return err("height must be positive and depth zero or more"); }
+            let n = normalize(normal.unwrap_or([0.0, 1.0, 0.0]));
+            if len(n) < 0.5 { return err("normal must be non-zero"); }
+            // the reading direction: as given, else level (so upright text stands straight), else along x
+            let project = |d: P3| normalize(sub(d, scale(n, dot(d, n))));
+            let u = [u.map(project), Some(normalize(cross([0.0, 1.0, 0.0], n))), Some(project([1.0, 0.0, 0.0]))].into_iter().flatten().find(|u| len(*u) > 0.5).ok_or_else(|| OpError("cannot derive a reading direction".into()))?;
+            let align = align.as_deref().unwrap_or("left");
+            if !["left", "center", "right"].contains(&align) { return err("align is left, center or right"); }
+            let layer = resolve_layer(doc, layer.as_deref())?;
+            let mat = match material { Some(m) => Some(resolve_material(doc, m)?), None => None };
+            let spec = crate::text3d::TextSpec { text, font: font.as_deref().unwrap_or("sans"), bold: *bold, height, depth, position: *position, normal: n, u, align };
+            let faces = crate::text3d::faces(&spec, mat, &layer).map_err(OpError)?;
+            let name: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(32).collect();
+            let mut g = Entity::Group(Group { id: new_id(), layer, name, transform: mat_identity(), entities: faces.into_iter().map(Entity::Face).collect(), extra: Default::default() });
+            let (list, inv) = target(doc, group.as_deref())?;
+            localize(&mut g, &inv);
+            // only the id: the letters can be many faces
+            let id = g.id().to_string(); list.push(g);
+            Ok(OpResult { created: vec![id], ..Default::default() })
         }
         Op::Insert { entities, delta, group, merge, local } => insert(doc, entities, *delta, group.as_deref(), *merge, *local),
         Op::IntersectFaces { ids } => {
@@ -419,6 +451,61 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             Ok(r)
         }
     }
+}
+
+// ---- soften ------------------------------------------------------------------------
+
+fn soften(doc: &mut Document, ids: &[String], edges: &[[P3; 2]], angle: Option<f64>, group: Option<&str>) -> OpResult2<OpResult> {
+    let angle = angle.unwrap_or(20.0);
+    if !(0.0..=180.0).contains(&angle) { return err("angle is between 0 and 180 degrees"); }
+    if ids.is_empty() && edges.is_empty() { return err("soften needs ids or edges"); }
+    let mut r = OpResult::default();
+    fn all(e: &mut Entity, angle: f64, n: &mut usize) {
+        match e {
+            Entity::Face(f) => { if f.smooth() != Some(angle).filter(|a| *a > 0.0) { f.set_smooth(angle); *n += 1; } }
+            Entity::Group(g) => for c in g.entities.iter_mut() { all(c, angle, n); },
+            _ => {}
+        }
+    }
+    let mut faces = 0;
+    for id in ids {
+        let (e, _) = doc.find_mut(id).ok_or_else(|| OpError(format!("no entity {id}")))?;
+        if !matches!(e, Entity::Face(_) | Entity::Group(_)) { continue; }
+        let before = faces;
+        all(e, angle, &mut faces);
+        if faces > before { r.modified.push(id.clone()); }
+    }
+    if !ids.is_empty() && edges.is_empty() && faces == 0 {
+        return err(if angle > 0.0 { "nothing to soften: give faces, or groups with faces (or they are softened to this angle already)" } else { "none of these faces is softened" });
+    }
+    if !edges.is_empty() {
+        let (list, inv) = target(doc, group)?;
+        let mut found = false;
+        for [a, b] in edges {
+            let (a, b) = match &inv { Some(m) => (mat_apply(m, *a), mat_apply(m, *b)), None => (*a, *b) };
+            // the faces that have this edge, and which way each runs along it
+            let on: Vec<(usize, bool)> = list.iter().enumerate().filter_map(|(i, e)| {
+                let Entity::Face(f) = e else { return None };
+                std::iter::once(&f.outer).chain(f.holes.iter()).find_map(|l| (0..l.len()).find_map(|k| {
+                    let (p, q) = (l[k], l[(k + 1) % l.len()]);
+                    if same_point(p, a) && same_point(q, b) { Some((i, true)) } else if same_point(p, b) && same_point(q, a) { Some((i, false)) } else { None }
+                }))
+            }).collect();
+            if on.len() != 2 { continue; }
+            let nrm = |i: usize| match &list[i] { Entity::Face(f) => normal(&f.outer), _ => [0.0; 3] };
+            let sign = if on[0].1 == on[1].1 { -1.0 } else { 1.0 };
+            let deg = (dot(nrm(on[0].0), nrm(on[1].0)) * sign).clamp(-1.0, 1.0).acos().to_degrees();
+            if angle > 0.0 && deg <= crate::compile::SOFT_MIN { continue; } // two faces of one plane: nothing to round
+            found = true;
+            for (i, _) in on {
+                let Entity::Face(f) = &mut list[i] else { continue };
+                let want = if angle > 0.0 { f.smooth().unwrap_or(0.0).max((deg + 0.5).ceil()) } else { 0.0 };
+                if f.smooth().unwrap_or(0.0) != want { f.set_smooth(want); if !r.modified.contains(&f.id) { r.modified.push(f.id.clone()); } }
+            }
+        }
+        if !found { return err(if angle > 0.0 { "no edge between two faces there (an edge between two faces of one plane cannot be softened: erase it to join them)" } else { "no edge between two faces there" }); }
+    }
+    Ok(r)
 }
 
 // ---- solids ------------------------------------------------------------------------

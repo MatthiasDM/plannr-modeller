@@ -5,7 +5,7 @@ export interface Layer { id: string; name: string; visible: boolean; color: stri
 export interface Material { id: string; name: string; color: string; opacity: number }
 
 interface Base { id: string; layer: string; [extra: string]: unknown }
-export interface FaceEntity extends Base { kind: 'face'; outer: Vec3[]; holes: Vec3[][]; material?: string | null; backMaterial?: string | null }
+export interface FaceEntity extends Base { kind: 'face'; outer: Vec3[]; holes: Vec3[][]; material?: string | null; backMaterial?: string | null; /** Softened: degrees up to which it runs on smoothly into a neighbour. */ smooth?: number }
 export interface EdgeEntity extends Base { kind: 'edge'; a: Vec3; b: Vec3 }
 export interface GroupEntity extends Base { kind: 'group'; name: string; transform: number[]; entities: Entity[] }
 export interface GuideEntity extends Base { kind: 'guide'; point: Vec3; direction?: Vec3 | null }
@@ -63,6 +63,8 @@ export type Op =
   | { op: 'update_entity'; id: string; patch: Record<string, unknown> }
   | { op: 'set_hidden'; ids: string[]; hidden: boolean }
   | { op: 'set_locked'; ids: string[]; locked: boolean }
+  | { op: 'soften'; ids?: string[]; edges?: [Vec3, Vec3][]; angle?: number; group?: string }
+  | { op: 'text3d'; text: string; position?: Vec3; height?: number; depth?: number; font?: 'sans' | 'serif'; bold?: boolean; normal?: Vec3; u?: Vec3; align?: 'left' | 'center' | 'right'; layer?: string; material?: string; group?: string }
   | { op: 'insert'; entities: Entity[]; delta?: Vec3; group?: string; merge?: boolean; local?: boolean }
   | { op: 'boolean'; mode: 'union' | 'subtract' | 'intersect' | 'split'; target: string; tools: string[]; keepTools?: boolean; material?: string }
   | { op: 'measure'; a: Vec3; b: Vec3 }

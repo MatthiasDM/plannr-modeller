@@ -34,6 +34,8 @@ export function renderMenubar(app: App, el: HTMLElement) {
       { label: 'Explode', act: () => app.explodeSelection(), disabled: !app.selection.size },
       { label: 'Intersect faces', act: () => app.intersectFaces(), disabled: !app.selection.size },
       { label: 'Reverse faces', act: () => app.reverseFaces(), disabled: !app.selection.size },
+      { label: 'Soften edges…', act: () => app.softenEdges(), disabled: !app.selection.size },
+      { label: 'Unsoften edges', act: () => app.softenEdges(0), disabled: !app.selection.size },
       { label: 'Close group', key: 'Esc', act: () => app.exitGroup(), disabled: !app.enteredGroup }, 'sep',
       { label: 'Hide', key: `${KEY}E`, act: () => app.hideSelection(), disabled: !app.selection.size },
       { label: 'Unhide selected', act: () => app.unhideSelected(), disabled: ![...app.selection].some(id => app.hiddenIds.includes(id)) },
@@ -121,6 +123,7 @@ export function showContextMenu(app: App, x: number, y: number) {
     { label: 'Make Component…', act: () => app.makeComponent() },
     ...(has('group') || has('instance') ? [{ label: 'Explode', act: () => app.explodeSelection() }] : []),
     ...(has('face') ? ['sep' as const, { label: 'Intersect faces', act: () => app.intersectFaces() }, { label: 'Reverse faces', act: () => app.reverseFaces() }] : []),
+    ...(has('face') || has('group') ? [...(has('face') ? [] : ['sep' as const]), { label: 'Soften edges…', act: () => app.softenEdges() }, { label: 'Unsoften edges', act: () => app.softenEdges(0) }] : []),
     'sep', { label: 'Zoom Selection', act: () => app.zoomSelection() },
   ] : [
     { label: 'Undo', key: `${KEY}Z`, act: () => app.undo(), disabled: !app.canUndo }, { label: 'Redo', key: `⇧${KEY}Z`, act: () => app.redo(), disabled: !app.canRedo }, 'sep',

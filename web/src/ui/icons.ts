@@ -29,6 +29,7 @@ export const ICONS: Record<string, string> = {
   scale: wrap('<path d="M4 20V10h10v10z" fill="#e8f0fb"/><path d="M4 20 20 4M20 4h-6M20 4v6" stroke="#d93025"/>'),
   tape: wrap('<circle cx="9" cy="12" r="6" fill="#fff"/><circle cx="9" cy="12" r="2"/><path d="M15 12h6M18 10v4M21 10v4" stroke="#c8169a"/>'),
   dimension: wrap('<path d="M4 15V8M20 15V8M4 11h16"/><path d="M4 11l3-2M4 11l3 2M20 11l-3-2M20 11l-3 2"/><path d="M9 18h6" stroke="#1a73e8"/>'),
+  text3d: wrap('<path d="M4 7h10M9 7v11"/><path d="M14 7l5-3M9 18l5-3M19 4v8l-5 3" stroke="#1a73e8"/>'),
   text: wrap('<path d="M5 6h14M12 6v13M9 19h6"/><path d="M3 20l5-5" stroke="#1a73e8"/>'),
   paint: wrap('<path d="M7 11l6-6 6 6-6 6z" fill="#f2b705"/><path d="M5 9l2 2M13 5V3"/><path d="M19 13c0 2-1.3 3-1.3 4.2a1.3 1.3 0 1 0 2.6 0C20.3 16 19 15 19 13z" fill="#1a73e8" stroke="none"/>'),
   orbit: wrap('<circle cx="12" cy="12" r="7" fill="#e8f0fb"/><path d="M2.5 12c0 2 4.3 3.6 9.5 3.6S21.5 14 21.5 12" stroke="#d93025"/><path d="M12 2.5c2 0 3.6 4.3 3.6 9.5S14 21.5 12 21.5" stroke="#1e8e3e"/>'),

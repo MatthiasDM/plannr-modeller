@@ -27,6 +27,39 @@ export function promptText(label: string, value = '', okLabel = 'OK'): Promise<s
   });
 }
 
+export interface Text3dSpec { text: string; height: number; depth: number; font: 'sans' | 'serif'; bold: boolean; align: 'left' | 'center' | 'right' }
+/** 3D Text: the text and how its letters are made. `show` and `read` turn metres into what is typed and back. */
+export function text3dDialog(init: Text3dSpec, show: (m: number) => string, read: (v: string) => number): Promise<Text3dSpec | null> {
+  return openDialog((card, close) => {
+    card.innerHTML = `<div class="dlg-title">3D Text</div><div class="dlg-form">
+      <label>Text</label><textarea class="dlg-input" data-f="text" rows="2" spellcheck="false" placeholder="Type the text"></textarea>
+      <label>Font</label><div class="row"><select data-f="font"><option value="sans">Sans</option><option value="serif">Serif</option></select><label class="check"><input type="checkbox" data-f="bold"> Bold</label></div>
+      <label>Align</label><select data-f="align"><option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option></select>
+      <label>Height</label><input type="text" data-f="height" spellcheck="false">
+      <label>Extruded</label><input type="text" data-f="depth" spellcheck="false">
+    </div><div class="dlg-note">Height is the height of the capitals. Extruded is how far the letters stand out: 0 gives flat faces.</div>
+    <div class="dlg-status bad"></div><div class="dlg-actions"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-ok>Place</button></div>`;
+    const f = <T extends HTMLElement>(k: string) => card.querySelector<T>(`[data-f="${k}"]`)!;
+    const [text, font, bold, align, height, depth] = [f<HTMLTextAreaElement>('text'), f<HTMLSelectElement>('font'), f<HTMLInputElement>('bold'), f<HTMLSelectElement>('align'), f<HTMLInputElement>('height'), f<HTMLInputElement>('depth')];
+    text.value = init.text; font.value = init.font; bold.checked = init.bold; align.value = init.align; height.value = show(init.height); depth.value = show(init.depth);
+    const status = card.querySelector('.dlg-status')!;
+    const ok = () => {
+      const [h, d] = [read(height.value), read(depth.value)];
+      if (!text.value.trim()) { status.textContent = 'Type the text first.'; text.focus(); return; }
+      if (!(h > 0)) { status.textContent = 'The height is a length above 0.'; height.focus(); return; }
+      if (!(d >= 0)) { status.textContent = 'Extruded is a length, 0 or more.'; depth.focus(); return; }
+      close({ text: text.value.replace(/\s+$/, ''), font: font.value, bold: bold.checked, align: align.value, height: h, depth: d } as Text3dSpec);
+    };
+    card.addEventListener('keydown', e => {
+      e.stopPropagation(); if (e.key === 'Escape') close(null);
+      // Enter places (in the text itself it starts a new line; there ⌘/Ctrl+Enter places)
+      if (e.key === 'Enter' && (e.target !== text || e.metaKey || e.ctrlKey)) { e.preventDefault(); ok(); }
+    });
+    card.querySelector<HTMLElement>('[data-ok]')!.onclick = ok; card.querySelector<HTMLElement>('[data-cancel]')!.onclick = () => close(null);
+    setTimeout(() => { text.focus(); text.select(); }, 0);
+  });
+}
+
 /** Yes / no question. */
 export function confirmDialog(text: string, okLabel = 'OK', danger = false): Promise<boolean> {
   return openDialog((card, close) => {
