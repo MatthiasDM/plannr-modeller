@@ -4,6 +4,7 @@ import { Viewport, A, V, COLOR, type ViewName, FACE_STYLES, type FaceStyle, type
 import { api, Live, type Changes, type CompiledScene, type PluginInfo } from './api';
 import { findEntity, topLevelId, walk, lengthUnit, setLengthUnit, UNITS, type Document, type Entity, type Op, type OpResult, type Scene, type Sun, type Vec3 } from './model';
 import { toOBJ, toSTL, parseOBJ, parseSTL, meshGroup, download } from './io';
+import { readDXF, dxfGroup, toDXF, DXF_UNITS, type Drawing } from './dxf';
 import { selectionBounds } from './tools/advanced';
 import { BUILTIN_TOOLS, EMBED_TOOLS, placeComponentTool, pasteTool } from './tools';
 import { zoomWindow } from './tools/arc';
@@ -548,13 +549,16 @@ export class App {
   async unlockAll() { const ids = this.lockedIds; if (ids.length) await this.commitOps([{ op: 'set_locked', ids, locked: false }], 'Unlock all'); }
   exportObj() { const c = this.scene.compiled; if (c) download(`${this.projectName}.obj`, toOBJ(c), 'text/plain'); }
   exportStl() { const c = this.scene.compiled; if (c) download(`${this.projectName}.stl`, toSTL(c), 'model/stl'); }
-  /** Import an OBJ or STL file as one group; triangles that lie in one plane are joined into faces. */
+  /** Faces and edges as a DXF in the document's unit, on layers named after the tags. */
+  exportDxf() { const c = this.scene.compiled; if (!c) return; download(`${this.projectName}.dxf`, toDXF(c, this.doc, lengthUnit.name, lengthUnit.factor), 'image/vnd.dxf'); this.toast(`Exported in ${lengthUnit.name}, z up.`); }
+  /** Import an OBJ, STL or DXF file as one group; triangles that lie in one plane are joined into faces. */
   importModel() {
-    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.obj,.stl';
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.obj,.stl,.dxf';
     inp.onchange = async () => { const f = inp.files?.[0]; if (f) await this.importFile(f.name, await f.arrayBuffer()); };
     inp.click();
   }
   async importFile(name: string, data: ArrayBuffer) {
+    if (/\.dxf$/i.test(name)) return this.importDxf(name, data);
     const stl = /\.stl$/i.test(name);
     const unit = (await this.promptText('Unit of the file: mm, cm or m', stl ? 'mm' : 'm'))?.trim().toLowerCase(); if (!unit) return;
     const scale = ({ mm: 0.001, cm: 0.01, m: 1 } as Record<string, number>)[unit]; if (!scale) { this.toast('The unit is mm, cm or m.'); return; }
@@ -564,6 +568,26 @@ export class App {
     if (faces.length > 150000) { this.toast(`${name} has ${faces.length} faces: too many to import (150 000 at most).`, 6000); return; }
     const r = await this.commitOps([{ op: 'insert', entities: [meshGroup(name.replace(/\.[^.]+$/, ''), faces)], merge: true }], 'Import');
     if (r[0]?.created?.length) { this.select(r[0].created); this.zoomSelection(); }
+  }
+  /** A DXF drawing as one group: lines and curves as edges, 3D faces as faces, blocks as groups inside it, and its
+   *  layers as tags (added where the document has none of that name; a layer that is off in the file comes in off). */
+  async importDxf(name: string, data: ArrayBuffer) {
+    let d: Drawing;
+    try { d = readDXF(new TextDecoder().decode(data)); } catch (e: any) { this.toast(`Could not read ${name}: ${e.message ?? e}`, 6000); return; }
+    const unit = (await this.promptText(`Unit of the file: ${Object.keys(DXF_UNITS).join(', ')}${d.unit ? ` (the file says ${d.unit})` : ''}`, d.unit ?? 'mm'))?.trim().toLowerCase(); if (!unit) return;
+    const scale = DXF_UNITS[unit]; if (!scale) { this.toast(`The unit is one of ${Object.keys(DXF_UNITS).join(', ')}.`); return; }
+    const r = dxfGroup(d, scale, name.replace(/\.[^.]+$/, ''));
+    const left = Object.entries(r.skipped).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(', ');
+    if (!r.edges && !r.faces) { this.toast(`Nothing to import in ${name}${left ? `: it holds ${left}, which Plannr does not read` : ''}.`, 6000); return; }
+    if (r.edges + r.faces > 200000) { this.toast(`${name} has ${r.edges + r.faces} lines and faces: too many to import (200 000 at most).`, 6000); return; }
+    const have = new Set(this.doc.layers.map(l => l.name)), add = r.layers.filter(l => !have.has(l.name));
+    const res = await this.commitOps([...add.map((l): Op => ({ op: 'add_layer', name: l.name, color: l.color, visible: l.visible })), { op: 'insert', entities: [r.group], merge: true }], 'Import');
+    const made = res[res.length - 1]?.created; if (!made?.length) return;
+    this.select(made); this.zoomSelection();
+    const g = findEntity(this.doc, made[0]); let edges = 0, faces = 0; // counted after the merge: triangles of one plane are one face now
+    if (g?.kind === 'group') for (const { entity } of walk(g.entities)) { if (entity.kind === 'edge') edges++; else if (entity.kind === 'face') faces++; }
+    const off = r.layers.filter(l => !l.visible).length, n = (k: number, one: string) => `${k} ${one}${k === 1 ? '' : 's'}`;
+    this.toast(`Imported ${n(edges, 'edge')} and ${n(faces, 'face')}${r.layers.length ? ` on ${n(r.layers.length, 'tag')}` : ''}.${off ? ` ${off === 1 ? 'One tag is' : `${off} tags are`} switched off, as in the file.` : ''}${left ? ` Left out: ${left}.` : ''}`, 7000);
   }
   /** The unit lengths are shown and typed in, and how many decimals; stored with the document. */
   async setUnits(unit: string, digits?: number) {

@@ -19,8 +19,8 @@ export function renderMenubar(app: App, el: HTMLElement) {
     ['File', () => [
       { label: 'New…', key: `${KEY}N`, act: () => app.showWelcome() }, { label: 'Open…', key: `${KEY}O`, act: () => app.showWelcome() }, 'sep',
       { label: 'Duplicate project', act: () => app.duplicate() }, { label: 'Rename…', act: () => app.renamePrompt() }, 'sep',
-      { label: 'Import model (.obj, .stl)…', act: () => app.importModel() }, { label: 'Import document JSON…', act: () => app.importJson() }, 'sep',
-      { label: 'Export 3D model (.glb)', act: () => app.exportGlb() }, { label: 'Export .obj', act: () => app.exportObj() }, { label: 'Export .stl (mm, for printing)', act: () => app.exportStl() }, { label: 'Export document JSON', act: () => app.exportJson() }, 'sep',
+      { label: 'Import model (.obj, .stl, .dxf)…', act: () => app.importModel() }, { label: 'Import document JSON…', act: () => app.importJson() }, 'sep',
+      { label: 'Export 3D model (.glb)', act: () => app.exportGlb() }, { label: 'Export .obj', act: () => app.exportObj() }, { label: 'Export .stl (mm, for printing)', act: () => app.exportStl() }, { label: 'Export .dxf', act: () => app.exportDxf() }, { label: 'Export document JSON', act: () => app.exportJson() }, 'sep',
       { label: 'Load sample model', act: () => app.loadSample() }, { label: 'Delete project…', act: () => app.deleteProject() },
     ]],
     ['Edit', () => [

@@ -111,9 +111,17 @@ planes, which tags show, the face style, the lens and the sun.
 dimensions and the Measurements box follow, and a bare number you type is in that unit (`500` is 500 mm); a unit
 you type yourself always wins (`2m`). The document stays in metres.
 
-**Import and export:** File → Import model reads `.obj` and `.stl` files as one group (triangles in one plane are
-joined into faces; you are asked for the file's unit). File → Export writes `.glb`, `.obj` (metres, y up) and `.stl`
-(millimetres, z up, for printing) of what is in view.
+**Import and export:** File → Import model reads `.obj`, `.stl` and `.dxf` files as one group (triangles in one plane
+are joined into faces; you are asked for the file's unit). File → Export writes `.glb`, `.obj` (metres, y up), `.stl`
+(millimetres, z up, for printing) and `.dxf` of what is in view.
+
+**DXF:** a text (ASCII) DXF comes in with its lines, polylines (bulges included), circles, arcs, ellipses and splines
+as edges, its 3D faces, solids and meshes as faces, and each block reference as a group inside the imported group.
+Layers become tags of the same name, with their colour; a layer that is off or frozen in the file comes in switched
+off. Circles and arcs keep their centre for the Center inference. Closed outlines stay edges: they are not filled
+with a face. Text, dimensions, hatches and ACIS solids are left out, and the message after the import says how many.
+The unit is taken from the file when it names one (mm, cm, m, in, ft). Export writes an R12 DXF in the document's
+unit, z up: every face as 3DFACE triangles and every edge as a LINE, on layers named after the tags.
 
 **Right-click** something for its menu: Cut, Copy, Erase, Hide, Lock, Select connected, Select all with the same tag, Make group,
 Make Component, Explode, Edit group, Intersect faces (edges where the selected faces cross others, dividing both),

@@ -38,7 +38,7 @@ const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const len = (a: Vec3) => Math.hypot(a[0], a[1], a[2]);
 /** A polygon as faces: itself when it is flat, a fan of triangles otherwise; slivers are dropped. */
-function flat(poly: Vec3[]): Vec3[][] {
+export function flat(poly: Vec3[]): Vec3[][] {
   if (poly.length < 3) return [];
   const tri = (a: Vec3, b: Vec3, c: Vec3) => len(cross(sub(b, a), sub(c, a))) > 1e-10 ? [[a, b, c]] : [];
   if (poly.length === 3) return tri(poly[0], poly[1], poly[2]);

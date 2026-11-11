@@ -65,8 +65,10 @@ pub enum Op {
     Text3d { text: String, #[serde(default)] position: P3, #[serde(default)] height: Option<f64>, #[serde(default)] depth: Option<f64>, #[serde(default)] font: Option<String>, #[serde(default)] bold: bool,
         #[serde(default)] normal: Option<P3>, #[serde(default)] u: Option<P3>, #[serde(default)] align: Option<String>, #[serde(default)] layer: Option<String>, #[serde(default)] material: Option<String>, #[serde(default)] group: Option<String> },
     /// Add ready-made entities (pasted or imported geometry), moved by `delta`: they get new ids, keep their tag and
-    /// materials where the document has them, and go into `group` when given.
-    /// `merge`: the faces of each inserted group that lie in one plane and touch become one face (an imported triangle mesh).
+    /// materials where the document has them, and go into `group` when given. A tag may be given by its name instead of
+    /// its id (an import adds the tags with `add_layer` in the same batch, before it knows their ids).
+    /// `merge`: in each inserted group (and the groups inside it) the faces with one tag that lie in one plane and touch
+    /// become one face (an imported triangle mesh).
     Insert { entities: Vec<Entity>, #[serde(default)] delta: P3, #[serde(default)] group: Option<String>, #[serde(default)] merge: bool,
         /// With `group`: the entities are already in that group's own coordinates (copied inside it); only `delta` is the model's.
         #[serde(default)] local: bool },
@@ -74,7 +76,8 @@ pub enum Op {
     SetLayer { ids: Vec<String>, layer: String },
     MakeGroup { ids: Vec<String>, #[serde(default)] name: Option<String> },
     Explode { id: String },
-    AddLayer { name: String, #[serde(default)] color: Option<String> },
+    /// `visible: false` adds it switched off (a layer that is off in an imported drawing).
+    AddLayer { name: String, #[serde(default)] color: Option<String>, #[serde(default)] visible: Option<bool> },
     UpdateLayer { id: String, #[serde(default)] name: Option<String>, #[serde(default)] visible: Option<bool>, #[serde(default)] color: Option<String> },
     RemoveLayer { id: String },
     AddMaterial { name: String, color: String, #[serde(default)] opacity: Option<f64> },
@@ -321,8 +324,8 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
         }
         Op::MakeGroup { ids, name } => make_group(doc, &bare_ids(ids), name.clone()),
         Op::Explode { id } => explode(doc, split_key(id).0),
-        Op::AddLayer { name, color } => {
-            let l = Layer { id: new_id(), name: name.clone(), visible: true, color: color.clone().unwrap_or_else(|| "#7a8aa0".into()) };
+        Op::AddLayer { name, color, visible } => {
+            let l = Layer { id: new_id(), name: name.clone(), visible: visible.unwrap_or(true), color: color.clone().unwrap_or_else(|| "#7a8aa0".into()) };
             let id = l.id.clone();
             doc.layers.push(l);
             Ok(OpResult { created: vec![id], ..Default::default() })
@@ -613,17 +616,32 @@ fn split(doc: &mut Document, target: &str, tools: &[String], material: Option<&s
 
 /// Entities from elsewhere (the clipboard, an imported file) are added: new ids all the way down, a tag or material
 /// the document doesn't have falls back to the default, component instances without their definition are left out.
+/// Triangles of one plane become the faces they were cut from: in a group and the groups inside it, tag by tag.
+fn merge_group(e: &mut Entity) {
+    let Entity::Group(g) = e else { return };
+    let mut by_layer: Vec<(String, Vec<crate::solid::Poly>)> = vec![];
+    let mut rest = vec![];
+    for mut c in std::mem::take(&mut g.entities) {
+        if matches!(c, Entity::Face(_)) {
+            let polys = crate::solid::polys_of(&c, &mat_identity());
+            match by_layer.iter_mut().find(|(l, _)| l == c.layer()) { Some((_, v)) => v.extend(polys), None => by_layer.push((c.layer().to_string(), polys)) }
+        } else { merge_group(&mut c); rest.push(c); }
+    }
+    for (layer, polys) in by_layer { rest.extend(crate::solid::merge_faces(polys, &layer).into_iter().map(Entity::Face)); }
+    g.entities = rest;
+}
 fn insert(doc: &mut Document, entities: &[Entity], delta: P3, group: Option<&str>, merge: bool, local: bool) -> OpResult2<OpResult> {
     if entities.is_empty() { return err("insert needs at least one entity"); }
     let layers: HashSet<String> = doc.layers.iter().map(|l| l.id.clone()).collect();
+    let by_name: HashMap<String, String> = doc.layers.iter().rev().map(|l| (l.name.clone(), l.id.clone())).collect();
     let materials: HashSet<String> = doc.materials.iter().map(|m| m.id.clone()).collect();
     let defs: HashSet<String> = doc.components.iter().map(|c| c.id.clone()).collect();
     let default = doc.default_layer().to_string();
-    fn fit(e: &mut Entity, layers: &HashSet<String>, materials: &HashSet<String>, defs: &HashSet<String>, default: &str) -> bool {
-        if !layers.contains(e.layer()) { e.set_layer(default.to_string()); }
+    fn fit(e: &mut Entity, layers: &HashSet<String>, by_name: &HashMap<String, String>, materials: &HashSet<String>, defs: &HashSet<String>, default: &str) -> bool {
+        if !layers.contains(e.layer()) { let l = by_name.get(e.layer()).cloned().unwrap_or_else(|| default.to_string()); e.set_layer(l); }
         match e {
             Entity::Face(f) => { for m in [&mut f.material, &mut f.back_material] { if m.as_ref().map_or(false, |m| !materials.contains(m)) { *m = None; } } true }
-            Entity::Group(g) => { g.entities.retain_mut(|c| fit(c, layers, materials, defs, default)); true }
+            Entity::Group(g) => { g.entities.retain_mut(|c| fit(c, layers, by_name, materials, defs, default)); true }
             Entity::Instance(i) => defs.contains(&i.definition),
             _ => true,
         }
@@ -633,16 +651,8 @@ fn insert(doc: &mut Document, entities: &[Entity], delta: P3, group: Option<&str
     let mut r = OpResult::default();
     for e in entities {
         let mut e = e.clone();
-        if !fit(&mut e, &layers, &materials, &defs, &default) { continue; }
-        if merge { if let Entity::Group(g) = &e {
-            // triangles of one plane become the faces they were cut from
-            let inv = mat_inverse(&g.transform);
-            let faces: Vec<Entity> = crate::solid::merge_faces(crate::solid::polys_of(&e, &mat_identity()), &g.layer).into_iter().map(|mut f| {
-                for p in f.outer.iter_mut().chain(f.holes.iter_mut().flatten()) { *p = mat_apply(&inv, *p); }
-                Entity::Face(f)
-            }).collect();
-            if let Entity::Group(g) = &mut e { g.entities.retain(|c| !matches!(c, Entity::Face(_))); g.entities.extend(faces); }
-        } }
+        if !fit(&mut e, &layers, &by_name, &materials, &defs, &default) { continue; }
+        if merge { merge_group(&mut e); }
         reassign_ids(&mut e); e.set_locked(false);
         if local { e.transform(&mat_translation(inv.as_ref().map_or(delta, |i| mat_apply_dir(i, delta)))); } else { e.transform(&m); localize(&mut e, &inv); }
         r.created.push(e.id().to_string()); list.push(e);

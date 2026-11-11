@@ -49,7 +49,7 @@ export type Op =
   | { op: 'set_layer'; ids: string[]; layer: string }
   | { op: 'make_group'; ids: string[]; name?: string }
   | { op: 'explode'; id: string }
-  | { op: 'add_layer'; name: string; color?: string }
+  | { op: 'add_layer'; name: string; color?: string; visible?: boolean }
   | { op: 'update_layer'; id: string; name?: string; visible?: boolean; color?: string }
   | { op: 'remove_layer'; id: string }
   | { op: 'add_material'; name: string; color: string; opacity?: number }
