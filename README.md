@@ -124,7 +124,7 @@ The unit is taken from the file when it names one (mm, cm, m, in, ft). Export wr
 unit, z up: every face as 3DFACE triangles and every edge as a LINE, on layers named after the tags.
 
 **Right-click** something for its menu: Cut, Copy, Erase, Hide, Lock, Select connected, Select all with the same tag, Make group,
-Make Component, Explode, Edit group, Intersect faces (edges where the selected faces cross others, dividing both),
+Make Component, Explode, Edit group, Intersect faces (edges where the selected faces or groups cross anything else in the model; inside an open group they divide its faces),
 Reverse faces, Soften edges, Unsoften edges, Zoom Selection. Over empty space: Undo, Redo, Paste, Select all, Unhide all, Zoom Extents. Dragging with
 the right button still orbits.
 

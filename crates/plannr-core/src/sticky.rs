@@ -146,18 +146,30 @@ pub fn insert_face(list: &mut Vec<Entity>, nf: Face, r: &mut OpResult) {
     report(list, r);
 }
 
-/// Intersect Faces: where a face of `ids` crosses another face of the container (through it, or ending on it), a
-/// loose edge is drawn along the crossing, and it divides the faces it runs across, as a line drawn there would.
-/// An edge two faces already share, or one that is already drawn, is left alone. False when there was nothing to draw.
-pub fn intersect(list: &mut Vec<Entity>, ids: &[String], r: &mut OpResult) -> bool {
-    let faces: Vec<(&Face, Frame, Region, (P3, P3))> = list.iter().filter_map(face_of).filter(|f| f.outer.len() >= 3)
-        .map(|f| { let fr = Frame::of(&f.outer); let reg = region_in(&fr, f); (f, fr, reg, span(f.outer.iter().copied())) }).collect();
+/// A face that takes part in Intersect Faces without being an entity of the container: one inside a group or a
+/// component, or anywhere else in the model, in the container's coordinates. `owner` is what it came with (the
+/// faces of one group don't cut each other here); `selected` when that is one of the things being intersected.
+pub struct Outsider { pub face: Face, pub owner: String, pub selected: bool }
+
+/// Intersect Faces: where a face of `ids` (or a `selected` one of `others`) crosses another face, of the container
+/// or of `others` (through it, or ending on it), a loose edge is drawn in the container along the crossing, and it
+/// divides the container's faces it runs across, as a line drawn there would. An edge two faces already share, or
+/// one that is already drawn, is left alone. False when there was nothing to draw.
+pub fn intersect(list: &mut Vec<Entity>, ids: &[String], others: &[Outsider], r: &mut OpResult) -> bool {
+    let mut faces: Vec<(&Face, Frame, Region, (P3, P3), Option<&str>, bool)> = vec![];
+    for (f, owner, sel) in list.iter().filter_map(face_of).map(|f| (f, None, ids.contains(&f.id))).chain(others.iter().map(|o| (&o.face, Some(o.owner.as_str()), o.selected))) {
+        if f.outer.len() < 3 || area(&f.outer) < 1e-12 { continue; }
+        let fr = Frame::of(&f.outer); let reg = region_in(&fr, f);
+        faces.push((f, fr, reg, span(f.outer.iter().copied()), owner, sel));
+    }
     let drawn = |a: P3, b: P3| list.iter().any(|e| matches!(e, Entity::Edge(e) if within(e.a, e.b, a, b)));
     let mut cuts: Vec<(P3, P3, String)> = vec![];
     for x in 0..faces.len() {
-        for y in x + 1..faces.len() {
-            let ((f, fa, ra, sa), (g, fb, rb, sb)) = (&faces[x], &faces[y]);
-            if !(ids.contains(&f.id) || ids.contains(&g.id)) || !spans_touch(sa, sb) { continue; }
+        if !faces[x].5 { continue; }
+        for y in 0..faces.len() {
+            if y == x || (faces[y].5 && y < x) { continue; } // (two selected ones meet once)
+            let ((f, fa, ra, sa, oa, _), (_, fb, rb, sb, ob, _)) = (&faces[x], &faces[y]);
+            if (oa.is_some() && oa == ob) || !spans_touch(sa, sb) { continue; }
             let d = cross(fa.n, fb.n); if len(d) < 1e-6 { continue; } // parallel planes
             let d = normalize(d);
             // a point of the line both planes share (the one nearest the origin)

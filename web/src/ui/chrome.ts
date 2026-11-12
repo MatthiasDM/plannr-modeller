@@ -123,8 +123,8 @@ export function showContextMenu(app: App, x: number, y: number) {
     { label: 'Make group', key: 'G', act: () => app.groupSelection() },
     { label: 'Make Component…', act: () => app.makeComponent() },
     ...(has('group') || has('instance') ? [{ label: 'Explode', act: () => app.explodeSelection() }] : []),
-    ...(has('face') ? ['sep' as const, { label: 'Intersect faces', act: () => app.intersectFaces() }, { label: 'Reverse faces', act: () => app.reverseFaces() }] : []),
-    ...(has('face') || has('group') ? [...(has('face') ? [] : ['sep' as const]), { label: 'Soften edges…', act: () => app.softenEdges() }, { label: 'Unsoften edges', act: () => app.softenEdges(0) }] : []),
+    ...(has('face') || has('group') || has('instance') ? ['sep' as const, { label: 'Intersect faces', act: () => app.intersectFaces() }, ...(has('face') ? [{ label: 'Reverse faces', act: () => app.reverseFaces() }] : [])] : []),
+    ...(has('face') || has('group') ? [{ label: 'Soften edges…', act: () => app.softenEdges() }, { label: 'Unsoften edges', act: () => app.softenEdges(0) }] : []),
     'sep', { label: 'Zoom Selection', act: () => app.zoomSelection() },
   ] : [
     { label: 'Undo', key: `${KEY}Z`, act: () => app.undo(), disabled: !app.canUndo }, { label: 'Redo', key: `⇧${KEY}Z`, act: () => app.redo(), disabled: !app.canRedo }, 'sep',

@@ -282,11 +282,12 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
         Op::Insert { entities, delta, group, merge, local } => insert(doc, entities, *delta, group.as_deref(), *merge, *local),
         Op::IntersectFaces { ids } => {
             let ids = bare_ids(ids);
-            let Some(first) = ids.first() else { return err("intersect_faces needs faces") };
+            let Some(first) = ids.first() else { return err("intersect_faces needs faces or groups") };
+            let others = intersect_outsiders(doc, first, &ids).ok_or_else(|| OpError(format!("no entity {first}")))?;
             let (list, _) = doc.container_mut(first).ok_or_else(|| OpError(format!("no entity {first}")))?;
-            if !ids.iter().any(|id| list.iter().any(|e| e.id() == id && matches!(e, Entity::Face(_)))) { return err("intersect_faces works on drawn faces"); }
+            if !ids.iter().any(|id| list.iter().any(|e| e.id() == id && matches!(e, Entity::Face(_) | Entity::Group(_) | Entity::Instance(_)))) { return err("intersect_faces works on drawn faces, groups and components"); }
             let mut r = OpResult::default();
-            if !crate::sticky::intersect(list, &ids, &mut r) { return err("these faces do not cross any other face (edges they share, and crossings already drawn, are left alone)"); }
+            if !crate::sticky::intersect(list, &ids, &others, &mut r) { return err("these faces do not cross any other face (edges they share, and crossings already drawn, are left alone)"); }
             Ok(r)
         }
         Op::Erase { ids } => {
@@ -970,6 +971,55 @@ fn transform_ids(doc: &mut Document, ids: &[String], world: &Mat4, reg: &Registr
         r.entities.push(e.clone());
     }
     Ok(r)
+}
+
+/// For Intersect Faces in the container of `first`: every face of the model that is not an entity of that
+/// container, in the container's coordinates. Those inside a group or a component of the container come with it
+/// (`selected` when it is one of `ids`); the rest of the model is there to be crossed. Hidden things and the
+/// faces on tags that are switched off stay out of it.
+fn intersect_outsiders(doc: &Document, first: &str, ids: &[String]) -> Option<Vec<crate::sticky::Outsider>> {
+    use crate::sticky::Outsider;
+    // where the container is: its place in the world, and the group it is the inside of (none: the top level)
+    fn locate(list: &[Entity], id: &str, m: Mat4, gid: Option<&str>) -> Option<(Mat4, Option<String>)> {
+        if list.iter().any(|e| e.id() == id) { return Some((m, gid.map(|s| s.to_string()))); }
+        list.iter().find_map(|e| if let Entity::Group(g) = e { locate(&g.entities, id, mat_mul(&m, &g.transform), Some(&g.id)) } else { None })
+    }
+    let (cm, cg) = locate(&doc.entities, first, mat_identity(), None)?;
+    let inv = mat_inverse(&cm);
+    let off: Vec<&str> = doc.layers.iter().filter(|l| !l.visible).map(|l| l.id.as_str()).collect();
+    #[derive(Clone)]
+    enum Place { Outside, Container, Inside(String, bool) }
+    struct Ctx<'a> { doc: &'a Document, cg: Option<String>, ids: &'a [String], inv: Mat4, off: Vec<&'a str>, out: Vec<Outsider> }
+    fn walk(c: &mut Ctx, list: &[Entity], m: &Mat4, place: &Place, depth: usize) {
+        for e in list {
+            if e.hidden() || depth > 32 { continue; }
+            let inner = |c: &Ctx| match place {
+                Place::Outside => if c.cg.as_deref() == Some(e.id()) { Place::Container } else { Place::Outside },
+                Place::Container => Place::Inside(e.id().to_string(), c.ids.iter().any(|i| i == e.id())),
+                Place::Inside(..) => place.clone(),
+            };
+            match e {
+                Entity::Face(f) => {
+                    let (owner, selected) = match place { Place::Container => continue, Place::Outside => (String::new(), false), Place::Inside(o, s) => (o.clone(), *s) };
+                    if c.off.contains(&f.layer.as_str()) { continue; }
+                    let rel = mat_mul(&c.inv, m);
+                    let mut face = f.clone();
+                    for p in face.outer.iter_mut().chain(face.holes.iter_mut().flatten()) { *p = mat_apply(&rel, *p); }
+                    c.out.push(Outsider { face, owner, selected });
+                }
+                Entity::Group(g) => { let p = inner(c); walk(c, &g.entities, &mat_mul(m, &g.transform), &p, depth + 1); }
+                Entity::Instance(i) => {
+                    let doc = c.doc; let Some(def) = doc.component(&i.definition) else { continue };
+                    let p = match inner(c) { Place::Container => Place::Outside, p => p }; // (an instance is never the container)
+                    walk(c, &def.entities, &mat_mul(m, &i.transform), &p, depth + 1);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut c = Ctx { doc, cg: cg.clone(), ids, inv, off, out: vec![] };
+    walk(&mut c, &doc.entities, &mat_identity(), &if cg.is_none() { Place::Container } else { Place::Outside }, 0);
+    Some(c.out)
 }
 
 /// Move, turn or scale faces, edges or corners with what is attached to them (see `sticky::stretch`). `points`

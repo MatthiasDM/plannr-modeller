@@ -60,6 +60,96 @@ fn a_face_standing_on_another_cuts_it_and_the_edges_of_a_box_are_left_alone() {
     assert!(try_intersect(&mut doc, &all.iter().collect::<Vec<_>>()).is_none() && edges(&doc) == 0 && faces(&doc).len() == 6, "faces that only share edges do not cross");
 }
 
+/// A box from `a` to `b` on the level of `a`, `h` high, as a group of its own.
+fn boxed(doc: &mut Document, a: P3, b: P3, h: f64) -> String {
+    let base = rect(doc, a, b, UP);
+    apply(doc, &Op::PushPull { face: base, distance: h, new_face: false }, &reg()).unwrap();
+    let ids: Vec<String> = doc.entities.iter().filter(|e| matches!(e, Entity::Face(_))).map(|e| e.id().to_string()).collect();
+    apply(doc, &Op::MakeGroup { ids, name: None }, &reg()).unwrap().created[0].clone()
+}
+fn group<'a>(doc: &'a Document, id: &str) -> &'a plannr_core::model::Group { match doc.find(id).unwrap() { Entity::Group(g) => g, _ => panic!("not a group") } }
+fn loose(list: &[Entity]) -> Vec<(P3, P3)> { list.iter().filter_map(|e| if let Entity::Edge(e) = e { Some((e.a, e.b)) } else { None }).collect() }
+fn has_edge(list: &[(P3, P3)], a: P3, b: P3) -> bool { list.iter().any(|(p, q)| (dist(*p, a) < 1e-6 && dist(*q, b) < 1e-6) || (dist(*p, b) < 1e-6 && dist(*q, a) < 1e-6)) }
+
+#[test]
+fn two_groups_that_cross_leave_their_crossing_beside_them() {
+    let mut doc = Document::default();
+    let a = boxed(&mut doc, [0.0, 0.0, 0.0], [2.0, 0.0, 2.0], 2.0);
+    let b = boxed(&mut doc, [1.0, 0.5, 1.0], [3.0, 0.5, 3.0], 2.0);
+    let r = intersect(&mut doc, &[&a, &b]);
+    // the outline of what the two boxes share: six edges round, drawn beside the groups
+    let e = loose(&doc.entities);
+    assert_eq!(e.len(), 6, "{e:?}");
+    assert_eq!(r.created.len(), 6);
+    assert!(has_edge(&e, [2.0, 0.5, 1.0], [2.0, 2.0, 1.0]) && has_edge(&e, [1.0, 0.5, 2.0], [1.0, 2.0, 2.0]), "the two upright ones");
+    assert!(has_edge(&e, [1.0, 2.0, 1.0], [2.0, 2.0, 1.0]) && has_edge(&e, [1.0, 2.0, 1.0], [1.0, 2.0, 2.0]), "on the top of the first");
+    assert!(has_edge(&e, [2.0, 0.5, 1.0], [2.0, 0.5, 2.0]) && has_edge(&e, [1.0, 0.5, 2.0], [2.0, 0.5, 2.0]), "on the bottom of the second");
+    // the groups themselves are as they were
+    assert!(group(&doc, &a).entities.len() == 6 && group(&doc, &b).entities.len() == 6 && r.modified.is_empty());
+    // again: everything is drawn already
+    assert!(try_intersect(&mut doc, &[&a, &b]).is_none() && loose(&doc.entities).len() == 6);
+    // one group alone crosses the rest of the model just the same
+    let mut doc = Document::default();
+    let a = boxed(&mut doc, [0.0, 0.0, 0.0], [2.0, 0.0, 2.0], 2.0);
+    let _b = boxed(&mut doc, [1.0, 0.5, 1.0], [3.0, 0.5, 3.0], 2.0);
+    intersect(&mut doc, &[&a]);
+    assert_eq!(loose(&doc.entities).len(), 6);
+}
+
+#[test]
+fn a_face_inside_a_group_is_cut_by_what_crosses_it_from_outside() {
+    let mut doc = Document::default();
+    let a = boxed(&mut doc, [0.0, 0.0, 0.0], [2.0, 0.0, 2.0], 2.0);
+    apply(&mut doc, &Op::Move { ids: vec![a.clone()], delta: [10.0, 0.0, 0.0] }, &reg()).unwrap();
+    let b = boxed(&mut doc, [11.0, 0.5, 1.0], [13.0, 0.5, 3.0], 2.0);
+    let inv = mat_inverse(&group(&doc, &a).transform);
+    let top = group(&doc, &a).entities.iter().find_map(|e| match e { Entity::Face(f) if f.outer.iter().all(|p| (mat_apply(&group(&doc, &a).transform, *p)[1] - 2.0).abs() < 1e-9) => Some(f.id.clone()), _ => None }).unwrap();
+    let r = intersect(&mut doc, &[&top]);
+    // two edges inside the group, in its own coordinates, cut the corner out of its top
+    let g = group(&doc, &a);
+    let e = loose(&g.entities);
+    assert_eq!(e.len(), 2, "{e:?}");
+    assert!(has_edge(&e, mat_apply(&inv, [11.0, 2.0, 1.0]), mat_apply(&inv, [12.0, 2.0, 1.0])) && has_edge(&e, mat_apply(&inv, [11.0, 2.0, 1.0]), mat_apply(&inv, [11.0, 2.0, 2.0])));
+    assert_eq!(g.entities.iter().filter(|e| matches!(e, Entity::Face(_))).count(), 7, "the top is two faces now");
+    assert!(r.modified.contains(&top));
+    assert!(loose(&doc.entities).is_empty() && group(&doc, &b).entities.len() == 6, "nothing lands outside the group, the other box is untouched");
+}
+
+#[test]
+fn hidden_things_and_the_faces_of_one_group_do_not_cut() {
+    // two faces that cross inside one group: selecting the group does not cut them (open it for that)
+    let mut doc = Document::default();
+    let h = rect(&mut doc, [-2.0, 0.0, -2.0], [2.0, 0.0, 2.0], UP);
+    let v = rect(&mut doc, [0.0, -1.0, -2.0], [0.0, 1.0, 2.0], X);
+    let g = apply(&mut doc, &Op::MakeGroup { ids: vec![h, v], name: None }, &reg()).unwrap().created[0].clone();
+    assert!(try_intersect(&mut doc, &[&g]).is_none());
+    // a hidden box is not crossed
+    let mut doc = Document::default();
+    let a = boxed(&mut doc, [0.0, 0.0, 0.0], [2.0, 0.0, 2.0], 2.0);
+    let b = boxed(&mut doc, [1.0, 0.5, 1.0], [3.0, 0.5, 3.0], 2.0);
+    apply(&mut doc, &Op::SetHidden { ids: vec![b.clone()], hidden: true }, &reg()).unwrap();
+    assert!(try_intersect(&mut doc, &[&a]).is_none() && loose(&doc.entities).is_empty());
+    apply(&mut doc, &Op::SetHidden { ids: vec![b], hidden: false }, &reg()).unwrap();
+    assert!(try_intersect(&mut doc, &[&a]).is_some());
+}
+
+#[test]
+fn a_component_is_crossed_and_crosses_like_a_group() {
+    let mut doc = Document::default();
+    let a = boxed(&mut doc, [0.0, 0.0, 0.0], [2.0, 0.0, 2.0], 2.0);
+    let b = boxed(&mut doc, [1.0, 0.5, 1.0], [3.0, 0.5, 3.0], 2.0);
+    let inst = apply(&mut doc, &op(serde_json::json!({ "op": "make_component", "ids": [b], "name": "Block" })), &reg()).unwrap().created[0].clone();
+    assert!(matches!(doc.find(&inst), Some(Entity::Instance(_))));
+    intersect(&mut doc, &[&a]);
+    assert_eq!(loose(&doc.entities).len(), 6, "the group crosses the component");
+    let mut doc2 = Document::default();
+    let _a = boxed(&mut doc2, [0.0, 0.0, 0.0], [2.0, 0.0, 2.0], 2.0);
+    let b = boxed(&mut doc2, [1.0, 0.5, 1.0], [3.0, 0.5, 3.0], 2.0);
+    let inst = apply(&mut doc2, &op(serde_json::json!({ "op": "make_component", "ids": [b], "name": "Block" })), &reg()).unwrap().created[0].clone();
+    intersect(&mut doc2, &[&inst]);
+    assert_eq!(loose(&doc2.entities).len(), 6, "the component crosses the group");
+}
+
 #[test]
 fn push_pull_with_a_new_face_builds_on_the_solid() {
     let mut doc = Document::default();

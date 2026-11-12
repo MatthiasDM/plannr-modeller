@@ -614,11 +614,13 @@ export class App {
     const was = `${lengthUnit.name}/${lengthUnit.digits}`; setLengthUnit(this.doc.units, this.doc.precision as number | undefined);
     if (was !== `${lengthUnit.name}/${lengthUnit.digits}`) this.scene.relabel();
   }
-  /** Intersect Faces: edges where the selected faces cross other faces of the same shape, dividing both. */
+  /** Intersect Faces: edges where the selected faces, and the faces inside the selected groups and components,
+   *  cross anything else in the model. The edges land beside the selection (in the open group, or at the top
+   *  level) and divide the faces there that they run across; what is inside a group stays as it is. */
   async intersectFaces() {
-    const faces = [...this.selection].filter(id => findEntity(this.doc, id)?.kind === 'face');
-    if (!faces.length) { this.toast('Intersect Faces works on drawn faces: select them first (open a group to reach the faces inside it).', 5000); return; }
-    const r = await this.commitOps([{ op: 'intersect_faces', ids: faces }], 'Intersect faces');
+    const ids = [...this.selection].filter(id => ['face', 'group', 'instance'].includes(findEntity(this.doc, id)?.kind ?? ''));
+    if (!ids.length) { this.toast('Intersect Faces works on drawn faces, groups and components: select them first.', 5000); return; }
+    const r = await this.commitOps([{ op: 'intersect_faces', ids }], 'Intersect faces');
     const edges = (r[0]?.created ?? []).filter(id => findEntity(this.doc, id)?.kind === 'edge'); if (edges.length) this.select(edges);
   }
   /** Soften Edges: the selected faces (and those inside selected groups) run on smoothly into each other where
