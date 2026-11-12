@@ -6,7 +6,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use plannr_core::{export_glb, CompileOptions, Op};
+use plannr_core::{export_glb_textured, CompileOptions, Op};
 use serde_json::{json, Map, Value};
 
 use crate::error::ApiError;
@@ -57,6 +57,7 @@ fn tools(state: &Shared) -> Vec<ToolDef> {
     let layer = || s("Layer id or name (default: the first layer)");
     let group = || s("Id of a group to draw inside (points stay in world coordinates); default: the top level");
     let material = || s("Material id or name");
+    let texture = |d: &str| json!({ "type": ["object", "null"], "description": d, "properties": { "image": s("A data: URL holding a PNG or JPEG (data:image/png;base64,…), at most about 1 MB"), "width": n("Metres one copy of the image covers across (default 1)"), "height": n("Metres it covers up (default: the image's own proportions)") } });
     let mut t = vec![
         // ---- projects -------------------------------------------------------------
         tool("list_projects", "List Plannr projects (id, name, version, entity count).", json!({}), &[], Kind::Builtin("list_projects")),
@@ -104,8 +105,8 @@ fn tools(state: &Shared) -> Vec<ToolDef> {
         tool("add_layer", "Add a layer (tag).", json!({ "name": s("Layer name"), "color": s("#rrggbb"), "visible": b("false adds it switched off (default true)") }), &["name"], Kind::Op("add_layer")),
         tool("update_layer", "Rename, hide/show or recolour a layer.", json!({ "id": s("Layer id or name"), "name": s("New name"), "visible": b("Visible"), "color": s("#rrggbb") }), &["id"], Kind::Op("update_layer")),
         tool("remove_layer", "Remove a layer; its entities move to the first layer.", json!({ "id": s("Layer id or name") }), &["id"], Kind::Op("remove_layer")),
-        tool("add_material", "Add a material.", json!({ "name": s("Name"), "color": s("#rrggbb"), "opacity": n("0–1 (default 1)") }), &["name", "color"], Kind::Op("add_material")),
-        tool("update_material", "Change a material's name, colour or opacity.", json!({ "id": s("Material id or name"), "name": s("New name"), "color": s("#rrggbb"), "opacity": n("0–1") }), &["id"], Kind::Op("update_material")),
+        tool("add_material", "Add a material: a colour, or with `texture` an image laid over its faces like tiles. The image runs level across each face and up its slope, measured from the origin of the group the face is in, so it continues across faces in one plane and moves with its group; the colour shows where textures are not drawn (Monochrome, exports without images).", json!({ "name": s("Name"), "color": s("#rrggbb"), "opacity": n("0–1 (default 1)"), "texture": texture("Image and tile size") }), &["name", "color"], Kind::Op("add_material")),
+        tool("update_material", "Change a material's name, colour, opacity or texture. `texture`: an object sets the image and/or its size (a `width` alone keeps the proportions), `null` takes the texture away.", json!({ "id": s("Material id or name"), "name": s("New name"), "color": s("#rrggbb"), "opacity": n("0–1"), "texture": texture("Image and/or tile size; null removes the texture") }), &["id"], Kind::Op("update_material")),
         tool("add_guide", "Add a guide point, or an infinite guide line when `direction` is given.", json!({ "point": pt("Point"), "direction": pt("Line direction"), "layer": layer() }), &["point"], Kind::Op("add_guide")),
         tool("add_dimension", "Add a dimension. Linear (default): between two points, drawn `offset` away from them. `style` \"radius\": `a` is the centre and `b` a point on the curve; \"diameter\": `a` and `b` are opposite points of the circle; for both, `offset` leads from `b` to the label. \"angle\": `a` is the corner, `b` a point on the first leg and `offset` the vector from the corner to a point on the second; the arc is drawn as far from the corner as `b` is, and reads the angle between the legs in degrees.", json!({ "a": pt("Start"), "b": pt("End"), "offset": pt("Offset vector for the dimension line (radius, diameter: from `b` to the label; angle: from the corner along the second leg)"), "style": s("radius | diameter | angle (omit for a linear dimension)"), "layer": layer() }), &["a", "b", "offset"], Kind::Op("add_dimension")),
         tool("text3d", "3D Text: the letters of `text` as geometry, in a new group named after the text (`created`). Flat faces by default; with `depth` each letter is a closed solid standing that far out of its plane (usable with `boolean`, e.g. subtract it to engrave). `position` is the left end of the first line's baseline (the middle or right end with `align`); the letters face along `normal` (default [0,1,0]: lying on the ground) and read along `u` (default: level, so text on a wall stands upright; along x on the ground). `height` is the height of the capitals. Fonts: sans (default) and serif, each also `bold`. A new line in the text starts a new line of letters below the first.", json!({ "text": s("The text; \\n starts a new line"), "position": pt("Left end of the first line's baseline (default the origin)"), "height": n("Height of the capitals in metres (default 0.25)"), "depth": n("How far the letters stand out, in metres (default 0: flat faces)"), "font": { "type": "string", "enum": ["sans", "serif"], "description": "Typeface (default sans)" }, "bold": b("Bold letters"), "normal": pt("The direction the letters face (default up: text lying on the ground)"), "u": pt("Reading direction (default: level)"), "align": { "type": "string", "enum": ["left", "center", "right"], "description": "Which end of each line sits at `position` (default left)" }, "layer": layer(), "material": s("Material id, name or #rrggbb for the letters"), "group": group() }), &["text"], Kind::Op("text3d")),
@@ -271,6 +272,12 @@ async fn builtin(s: &Shared, name: &str, id: &str, args: &Map<String, Value>) ->
             let mut doc = serde_json::to_value(s.document(id).map_err(api)?).map_err(|e| e.to_string())?;
             let include = args.get("includeEntities").and_then(|v| v.as_bool()).unwrap_or(true);
             if !include { doc["entityCount"] = json!(doc["entities"].as_array().map(|a| a.len()).unwrap_or(0)); doc["entities"] = json!("(omitted)"); }
+            // a texture image is a megabyte of text nobody reads: say what it is instead
+            for m in doc["materials"].as_array_mut().into_iter().flatten() {
+                let Some(image) = m["texture"]["image"].as_str() else { continue };
+                let note = format!("({}, {} KB: left out)", plannr_core::texture::mime(image).unwrap_or("image"), image.len() * 3 / 4 / 1024);
+                m["texture"]["image"] = json!(note);
+            }
             let p = s.db.summary(id).map_err(api)?;
             Ok(text(json!({ "id": p.id, "name": p.name, "document": doc })))
         }
@@ -306,7 +313,7 @@ async fn builtin(s: &Shared, name: &str, id: &str, args: &Map<String, Value>) ->
         "export_glb" => {
             let p = s.db.get(id).map_err(api)?;
             let scene = s.compile(id, &CompileOptions { ignore_sections: true, ..Default::default() }).map_err(api)?;
-            let bytes = export_glb(&scene);
+            let bytes = export_glb_textured(&scene, &s.document(id).map_err(api)?.materials);
             let safe: String = p.name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
             let path = args.get("path").and_then(|v| v.as_str()).map(|p| p.to_string()).unwrap_or_else(|| format!("data/exports/{safe}.glb"));
             if let Some(dir) = std::path::Path::new(&path).parent() { std::fs::create_dir_all(dir).map_err(|e| e.to_string())?; }

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { CompiledScene } from './api';
 import { fmtM, fmtDeg, type Vec3 } from './model';
+import { textureUrl } from './textures';
 
 export const V = (p: Vec3) => new THREE.Vector3(p[0], p[1], p[2]);
 /** The arc of an angle: points at distance `r` from the corner `c`, from the direction `u` round to `w` (unit vectors). */
@@ -273,12 +274,34 @@ export class Viewport {
     }
     if (this.backLines) this.backLines.visible = want;
   }
+  /** The texture image of each material that has one, and the GPU texture made of each image (shared by
+   *  every mesh that shows it). */
+  private imageOf = new Map<string, string>(); private textures = new Map<string, THREE.Texture>();
+  /** The document's materials: call before the scene compiled from that document is set. */
+  setMaterials(materials: { id: string; texture?: { image: string } | null }[]) {
+    this.imageOf = new Map(materials.filter(m => m.texture?.image).map(m => [m.id, m.texture!.image]));
+    const used = new Set(this.imageOf.values());
+    for (const [image, t] of this.textures) if (!used.has(image)) { t.dispose(); this.textures.delete(image); }
+  }
+  private textureOf(material: string): THREE.Texture | null {
+    const image = this.imageOf.get(material); if (!image) return null;
+    let t = this.textures.get(image);
+    if (!t) {
+      t = new THREE.TextureLoader().load(textureUrl(image)); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy()); this.textures.set(image, t);
+    }
+    return t;
+  }
+
   private applyFaceStyle(mesh: THREE.Mesh) {
-    const d = this.groupData.get(mesh); const mat = mesh.material as THREE.MeshLambertMaterial; const base = mesh.userData.base as { color: string; opacity: number } | undefined; if (!d || !base) return;
+    const d = this.groupData.get(mesh); const mat = mesh.material as THREE.MeshLambertMaterial; const base = mesh.userData.base as { color: string; opacity: number; map?: THREE.Texture | null } | undefined; if (!d || !base) return;
     const ghost = d.material === '__hidden'; const style = ghost ? 'shaded' : this.faceStyle; const glass = base.opacity < 1;
     mesh.visible = ghost || style !== 'wireframe';
     mat.emissive.set(style === 'hiddenline' ? 0xffffff : 0x000000);
-    mat.color.set(style === 'hiddenline' ? 0x000000 : style === 'monochrome' ? (d.back ? '#b7c1cc' : '#f4f4f2') : base.color);
+    // a texture shows as it is (not tinted by the colour) wherever the materials show
+    const map = !ghost && (style === 'shaded' || style === 'xray') ? base.map ?? null : null;
+    if (mat.map !== map) { mat.map = map; mat.needsUpdate = true; }
+    mat.color.set(style === 'hiddenline' ? 0x000000 : style === 'monochrome' ? (d.back ? '#b7c1cc' : '#f4f4f2') : map ? '#ffffff' : base.color);
     const see = style === 'xray' || glass;
     mat.opacity = style === 'xray' ? Math.min(base.opacity, 0.45) : base.opacity;
     if (mat.transparent !== see) { mat.transparent = see; mat.needsUpdate = true; }
@@ -310,7 +333,7 @@ export class Viewport {
         d.ranges.forEach(([s, n], i) => { if (!gone(d.ids[i])) for (let k = s; k < s + n; k++) sub.push(src[k]); });
         mesh.visible = false; this.swapped.add(mesh);
         if (!sub.length) continue;
-        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', mesh.geometry.getAttribute('position')); const nrm = mesh.geometry.getAttribute('normal'); if (nrm) geo.setAttribute('normal', nrm); geo.setIndex(sub);
+        const geo = new THREE.BufferGeometry(); geo.setAttribute('position', mesh.geometry.getAttribute('position')); const nrm = mesh.geometry.getAttribute('normal'); if (nrm) geo.setAttribute('normal', nrm); const uv = mesh.geometry.getAttribute('uv'); if (uv) geo.setAttribute('uv', uv); geo.setIndex(sub);
         const m = new THREE.Mesh(geo, mesh.material); m.castShadow = mesh.castShadow; m.receiveShadow = mesh.receiveShadow; m.renderOrder = mesh.renderOrder; this.previewGroup.add(m);
       }
       if (this.edgeLines && this.edgeLines.visible && this.edgeIds.some(gone)) {
@@ -350,9 +373,11 @@ export class Viewport {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(g.positions, 3));
     if (g.normals?.length === g.positions.length) geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.normals, 3)); else geo.computeVertexNormals();
     geo.setIndex(Array.isArray(g.indices) ? g.indices : new THREE.BufferAttribute(g.indices as Uint32Array, 1)); // a patched group holds typed arrays
+    const map = g.uvs && g.uvs.length / 2 === g.positions.length / 3 ? this.textureOf(g.material) : null;
+    if (map) geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uvs!, 2));
     const transparent = g.opacity < 1;
     const mesh = new THREE.Mesh(geo, this.clip(new THREE.MeshLambertMaterial({ color: new THREE.Color(g.color), transparent, opacity: g.opacity, depthWrite: !transparent, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: 4 }))); // constant offset: edges win, faces never sink behind nearby surfaces at grazing angles
-    mesh.castShadow = !transparent; mesh.receiveShadow = true; mesh.userData.base = { color: g.color, opacity: g.opacity };
+    mesh.castShadow = !transparent; mesh.receiveShadow = true; mesh.userData.base = { color: g.color, opacity: g.opacity, map };
     return mesh;
   }
 
@@ -913,21 +938,23 @@ type Group = CompiledScene['groups'][number];
 /** `g` without the triangles of the ids `drop` matches (null: keep all), with `add` appended: compacted typed arrays. */
 function mergeGroup(g: Group, drop: ((id: string) => boolean) | null, add: Group | undefined): Group {
   const P = g.positions, N = g.normals, I = g.indices; const hasN = N.length === P.length;
+  const U = g.uvs ?? [], aU = add?.uvs ?? [], hasU = U.length / 2 === P.length / 3 && (!add || aU.length / 2 === add.positions.length / 3); // textured: two coordinates per corner, in what stays and in what comes
   const remap = new Int32Array(P.length / 3).fill(-1); let nv = 0;
   const keep: number[] = []; let ni = 0;
   for (let r = 0; r < g.ids.length; r++) { if (drop?.(g.ids[r])) continue; keep.push(r); const [st, n] = g.idRanges[r]; ni += n; for (let k = st; k < st + n; k++) if (remap[I[k]] < 0) remap[I[k]] = nv++; }
   const aP = add?.positions ?? [], aN = add?.normals ?? [], aI = add?.indices ?? [], aV = aP.length / 3;
-  const pos = new Float32Array((nv + aV) * 3), nrm = new Float32Array((nv + aV) * 3), idx = new Uint32Array(ni + aI.length);
-  for (let v = 0; v < remap.length; v++) { const t = remap[v]; if (t < 0) continue; pos[t * 3] = P[v * 3]; pos[t * 3 + 1] = P[v * 3 + 1]; pos[t * 3 + 2] = P[v * 3 + 2]; if (hasN) { nrm[t * 3] = N[v * 3]; nrm[t * 3 + 1] = N[v * 3 + 1]; nrm[t * 3 + 2] = N[v * 3 + 2]; } }
+  const pos = new Float32Array((nv + aV) * 3), nrm = new Float32Array((nv + aV) * 3), idx = new Uint32Array(ni + aI.length), uvs = new Float32Array(hasU ? (nv + aV) * 2 : 0);
+  for (let v = 0; v < remap.length; v++) { const t = remap[v]; if (t < 0) continue; pos[t * 3] = P[v * 3]; pos[t * 3 + 1] = P[v * 3 + 1]; pos[t * 3 + 2] = P[v * 3 + 2]; if (hasN) { nrm[t * 3] = N[v * 3]; nrm[t * 3 + 1] = N[v * 3 + 1]; nrm[t * 3 + 2] = N[v * 3 + 2]; } if (hasU) { uvs[t * 2] = U[v * 2]; uvs[t * 2 + 1] = U[v * 2 + 1]; } }
   const ids: string[] = []; const ranges: [number, number][] = []; let at = 0;
   for (const r of keep) { const [st, n] = g.idRanges[r]; for (let k = 0; k < n; k++) idx[at + k] = remap[I[st + k]]; ids.push(g.ids[r]); ranges.push([at, n]); at += n; }
   if (add) {
     pos.set(aP as ArrayLike<number>, nv * 3);
     if (aN.length === aP.length) nrm.set(aN as ArrayLike<number>, nv * 3);
+    if (hasU) uvs.set(aU as ArrayLike<number>, nv * 2);
     for (let k = 0; k < aI.length; k++) idx[at + k] = aI[k] + nv;
     add.ids.forEach((id, j) => { const [st, n] = add.idRanges[j]; ids.push(id); ranges.push([at + st, n]); });
   }
-  return { ...g, positions: pos as unknown as number[], normals: nrm as unknown as number[], indices: idx as unknown as number[], ids, idRanges: ranges };
+  return { ...g, positions: pos as unknown as number[], normals: nrm as unknown as number[], uvs: hasU ? uvs as unknown as number[] : undefined, indices: idx as unknown as number[], ids, idRanges: ranges };
 }
 
 /** The part of segment a–b that every plane keeps (three.js: distance >= 0), or null. */

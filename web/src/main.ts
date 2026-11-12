@@ -15,6 +15,7 @@ import { Tray } from './ui/tray';
 import { renderMenubar, renderToolbar, renderHud, renderToolOptions, renderWelcome, layoutToolbar, showContextMenu } from './ui/chrome';
 import { registerPlugin, getPlugins, partsFor, onPlugin, type PluginHost, type CameraController } from './plugins';
 import { promptText, confirmDialog, installTooltips } from './ui/dialog';
+import { keepTextureUrls } from './textures';
 
 /** The page itself never zooms: pinches and double-taps belong to the 3D view (which handles its own
  *  pinch). The viewport meta and `touch-action` cover most browsers; iOS Safari ignores both for pinch,
@@ -316,7 +317,7 @@ export class App {
     const p = await api.getProject(id);
     this.projectId = p.id; this.projectName = p.name; localStorage.setItem('plannr.lastProject', p.id);
     history.replaceState(null, '', `?project=${p.id}`);
-    this.doc = p.document; this.selection.clear(); this.enteredGroup = null;
+    this.doc = p.document; this.selection.clear(); this.enteredGroup = null; this.useMaterials();
     this.options.layer = this.doc.layers[0]?.id ?? 'layer0'; this.options.material = this.doc.materials[0]?.id ?? 'default';
     this.live?.close(); this.live = new Live(p.id);
     this.knownVersion = p.document.version;
@@ -344,7 +345,7 @@ export class App {
     try {
       const [p, c, h] = await Promise.all([api.getProject(this.projectId), patch ? null : api.compile(this.projectId, this.hiddenGeometry), api.history(this.projectId)]);
       if (seq !== this.compileSeq) return;
-      this.doc = p.document; this.projectName = p.name; this.historyList = h; this.knownVersion = Math.max(this.knownVersion, p.document.version);
+      this.doc = p.document; this.projectName = p.name; this.historyList = h; this.knownVersion = Math.max(this.knownVersion, p.document.version); this.useMaterials();
       const cur = h.findIndex(x => x.version === this.doc.version); this.canUndo = h.length > 0; this.canRedo = h.length > 0; void cur;
       if (c) this.applyCompiled(c);
       if (patch?.reconcile) this.reconcileSoon();
@@ -356,6 +357,8 @@ export class App {
     } catch (e: any) { this.online = false; this.setConn(false); this.toast(`Engine unavailable: ${e.message}`); }
     this.refreshUI(); this.emit('changed', this.doc);
   }
+  /** Hand the document's texture images to the viewer (before the scene compiled from it is drawn). */
+  private useMaterials() { this.scene.setMaterials(this.doc.materials); keepTextureUrls(this.doc.materials.flatMap(m => m.texture ? [m.texture.image] : [])); }
   private applyCompiled(c: CompiledScene) { this.scene.setCompiled(c); this.scene.highlight(this.selection); }
   /** Plugin geometry can depend on neighbours a change didn't touch (a wall's corners): once the user pauses,
    *  fetch the whole scene in the background and swap it in if nothing happened meanwhile. */

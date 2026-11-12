@@ -2,7 +2,9 @@
 export type Vec3 = [number, number, number];
 
 export interface Layer { id: string; name: string; visible: boolean; color: string }
-export interface Material { id: string; name: string; color: string; opacity: number }
+/** The image of a material: a data: URL (PNG or JPEG), and the metres one copy of it covers. */
+export interface Texture { image: string; width: number; height: number }
+export interface Material { id: string; name: string; color: string; opacity: number; texture?: Texture | null }
 
 interface Base { id: string; layer: string; [extra: string]: unknown }
 export interface FaceEntity extends Base { kind: 'face'; outer: Vec3[]; holes: Vec3[][]; material?: string | null; backMaterial?: string | null; /** Softened: degrees up to which it runs on smoothly into a neighbour. */ smooth?: number }
@@ -52,8 +54,8 @@ export type Op =
   | { op: 'add_layer'; name: string; color?: string; visible?: boolean }
   | { op: 'update_layer'; id: string; name?: string; visible?: boolean; color?: string }
   | { op: 'remove_layer'; id: string }
-  | { op: 'add_material'; name: string; color: string; opacity?: number }
-  | { op: 'update_material'; id: string; name?: string; color?: string; opacity?: number }
+  | { op: 'add_material'; name: string; color: string; opacity?: number; texture?: Partial<Texture> }
+  | { op: 'update_material'; id: string; name?: string; color?: string; opacity?: number; /** null takes the texture away; a width alone keeps the proportions */ texture?: Partial<Texture> | null }
   | { op: 'add_guide'; point: Vec3; direction?: Vec3 }
   | { op: 'add_dimension'; a: Vec3; b: Vec3; offset: Vec3; style?: 'radius' | 'diameter' | 'angle' }
   | { op: 'add_text'; position?: Vec3; text: string; anchor?: Vec3; screen?: [number, number] }

@@ -14,11 +14,12 @@ pub mod slice;
 pub mod solid;
 pub mod sticky;
 pub mod text3d;
+pub mod texture;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use compile::{compile, CompileOptions, CompiledScene};
-pub use gltf::export_glb;
+pub use gltf::{export_glb, export_glb_textured};
 pub use history::History;
 pub use model::{Document, Entity};
 pub use ops::{apply, apply_many, Op, OpResult};

@@ -33,6 +33,17 @@ pub struct Turn { pub origin: P3, pub axis: P3, pub angle: f64 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resize { pub origin: P3, pub factors: P3 }
 
+/// The texture of a material as `add_material` and `update_material` take it: the image (a `data:` URL holding
+/// a PNG or JPEG) and the size in metres one copy of it covers. Without `height` the image keeps its proportions.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TextureArg {
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub height: Option<f64>,
+}
+/// A field that tells "not given" (leave as it is) from `null` (take it away).
+fn given<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<Option<T>>, D::Error> { Option::<T>::deserialize(d).map(Some) }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
@@ -80,8 +91,10 @@ pub enum Op {
     AddLayer { name: String, #[serde(default)] color: Option<String>, #[serde(default)] visible: Option<bool> },
     UpdateLayer { id: String, #[serde(default)] name: Option<String>, #[serde(default)] visible: Option<bool>, #[serde(default)] color: Option<String> },
     RemoveLayer { id: String },
-    AddMaterial { name: String, color: String, #[serde(default)] opacity: Option<f64> },
-    UpdateMaterial { id: String, #[serde(default)] name: Option<String>, #[serde(default)] color: Option<String>, #[serde(default)] opacity: Option<f64> },
+    AddMaterial { name: String, color: String, #[serde(default)] opacity: Option<f64>, #[serde(default, skip_serializing_if = "Option::is_none")] texture: Option<TextureArg> },
+    /// `texture`: an object changes the image and/or its size (a `width` alone keeps the proportions), `null`
+    /// takes the texture away, leaving it out keeps it.
+    UpdateMaterial { id: String, #[serde(default)] name: Option<String>, #[serde(default)] color: Option<String>, #[serde(default)] opacity: Option<f64>, #[serde(default, deserialize_with = "given", skip_serializing_if = "Option::is_none")] texture: Option<Option<TextureArg>> },
     AddGuide { point: P3, #[serde(default)] direction: Option<P3>, #[serde(default)] layer: Option<String> },
     /// `style`: "radius" (`a` the centre, `b` on the curve) or "diameter" (`a` and `b` across the circle); `offset` then leads from `b` to the label.
     AddDimension { a: P3, b: P3, offset: P3, #[serde(default)] style: Option<String>, #[serde(default)] layer: Option<String> },
@@ -354,19 +367,22 @@ pub fn apply(doc: &mut Document, op: &Op, reg: &Registry) -> OpResult2<OpResult>
             walk(&mut doc.entities, &lid, &first, &mut moved);
             Ok(OpResult { removed: vec![lid], modified: moved, ..Default::default() })
         }
-        Op::AddMaterial { name, color, opacity } => {
+        Op::AddMaterial { name, color, opacity, texture } => {
             if !is_hex_color(color) { return err("color must be a #rrggbb value"); }
-            let m = Material { id: new_id(), name: name.clone(), color: color.clone(), opacity: opacity.unwrap_or(1.0).clamp(0.0, 1.0) };
+            let texture = match texture { Some(t) => Some(texture_of(doc, None, t)?), None => None };
+            let m = Material { id: new_id(), name: name.clone(), color: color.clone(), opacity: opacity.unwrap_or(1.0).clamp(0.0, 1.0), texture };
             let id = m.id.clone();
             doc.materials.push(m);
             Ok(OpResult { created: vec![id], ..Default::default() })
         }
-        Op::UpdateMaterial { id, name, color, opacity } => {
+        Op::UpdateMaterial { id, name, color, opacity, texture } => {
             let mid = doc.material_by_ref(id).map(|m| m.id.clone()).ok_or_else(|| OpError(format!("no material {id}")))?;
+            let texture = match texture { Some(Some(t)) => Some(Some(texture_of(doc, Some(&mid), t)?)), Some(None) => Some(None), None => None };
             let m = doc.materials.iter_mut().find(|m| m.id == mid).unwrap();
             if let Some(n) = name { m.name = n.clone(); }
             if let Some(c) = color { if !is_hex_color(c) { return err("color must be a #rrggbb value"); } m.color = c.clone(); }
             if let Some(o) = opacity { m.opacity = o.clamp(0.0, 1.0); }
+            if let Some(t) = texture { m.texture = t; }
             Ok(OpResult { modified: vec![mid], ..Default::default() })
         }
         Op::AddGuide { point, direction, layer } => {
@@ -671,11 +687,31 @@ fn resolve_layer(doc: &Document, r: Option<&str>) -> OpResult2<String> {
     }
 }
 
+/// The texture `arg` asks for on material `of` (`None`: a new material). What `arg` leaves out stays as it is;
+/// a new image without a height keeps its own proportions, and so does a width given alone.
+fn texture_of(doc: &Document, of: Option<&str>, arg: &TextureArg) -> OpResult2<Texture> {
+    let cur = of.and_then(|id| doc.materials.iter().find(|m| m.id == id)).and_then(|m| m.texture.as_ref());
+    let size = |x: f64, what: &str| if x.is_finite() && (0.001..=1000.0).contains(&x) { Ok(x) } else { err(format!("the texture's {what} is a size in metres between 0.001 and 1000")) };
+    let width = match (arg.width, cur) { (Some(w), _) => size(w, "width")?, (None, Some(c)) => c.width, (None, None) => 1.0 };
+    let (image, height) = match (&arg.image, cur) {
+        (Some(url), _) => {
+            let (w, h) = crate::texture::check(url).map_err(OpError)?;
+            let others: usize = doc.materials.iter().filter(|m| Some(m.id.as_str()) != of).filter_map(|m| m.texture.as_ref()).map(|t| t.image.len()).sum();
+            if others + url.len() > crate::texture::MAX_DOCUMENT_CHARS { return err("this model already carries as many texture images as it can: take one away, or use smaller images"); }
+            (std::sync::Arc::from(url.as_str()), width * h as f64 / w as f64)
+        }
+        (None, Some(c)) => (c.image.clone(), if arg.width.is_some() { c.height * width / c.width } else { c.height }),
+        (None, None) => return err("a texture needs an `image`: a data: URL holding a PNG or JPEG"),
+    };
+    let height = match arg.height { Some(h) => size(h, "height")?, None => size(height, "height")? };
+    Ok(Texture { image, width, height })
+}
+
 /// Resolve a material reference; a `#hex` colour creates a material on the fly.
 fn resolve_material(doc: &mut Document, r: &str) -> OpResult2<String> {
     if let Some(m) = doc.material_by_ref(r) { return Ok(m.id.clone()); }
     if is_hex_color(r) {
-        let m = Material { id: new_id(), name: r.to_uppercase(), color: r.to_uppercase(), opacity: 1.0 };
+        let m = Material { id: new_id(), name: r.to_uppercase(), color: r.to_uppercase(), opacity: 1.0, texture: None };
         let id = m.id.clone();
         doc.materials.push(m);
         return Ok(id);

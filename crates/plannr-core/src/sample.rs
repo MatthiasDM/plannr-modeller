@@ -12,8 +12,8 @@ pub fn sample_document() -> Document {
     let run = |doc: &mut Document, op: Op| apply(doc, &op, &reg).expect("sample op");
     let up = [0.0, 1.0, 0.0];
 
-    let brick = run(&mut doc, Op::AddMaterial { name: "Brick".into(), color: "#B0623F".into(), opacity: None }).created[0].clone();
-    let glass = run(&mut doc, Op::AddMaterial { name: "Glass".into(), color: "#9FC9E8".into(), opacity: Some(0.45) }).created[0].clone();
+    let brick = run(&mut doc, Op::AddMaterial { name: "Brick".into(), color: "#B0623F".into(), opacity: None, texture: None }).created[0].clone();
+    let glass = run(&mut doc, Op::AddMaterial { name: "Glass".into(), color: "#9FC9E8".into(), opacity: Some(0.45), texture: None }).created[0].clone();
 
     // two boxes
     let f = run(&mut doc, Op::DrawRectangle { corner: [0.0, 0.0, 0.0], opposite: [4.0, 0.0, 3.0], normal: up, u: None, layer: None, material: Some(brick.clone()), group: None }).created[0].clone();

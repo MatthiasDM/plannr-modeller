@@ -16,7 +16,7 @@ fn boxed(doc: &mut Document, x0: f64, w: f64, d: f64, h: f64, material: &str) {
 }
 fn doc() -> Document {
     let mut d = Document::default(); d.normalize();
-    for m in ["brick", "insulation"] { d.materials.push(Material { id: m.into(), name: m.into(), color: "#888888".into(), opacity: 1.0 }); }
+    for m in ["brick", "insulation"] { d.materials.push(Material { id: m.into(), name: m.into(), color: "#888888".into(), opacity: 1.0, texture: None }); }
     d
 }
 fn slice(d: &mut Document) -> Vec<[[f64; 3]; 2]> {

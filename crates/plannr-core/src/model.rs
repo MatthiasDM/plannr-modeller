@@ -27,6 +27,18 @@ pub struct Material {
     pub color: String,
     #[serde(default = "default_one")]
     pub opacity: f64,
+    /// An image drawn over the faces instead of the colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<Texture>,
+}
+
+/// The image of a material, laid over its faces like tiles: one copy of the image covers `width` × `height`
+/// metres. `image` is a `data:` URL holding a PNG or JPEG (shared between undo steps, not copied).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Texture {
+    pub image: std::sync::Arc<str>,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -290,7 +302,7 @@ impl Default for Document {
             version: 0,
             units: "m".into(),
             layers: vec![Layer { id: new_id(), name: "Layer0".into(), visible: true, color: default_layer_color() }],
-            materials: vec![Material { id: new_id(), name: "Default".into(), color: DEFAULT_MATERIAL_COLOR.into(), opacity: 1.0 }],
+            materials: vec![Material { id: new_id(), name: "Default".into(), color: DEFAULT_MATERIAL_COLOR.into(), opacity: 1.0, texture: None }],
             entities: vec![],
             scenes: vec![],
             components: vec![],
@@ -316,7 +328,14 @@ impl Document {
             self.layers.push(Layer { id: new_id(), name: "Layer0".into(), visible: true, color: default_layer_color() });
         }
         if self.materials.is_empty() {
-            self.materials.push(Material { id: new_id(), name: "Default".into(), color: DEFAULT_MATERIAL_COLOR.into(), opacity: 1.0 });
+            self.materials.push(Material { id: new_id(), name: "Default".into(), color: DEFAULT_MATERIAL_COLOR.into(), opacity: 1.0, texture: None });
+        }
+        // a texture this engine does not take (not a PNG or JPEG, too large, without a size) is dropped
+        let mut room = crate::texture::MAX_DOCUMENT_CHARS;
+        for m in self.materials.iter_mut() {
+            let Some(t) = &m.texture else { continue };
+            let sized = |x: f64| x.is_finite() && x > 0.0;
+            if crate::texture::mime(&t.image).is_some() && t.image.len() <= crate::texture::MAX_IMAGE_CHARS.min(room) && sized(t.width) && sized(t.height) { room -= t.image.len(); } else { m.texture = None; }
         }
         let first = self.layers[0].id.clone();
         let ids: Vec<String> = self.layers.iter().map(|l| l.id.clone()).collect();

@@ -18,6 +18,10 @@ pub struct CompiledGroup {
     pub back: bool,
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
+    /// Texture coordinates (two per corner), only when the material has a texture: (0,0)–(1,1) is one copy of
+    /// the image, (0,0) its bottom left corner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uvs: Vec<f32>,
     pub indices: Vec<u32>,
     pub ids: Vec<String>,
     pub id_ranges: Vec<[u32; 2]>,
@@ -124,9 +128,24 @@ const GHOST_ID: &str = "__hidden";
 const GHOST_COLOR: &str = "#8a93a0";
 const GHOST_OPACITY: f64 = 0.22;
 
+/// How a texture lies on one side of a face: in the face's plane, `u` level and `v` up the slope (on a level
+/// face `u` is the x axis), measured from the origin of the container the face is in. So the image runs on
+/// across faces in one plane, its rows line up around a corner, and it moves along with its group.
+struct Tiling { inv: Mat4, u: P3, v: P3, width: f64, height: f64 }
+impl Tiling {
+    fn new(inv: Mat4, n: P3, (width, height): (f64, f64)) -> Self {
+        let u = cross([0.0, 1.0, 0.0], n);
+        let u = if len(u) < 1e-6 { [1.0, 0.0, 0.0] } else { normalize(u) };
+        Tiling { inv, u, v: cross(n, u), width, height }
+    }
+    fn at(&self, p: P3) -> [f32; 2] { let q = mat_apply(&self.inv, p); [(dot(q, self.u) / self.width) as f32, (dot(q, self.v) / self.height) as f32] }
+}
+
 struct Builder<'a> {
     doc: &'a Document,
     groups: Vec<CompiledGroup>,
+    /// Per group: the size of its material's texture, when it has one.
+    tex: Vec<Option<(f64, f64)>>,
     by_key: HashMap<(String, bool), usize>,
     edges: CompiledEdges,
     out: CompiledScene,
@@ -147,14 +166,16 @@ struct Builder<'a> {
 
 impl<'a> Builder<'a> {
     fn group_index(&mut self, material: Option<&str>, back: bool) -> usize {
-        let (id, name, color, opacity) = if self.ghost > 0 { (GHOST_ID.to_string(), "Hidden geometry".to_string(), GHOST_COLOR.to_string(), GHOST_OPACITY) } else { match material.and_then(|m| self.doc.material_by_ref(m)) {
-            Some(m) => (m.id.clone(), m.name.clone(), m.color.clone(), m.opacity),
-            None if back => (BACK_ID.to_string(), "Back face".to_string(), BACK_FACE_COLOR.to_string(), 1.0),
-            None => { let m = self.doc.default_material(); (m.id.clone(), m.name.clone(), m.color.clone(), m.opacity) }
+        let of = |m: &Material| (m.id.clone(), m.name.clone(), m.color.clone(), m.opacity, m.texture.as_ref().map(|t| (t.width, t.height)));
+        let (id, name, color, opacity, tex) = if self.ghost > 0 { (GHOST_ID.to_string(), "Hidden geometry".to_string(), GHOST_COLOR.to_string(), GHOST_OPACITY, None) } else { match material.and_then(|m| self.doc.material_by_ref(m)) {
+            Some(m) => of(m),
+            None if back => (BACK_ID.to_string(), "Back face".to_string(), BACK_FACE_COLOR.to_string(), 1.0, None),
+            None => of(self.doc.default_material()),
         } };
         let key = (id.clone(), back);
         if let Some(i) = self.by_key.get(&key) { return *i; }
         self.groups.push(CompiledGroup { material: id, name, color, opacity, back, ..Default::default() });
+        self.tex.push(tex);
         self.by_key.insert(key, self.groups.len() - 1);
         self.groups.len() - 1
     }
@@ -166,7 +187,7 @@ impl<'a> Builder<'a> {
         });
     }
 
-    fn push_triangles(&mut self, gi: usize, id: &str, tris: &[[P3; 3]], n: P3, round: Option<(&HashMap<PKey, P3>, f64)>) {
+    fn push_triangles(&mut self, gi: usize, id: &str, tris: &[[P3; 3]], n: P3, round: Option<(&HashMap<PKey, P3>, f64)>, tiling: Option<&Tiling>) {
         if tris.is_empty() { return; }
         let id = if self.prefix.is_empty() { id.to_string() } else { format!("{}{}", self.prefix, id) };
         let g = &mut self.groups[gi];
@@ -177,6 +198,7 @@ impl<'a> Builder<'a> {
                 g.positions.extend_from_slice(&[p[0] as f32, p[1] as f32, p[2] as f32]);
                 let n = round.and_then(|(m, sign)| m.get(&pkey(*p)).map(|x| scale(*x, sign))).unwrap_or(n);
                 g.normals.extend_from_slice(&[n[0] as f32, n[1] as f32, n[2] as f32]);
+                if let Some(t) = tiling { g.uvs.extend_from_slice(&t.at(*p)); }
                 g.indices.push(vi);
             }
         }
@@ -241,10 +263,13 @@ impl<'a> Builder<'a> {
         *self.out.metrics.area_by_material.entry(mname).or_default() += a;
         let gi = self.group_index(f.material.as_deref(), false);
         let sm = self.smooth.remove(&f.id);
-        self.push_triangles(gi, &f.id, &tris, n, sm.as_ref().map(|s| (&s.normals, 1.0)));
         let back: Vec<[P3; 3]> = tris.iter().map(|t| [t[0], t[2], t[1]]).collect();
         let bi = self.group_index(f.back_material.as_deref(), true);
-        self.push_triangles(bi, &f.id, &back, scale(n, -1.0), sm.as_ref().map(|s| (&s.normals, -1.0)));
+        // a texture lies on the face as it is in its own container, so it stays put when the container moves
+        let tiling = |size: Option<(f64, f64)>, side: f64| size.map(|s| Tiling::new(mat_inverse(m), scale(normal(&f.outer), side), s));
+        let (front_tiles, back_tiles) = (tiling(self.tex[gi], 1.0), tiling(self.tex[bi], -1.0));
+        self.push_triangles(gi, &f.id, &tris, n, sm.as_ref().map(|s| (&s.normals, 1.0)), front_tiles.as_ref());
+        self.push_triangles(bi, &f.id, &back, scale(n, -1.0), sm.as_ref().map(|s| (&s.normals, -1.0)), back_tiles.as_ref());
         // outline segments carry the face id; `soft` (outer-loop edge indices, edge i runs from corner i to i+1)
         // leaves edges out of the drawing, as SketchUp's softened edges: a swept surface shows no seams
         let soft: Vec<usize> = f.extra.get("soft").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|x| x as usize)).collect()).unwrap_or_default();
@@ -400,7 +425,7 @@ pub fn compile(doc: &Document, reg: &Registry, opts: &CompileOptions) -> Compile
         }
     });
     let cuts = if opts.ignore_sections { vec![] } else { all_cuts.clone() };
-    let mut b = Builder { doc, groups: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cuts, show_hidden: opts.show_hidden, ghost: 0, bb: None, hidden, prefix: String::new(), depth: 0, centers: HashSet::new(), smooth: HashMap::new() };
+    let mut b = Builder { doc, groups: vec![], tex: vec![], by_key: HashMap::new(), edges: CompiledEdges::default(), out: CompiledScene::default(), cuts, show_hidden: opts.show_hidden, ghost: 0, bb: None, hidden, prefix: String::new(), depth: 0, centers: HashSet::new(), smooth: HashMap::new() };
     b.out.metrics.definitions = doc.components.len();
     let m = mat_identity();
     // (from the whole document: a partial compile still sees the neighbours of the faces it draws)

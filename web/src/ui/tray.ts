@@ -4,6 +4,7 @@ function loadCollapsed(): Set<string> { try { const v = JSON.parse(localStorage.
 import { icon } from './icons';
 import { findEntity, materialOf, layerOf, walk, fmt, fmtM, fmtM2, lengthUnit, UNITS, KIND_LABEL, polygonNormal, type Entity, type FaceEntity, type Vec3 } from '../model';
 import { getPlugins, partsFor } from '../plugins';
+import { TEXTURE_PRESETS, presetTexture, fileTexture, pickImage, swatch, type TextureInput } from '../textures';
 
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const num = (k: string, v: number, label: string, step = 0.01) => `<label>${label}</label><input type="number" step="${step}" data-field="${k}" value="${+v.toFixed(4)}">`;
@@ -125,8 +126,10 @@ export class Tray {
   }
   private materials(): string {
     const a = this.app;
-    return `<div class="materials">${a.doc.materials.map(m => `<div class="material ${a.options.material === m.id ? 'active' : ''}" data-material="${m.id}" data-label="${esc(m.name)}" style="background:${m.color};opacity:${Math.max(0.3, m.opacity)}"></div>`).join('')}<div class="material" data-act="addMaterial" data-label="New material" style="display:grid;place-items:center;background:#fff">${icon('plus')}</div></div>
-      ${(() => { const m = materialOf(a.doc, a.options.material); return m ? `<div class="kv" style="margin-top:8px"><label>Name</label><input type="text" data-mat="name" value="${esc(m.name)}"><label>Colour</label><input type="color" data-mat="color" value="${m.color}"><label>Opacity</label><input type="range" min="0.05" max="1" step="0.05" data-mat="opacity" value="${m.opacity}"></div>` : ''; })()}`;
+    return `<div class="materials">${a.doc.materials.map(m => `<div class="material ${a.options.material === m.id ? 'active' : ''}" data-material="${m.id}" data-label="${esc(m.name)}" style="background:${swatch(m)};opacity:${Math.max(0.3, m.opacity)}"></div>`).join('')}<div class="material" data-act="addMaterial" data-label="New material" style="display:grid;place-items:center;background:#fff">${icon('plus')}</div></div>
+      ${(() => { const m = materialOf(a.doc, a.options.material); return m ? `<div class="kv" style="margin-top:8px"><label>Name</label><input type="text" data-mat="name" value="${esc(m.name)}"><label>Colour</label><input type="color" data-mat="color" value="${m.color}"><label>Opacity</label><input type="range" min="0.05" max="1" step="0.05" data-mat="opacity" value="${m.opacity}">
+        <label>Texture</label><select data-tex title="An image laid over the faces like tiles, in place of the colour">${m.texture ? '<option value="" selected>Image</option><option value="none">None (colour only)</option>' : '<option value="" selected>None</option>'}<option value="file">Image file…</option><optgroup label="Ready-made">${TEXTURE_PRESETS.map(p => `<option value="${p.id}">${p.label}</option>`).join('')}</optgroup></select>
+        ${m.texture ? `<label title="How far one copy of the image reaches across. Changing it keeps the image's proportions.">Width (${lengthUnit.name})</label><input type="number" min="0" step="any" data-tex-size="width" value="${+(m.texture.width * lengthUnit.factor).toFixed(4)}"><label title="How far one copy of the image reaches up. Changing it stretches the image.">Height (${lengthUnit.name})</label><input type="number" min="0" step="any" data-tex-size="height" value="${+(m.texture.height * lengthUnit.factor).toFixed(4)}">` : ''}</div>` : ''; })()}`;
   }
   private outliner(): string {
     const a = this.app; const rows: string[] = [];
@@ -243,6 +246,19 @@ export class Tray {
     el.querySelectorAll<HTMLElement>('[data-material]').forEach(m => m.onclick = () => { a.options.material = m.dataset.material!; this.render(); });
     el.querySelector<HTMLElement>('[data-act="addMaterial"]')?.addEventListener('click', async () => { const n = await a.promptText('Material name', `Material ${a.doc.materials.length + 1}`); if (!n) return; const r = await a.commitOps([{ op: 'add_material', name: n, color: '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0') }], 'Add material'); if (r[0]?.created?.[0]) { a.options.material = r[0].created[0]; this.render(); } });
     el.querySelectorAll<HTMLInputElement>('[data-mat]').forEach(i => i.onchange = () => { const k = i.dataset.mat!; a.commitOps([{ op: 'update_material', id: a.options.material, [k]: k === 'opacity' ? parseFloat(i.value) : i.value } as any], 'Material'); });
+    el.querySelector<HTMLSelectElement>('[data-tex]')?.addEventListener('change', async ev => {
+      const v = (ev.target as HTMLSelectElement).value, id = a.options.material; if (!v) return;
+      if (v === 'none') { await a.commitOps([{ op: 'update_material', id, texture: null }], 'Remove texture'); return; }
+      let t: TextureInput | null = null;
+      try { if (v === 'file') { const f = await pickImage(); if (f) t = await fileTexture(f); } else t = presetTexture(v); } catch (e: any) { a.toast(`Texture: ${e.message}`, 5000); }
+      if (!t) { this.render(); return; }
+      // the colour becomes what the image reads as from afar: it shows where textures are not drawn
+      await a.commitOps([{ op: 'update_material', id, color: t.color, texture: { image: t.image, width: t.width, ...(t.height ? { height: t.height } : {}) } }], 'Texture');
+    });
+    el.querySelectorAll<HTMLInputElement>('[data-tex-size]').forEach(i => i.onchange = () => {
+      const m = parseFloat(i.value) / lengthUnit.factor; if (!(m > 0)) { this.render(); return; }
+      a.commitOps([{ op: 'update_material', id: a.options.material, texture: { [i.dataset.texSize!]: m } }], 'Texture size');
+    });
     el.querySelectorAll<HTMLElement>('[data-select]').forEach(r => { r.onclick = () => a.select([r.dataset.select!]); r.ondblclick = () => { a.select([r.dataset.select!]); a.zoomSelection(); }; });
     el.querySelectorAll<HTMLElement>('[data-scene]').forEach(r => r.onclick = (e) => { if ((e.target as HTMLElement).closest('button')) return; a.restoreScene(r.dataset.scene!); });
     el.querySelectorAll<HTMLElement>('[data-scene-update]').forEach(b => b.onclick = () => a.updateScene(b.dataset.sceneUpdate!));

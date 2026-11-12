@@ -1,6 +1,7 @@
 import { THEMES, type App, type Theme } from '../main';
 import { FACE_STYLES } from '../scene';
 import { findEntity, type Entity } from '../model';
+import { swatch } from '../textures';
 const THEME_LABEL: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
 import { icon } from './icons';
 import { mcpDialog, pluginsDialog } from './dialog';
@@ -204,7 +205,7 @@ export function renderHud(app: App, el: HTMLElement) {
 export function renderToolOptions(app: App, el: HTMLElement) {
   const t = app.tool.id; let html = '';
   if (t === 'circle') html = `<label style="padding:3px 6px">Sides <input type="number" min="3" max="200" data-segs value="${app.options.circleSegments}" style="width:52px"></label>`;
-  if (t === 'paint') { const m = app.doc.materials.find(m => m.id === app.options.material); html = `<span style="padding:3px 8px;display:flex;align-items:center;gap:6px"><span class="swatch-lg" style="background:${m?.color ?? '#ccc'}"></span>${esc(m?.name ?? 'Default')}</span>`; }
+  if (t === 'paint') { const m = app.doc.materials.find(m => m.id === app.options.material); html = `<span style="padding:3px 8px;display:flex;align-items:center;gap:6px"><span class="swatch-lg" style="background:${swatch(m)}"></span>${esc(m?.name ?? 'Default')}</span>`; }
   if (['line', 'rectangle', 'circle', 'polygon', 'tape', 'dimension', 'text'].includes(t)) { const l = app.doc.layers.find(l => l.id === app.options.layer); html += `<span class="muted" style="padding:3px 8px">Tag: ${esc(l?.name ?? '')}</span>`; }
   el.innerHTML = html;
   el.querySelector<HTMLInputElement>('[data-segs]')?.addEventListener('change', (e) => { app.options.circleSegments = Math.max(3, Math.min(200, parseInt((e.target as HTMLInputElement).value) || 24)); });

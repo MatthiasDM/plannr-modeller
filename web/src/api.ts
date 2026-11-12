@@ -6,6 +6,8 @@ export interface Project { id: string; name: string; createdAt: string; updatedA
 export interface CompiledGroup {
   material: string; name: string; color: string; opacity: number; back: boolean;
   positions: number[]; normals: number[]; indices: number[]; ids: string[]; idRanges: [number, number][];
+  /** Texture coordinates, two per corner: only when the material has a texture. */
+  uvs?: number[];
 }
 export interface CompiledScene {
   version: number;

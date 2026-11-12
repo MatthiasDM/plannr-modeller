@@ -11,7 +11,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use plannr_core::{compile, export_glb, sample_document, CompileOptions, Document, Entity, Op};
+use plannr_core::{compile, export_glb_textured, sample_document, CompileOptions, Document, Entity, Op};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -19,13 +19,16 @@ use crate::db::ProjectSummary;
 use crate::error::{ApiError, ApiResult};
 use crate::state::{Owner, Shared};
 
+/// A whole document in one request (a new project from a file, Units, Axes, Scenes): it carries its texture images.
+const DOCUMENT_LIMIT: usize = 24 << 20;
+
 pub fn api() -> Router<Shared> {
     Router::new()
         .route("/health", get(health))
         .route("/mcp-token", get(mcp_token))
-        .route("/projects", get(list_projects).post(create_project))
+        .route("/projects", get(list_projects).post(create_project).layer(axum::extract::DefaultBodyLimit::max(DOCUMENT_LIMIT)))
         .route("/projects/{id}", get(get_project).patch(rename_project).delete(delete_project))
-        .route("/projects/{id}/document", axum::routing::put(put_document))
+        .route("/projects/{id}/document", axum::routing::put(put_document).layer(axum::extract::DefaultBodyLimit::max(DOCUMENT_LIMIT)))
         .route("/projects/{id}/duplicate", post(duplicate))
         .route("/projects/{id}/ops", post(apply_ops))
         .route("/projects/{id}/preview", post(preview))
@@ -260,7 +263,7 @@ fn safe_name(name: &str) -> String {
 async fn export_glb_route(State(s): State<Shared>, Path(id): Path<String>) -> ApiResult<Response> {
     let p = s.db.get(&id)?;
     let scene = s.compile(&id, &CompileOptions { ignore_sections: true, ..Default::default() })?;
-    let bytes = export_glb(&scene);
+    let bytes = export_glb_textured(&scene, &s.document(&id)?.materials);
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "model/gltf-binary")
         .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}.glb\"", safe_name(&p.name)))

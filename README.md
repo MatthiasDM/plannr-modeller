@@ -142,6 +142,8 @@ inference under the cursor** (a direction, a face's plane, or the axis a snapped
 Trays: Entity Info, Tags (layers), Materials, Outliner, Scenes, Section Planes, Display, Model Info,
 History, Plugins.
 
+**Textures:** a material is a colour or an image. In the Materials tray, Texture takes an image file (PNG or JPEG, scaled down to 1024 pixels) or one of the ready-made patterns (brick, roof tiles, wood boards, floor tiles, concrete, asphalt, grass); Width and Height say how many metres one copy of the image covers (a new width keeps the proportions, a new height stretches). The image runs level across each face and up its slope, measured from the origin of the group the face is in: it carries on across faces in one plane, its rows line up around a corner, and it moves along with its group. Loose faces that are moved slide under their texture. Textures show in the Shaded and X-ray styles and go into the glTF export; the image is kept in the document.
+
 **Hide and show:** Edit ▸ Hide (⌘E) hides the selection, a group or component with everything in it; Unhide selected, last or all (⇧⌘E) bring it back, and the Outliner has an eye per row. View ▸ Hidden geometry shows hidden entities as ghosts you can select. Hidden entities stay in the document but leave slices and exports.
 
 **Face styles** as in SketchUp, in the view bar and View ▸ Face style (⌥1–5): X-ray, Wireframe, Hidden Line, Shaded, Monochrome, plus Back edges (dashed lines for what is behind faces).

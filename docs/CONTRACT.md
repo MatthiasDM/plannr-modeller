@@ -30,6 +30,11 @@ z green. All points are `[x, y, z]`. Ids are strings (UUID v4). JSON is camelCas
 
 The default document has one layer `Layer0` and one material `Default` (`#F4F2EE`).
 
+A material may carry a texture: `"texture": { "image": "data:image/png;base64,…", "width": 0.88, "height": 0.6 }`.
+`image` is a PNG or JPEG as a `data:` URL (about 1 MB at most, 12 MB for a whole document); one copy of it covers
+`width` × `height` metres. It lies in each face's plane, level across and up the slope (on a level face: x across),
+measured from the origin of the container the face is in. `color` is what shows where textures are not drawn.
+
 ### Entities (tagged by `kind`; every entity has `id` and `layer`)
 
 | kind | fields | notes |
@@ -91,7 +96,7 @@ coordinates); without it they draw at the top level.
 | `make_group` | `ids`, `name?` | wraps entities in a group (identity transform, world coords). |
 | `explode` | `id` | dissolves a group into its parent, applying its transform. |
 | `add_layer` / `update_layer` / `remove_layer` | `name`, `color?`, `visible?` / `id`, `name?`, `visible?`, `color?` / `id` | entities on a removed layer go to the first layer. |
-| `add_material` / `update_material` | `name`, `color`, `opacity?` / `id`, … | |
+| `add_material` / `update_material` | `name`, `color`, `opacity?`, `texture?: { image, width?, height? }` / `id`, … | a texture without `height` keeps the image's proportions (`width` defaults to 1 m). In `update_material`, `texture: { width }` alone resizes in proportion, `texture: { height }` stretches, `texture: null` takes it away |
 | `add_guide` | `point`, `direction?` | |
 | `add_dimension` | `a`, `b`, `offset`, `style?` | linear by default. `style: "radius"`: `a` is the centre, `b` a point on the curve; `"diameter"`: `a` and `b` are opposite points of the circle; for both `offset` leads from `b` to the label. `"angle"`: `a` is the corner, `b` a point on the first leg, `offset` the vector from the corner to a point on the second leg; the compiled `value` is the angle between the legs in degrees |
 | `add_text` | `position?`, `text`, `anchor?`, `screen?` | `screen: [fx, fy]` (fractions of the view, from the top left) makes screen text: it stays there however the camera moves and has no leader |
@@ -164,7 +169,7 @@ by position (0.1 mm), so documents need no migration.
 {
   "version": 13,
   "groups": [ { "material": "id", "name": "Brick", "color": "#B0623F", "opacity": 1, "back": false,
-                "positions": [..], "normals": [..], "indices": [..],
+                "positions": [..], "normals": [..], "indices": [..], "uvs": [..],   // uvs (two per corner) only for a textured material
                 "ids": ["faceId", ...], "idRanges": [[startIndex, count], ...] } ],
   "edges": { "positions": [x,y,z,x,y,z, ...], "ids": ["edgeOrFaceId", ...] },   // one id per segment (2 points)
   "guides": [ { "id", "point", "direction" } ],
