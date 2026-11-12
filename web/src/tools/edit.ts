@@ -44,6 +44,29 @@ function soleFace(ctx: ToolContext): { id: string; point: THREE.Vector3; normal:
   return n.lengthSq() > 1e-12 ? { id: e.id, point: c, normal: n.normalize() } : null;
 }
 function previewOnly(ctx: ToolContext) { return (id: string) => !ctx.inDocument(id); }
+/** With nothing selected: what the cursor would take hold of. On a drawn face or loose edge of the open
+ *  context that is the corner under the cursor, else the edge under it, else the whole thing. */
+export function grabAt(ev: PointerEvent, ctx: ToolContext, s: Snap = ctx.snap(ev, { faces: true })): { ids: string[]; points: THREE.Vector3[] | null } | null {
+  const p = ctx.scene.pick(ev); if (!p) return null;
+  const id = ctx.resolve(p.id); const e = findEntity(ctx.doc(), id);
+  if (id === p.id && !id.includes('#') && (e?.kind === 'face' || e?.kind === 'edge')) {
+    const segs = ctx.scene.segments.filter(g => g.id === id);
+    // (by where the snap is, not what it is called: at a corner it may well be an "intersection" of inference lines)
+    if (segs.some(g => g.a.distanceTo(s.point) < 1e-4 || g.b.distanceTo(s.point) < 1e-4)) return { ids: [id], points: [s.point.clone()] };
+    if (e.kind === 'face' && !['face', 'plane', 'free', 'grid'].includes(s.kind)) {
+      const g = segs.find(g => onSegment(g, s.point));
+      if (g) return { ids: [id], points: [g.a.clone(), g.b.clone()] };
+    }
+  }
+  return { ids: [id], points: null };
+}
+/** The edge of a drawn face under the cursor, for the tools that turn or resize one on its own (at a corner
+ *  and inside the face the whole face is meant: a single corner has nothing to turn or resize). */
+export function edgeAt(ev: PointerEvent, ctx: ToolContext, s?: Snap): { id: string; points: THREE.Vector3[] } | null {
+  const g = grabAt(ev, ctx, s); return g?.points?.length === 2 ? { id: g.ids[0], points: g.points } : null;
+}
+/** Show the corner or edge a tool would take hold of. */
+export function markGrab(ctx: ToolContext, pts: THREE.Vector3[]) { if (pts.length === 1) ctx.scene.addDot(pts[0], COLOR.select, 9); else ctx.scene.addLine(pts, COLOR.select, false, 3); }
 /** The entities `id` shares a container with: the top level, or the group it is in. */
 function containerOf(ctx: ToolContext, id: string): Entity[] | null {
   const doc = ctx.doc();
@@ -187,24 +210,6 @@ export class MoveTool implements Tool {
   /** The copy just made: typing "3x" or "/3" turns it into a row of copies. */
   private lastCopy: { ids: string[]; delta: THREE.Vector3; created: string[] } | null = null;
   busy() { return !!this.start; }
-  /** With nothing selected: what the cursor would take hold of. On a drawn face or loose edge of the open
-   *  context that is the corner under the cursor, else the edge under it, else the whole thing. */
-  private grabAt(ev: PointerEvent, ctx: ToolContext): { ids: string[]; points: THREE.Vector3[] | null } | null {
-    const s = ctx.snap(ev, { faces: true });
-    const p = ctx.scene.pick(ev); if (!p) return null;
-    const id = ctx.resolve(p.id); const e = findEntity(ctx.doc(), id);
-    if (id === p.id && !id.includes('#') && (e?.kind === 'face' || e?.kind === 'edge')) {
-      const segs = ctx.scene.segments.filter(g => g.id === id);
-      // (by where the snap is, not what it is called: at a corner it may well be an "intersection" of inference lines)
-      if (segs.some(g => g.a.distanceTo(s.point) < 1e-4 || g.b.distanceTo(s.point) < 1e-4)) return { ids: [id], points: [s.point.clone()] };
-      if (e.kind === 'face' && !['face', 'plane', 'free', 'grid'].includes(s.kind)) {
-        const g = segs.find(g => onSegment(g, s.point));
-        if (g) return { ids: [id], points: [g.a.clone(), g.b.clone()] };
-      }
-    }
-    return { ids: [id], points: null };
-  }
-  private mark(ctx: ToolContext, pts: THREE.Vector3[]) { if (pts.length === 1) ctx.scene.addDot(pts[0], COLOR.select, 9); else ctx.scene.addLine(pts, COLOR.select, false, 3); }
   activate(ctx: ToolContext) { this.ids = []; this.start = null; this.lastCopy = null; this.shown = ''; this.idleHint(ctx); ctx.setVCB('', 'Distance'); }
   deactivate(ctx: ToolContext) { this.ids = []; this.start = null; ctx.preview([]); ctx.scene.clearOverlay(); ctx.scene.highlight(new Set(), true); }
   private shown = '';
@@ -214,9 +219,9 @@ export class MoveTool implements Tool {
     if (!this.start) { // the grab point infers like any other
       this.idleHint(ctx); ctx.scene.clearOverlay();
       if (ctx.selection().size) { ctx.scene.highlight(new Set(), true); ctx.snap(ev, { faces: true }); return; }
-      const g = this.grabAt(ev, ctx);
+      const g = grabAt(ev, ctx);
       ctx.scene.highlight(g && !g.points ? new Set(g.ids) : new Set(), true);
-      if (g?.points) this.mark(ctx, g.points);
+      if (g?.points) markGrab(ctx, g.points);
       return;
     }
     const s = ctx.snap(ev, this.snapOpts(ctx)); this.cur = s.point;
@@ -233,7 +238,7 @@ export class MoveTool implements Tool {
     if (partsRefused(ctx)) return;
     // a selection made beforehand is what moves, wherever the grab point is; without one, the object under the cursor
     this.points = null;
-    if (!ctx.selection().size) { const g = this.grabAt(ev, ctx); if (g) { this.points = g.points; this.ids = g.ids; if (!g.points) ctx.select(g.ids); } else this.ids = []; }
+    if (!ctx.selection().size) { const g = grabAt(ev, ctx); if (g) { this.points = g.points; this.ids = g.ids; if (!g.points) ctx.select(g.ids); } else this.ids = []; }
     else this.ids = [...ctx.selection()];
     if (!this.ids.length) { ctx.toast('Nothing to move — click an object first'); return; }
     const s = ctx.snap(ev, { faces: true }); this.start = s.point.clone(); this.plane = planeFromSnap(s, GROUND);
@@ -278,11 +283,14 @@ export class MoveTool implements Tool {
 }
 
 /** Rotate: protractor — centre, reference direction, angle. A drawn face or loose edge turns with what is
- *  attached to it: the faces around it are reshaped, and folded where they can't stay flat. */
+ *  attached to it: the faces around it are reshaped, and folded where they can't stay flat. With nothing
+ *  selected, an edge of a drawn face can be taken hold of on its own. */
 export class RotateTool implements Tool {
-  id = 'rotate'; label = 'Rotate'; hint = 'Click the centre of rotation (on a face to rotate in its plane), then the reference point, then the angle (type it, or a slope like 1:6). Ctrl makes a copy; then 5x or /5 makes a ring of them.'; cursor = 'crosshair'; shortcut = 'q';
+  id = 'rotate'; label = 'Rotate'; hint = 'Click the centre of rotation (on a face to rotate in its plane), then the reference point, then the angle (type it, or a slope like 1:6). An edge of a drawn shape turns on its own, with the faces around it. Ctrl makes a copy; then 5x or /5 makes a ring of them.'; cursor = 'crosshair'; shortcut = 'q';
   private center: THREE.Vector3 | null = null; private ref: THREE.Vector3 | null = null; private plane: Plane = GROUND; private ids: string[] = []; private angle = 0;
   private copy = false;
+  /** The two ends of the edge being turned, when an edge of a face was taken hold of (else the whole of `ids` turns). */
+  private points: THREE.Vector3[] | null = null;
   /** The copy just made: typing "5x" or "/5" turns it into copies around the axis. */
   private lastCopy: { ids: string[]; origin: Vec3; axis: Vec3; angle: number; created: string[] } | null = null;
   busy() { return !!this.center; }
@@ -295,9 +303,10 @@ export class RotateTool implements Tool {
     ctx.scene.addLine(pts, col);
     for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2; const d = u.clone().multiplyScalar(Math.cos(a)).addScaledVector(w, Math.sin(a)); ctx.scene.addLine([this.center.clone().addScaledVector(d, r * (i % 6 === 0 ? 0.8 : 0.9)), this.center.clone().addScaledVector(d, r)], col); }
   }
-  private turnOps(ctx: ToolContext, ids: string[], c: THREE.Vector3, n: THREE.Vector3, angle: number, copy = false): Op[] {
+  private turnOps(ctx: ToolContext, ids: string[], c: THREE.Vector3, n: THREE.Vector3, angle: number, copy = false, points: THREE.Vector3[] | null = null): Op[] {
     const t = { origin: arr(c), axis: arr(n), angle: +angle.toFixed(4) };
     if (copy) return [{ op: 'copy', ids, rotate: t }];
+    if (points) return [{ op: 'stretch', points: points.map(arr), rotate: t }];
     return stickyOps(ctx, ids, { rotate: t }, rest => ({ op: 'rotate', ids: rest, ...t }));
   }
   private angleTo(p: THREE.Vector3) {
@@ -306,35 +315,45 @@ export class RotateTool implements Tool {
     const ang = Math.atan2(a.clone().cross(b).dot(n), a.dot(b)) * 180 / Math.PI; return Math.round(ang / 15) * 15 === ang ? ang : (Math.abs(ang - Math.round(ang / 15) * 15) < 1.5 ? Math.round(ang / 15) * 15 : ang);
   }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    const s = ctx.snap(ev, { plane: this.center ? this.plane : GROUND, faces: !this.center, ignore: new Set(this.ids) });
+    const s = ctx.snap(ev, { plane: this.center ? this.plane : GROUND, faces: !this.center, ignore: this.center ? new Set(this.ids) : undefined });
     ctx.scene.clearOverlay(); drawSnap(ctx, s); this.protractor(ctx);
-    if (!this.center) { hoverOrSelection(ev, ctx, true); return; }
+    if (!this.center) {
+      const g = ctx.selection().size ? null : edgeAt(ev, ctx, s);
+      if (g) { ctx.scene.highlight(new Set(), true); markGrab(ctx, g.points); } else hoverOrSelection(ev, ctx, true);
+      return;
+    }
+    if (this.points && !this.copy) markGrab(ctx, this.points);
     if (!this.ref) { ctx.scene.addLine([this.center, s.point], 0x888888, true); return; }
     this.angle = this.angleTo(s.point);
     ctx.scene.addLine([this.center, this.ref], 0x888888, true); ctx.scene.addLine([this.center, s.point], MAGENTA);
     ctx.scene.addLabel(s.point, fmtDeg(this.angle)); ctx.setVCB(this.angle.toFixed(1), 'Angle');
-    ctx.preview(Math.abs(this.angle) > 1e-6 ? this.turnOps(ctx, this.ids, this.center, this.plane.normal, this.angle, this.copy) : []);
+    ctx.preview(Math.abs(this.angle) > 1e-6 ? this.turnOps(ctx, this.ids, this.center, this.plane.normal, this.angle, this.copy, this.points) : []);
   }
   onDown(ev: PointerEvent, ctx: ToolContext) {
     if (ev.button !== 0) return;
     if (!this.center) {
       if (partsRefused(ctx)) return;
-      this.ids = [...ctx.selection()]; if (!this.ids.length) { const p = ctx.scene.pick(ev); if (p) { ctx.select([ctx.resolve(p.id)]); this.ids = [ctx.resolve(p.id)]; } }
+      const s = ctx.snap(ev, { faces: true });
+      this.ids = [...ctx.selection()]; this.points = null;
+      if (!this.ids.length) {
+        const g = edgeAt(ev, ctx, s); const p = g ? null : ctx.scene.pick(ev);
+        if (g) { this.ids = [g.id]; this.points = g.points; } else if (p) { ctx.select([ctx.resolve(p.id)]); this.ids = [ctx.resolve(p.id)]; }
+      }
       if (!this.ids.length) { ctx.toast('Select something to rotate first'); return; }
-      const s = ctx.snap(ev, { faces: true }); this.center = s.point.clone(); this.plane = planeFromSnap(s, GROUND);
+      this.center = s.point.clone(); this.plane = planeFromSnap(s, GROUND);
       if (ctx.lock) this.plane = { origin: this.center, normal: AXIS[ctx.lock].clone() };
       this.copy = ev.ctrlKey || ev.metaKey || ev.altKey; this.lastCopy = null;
-      ctx.setHint('Click the reference point. Ctrl toggles copy.'); return;
+      ctx.setHint(`${this.points ? 'Turning an edge with the faces around it: click' : 'Click'} the reference point. Ctrl toggles copy.`); return;
     }
     const s = ctx.snap(ev, { plane: this.plane, ignore: new Set(this.ids) });
     if (!this.ref) { this.ref = s.point.clone(); ctx.setHint(`Move to ${this.copy ? 'place a rotated copy' : 'rotate'}, click to finish, or type an angle. Ctrl toggles copy.`); return; }
     this.finish(ctx, this.angleTo(s.point));
   }
   private async finish(ctx: ToolContext, angle: number) {
-    const c = this.center!, n = this.plane.normal.clone(); const ids = this.ids, copy = this.copy;
+    const c = this.center!, n = this.plane.normal.clone(); const ids = this.ids, copy = this.copy, points = this.points;
     this.center = null; this.ref = null; ctx.preview([]); ctx.scene.clearOverlay(); ctx.setHint(this.hint);
     if (Math.abs(angle) < 1e-6) return;
-    const res = await ctx.ops(this.turnOps(ctx, ids, c, n, angle, copy), copy ? 'Rotate copy' : 'Rotate');
+    const res = await ctx.ops(this.turnOps(ctx, ids, c, n, angle, copy, points), copy ? 'Rotate copy' : 'Rotate');
     this.lastCopy = null;
     if (copy && res[0]?.created?.length) {
       ctx.select(res[0].created); this.lastCopy = { ids, origin: arr(c), axis: arr(n), angle, created: res[0].created };

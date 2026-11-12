@@ -311,6 +311,36 @@ fn rotating_a_face_of_a_box_twists_it() {
 }
 
 #[test]
+fn a_single_edge_of_a_box_scales_and_turns_with_the_faces_around_it() {
+    let has = |f: &Face, p: P3| f.outer.iter().any(|q| dist(*q, p) < 1e-6);
+    // the front edge of the top at half its length about its middle: the top and the front become trapezia, the two sides fold
+    let mut doc = Document::default();
+    let top = slab(&mut doc);
+    let edge = [[0.0, 2.0, 0.0], [4.0, 2.0, 0.0]];
+    let r = apply(&mut doc, &Op::Stretch { ids: vec![], points: edge.to_vec(), delta: None, rotate: None, scale: Some(plannr_core::ops::Resize { origin: [2.0, 2.0, 0.0], factors: [0.5, 0.5, 0.5] }), group: None }, &reg()).unwrap();
+    assert_eq!(r.created.len(), 2, "the second half of each side");
+    assert_eq!(faces(&doc.entities).len(), 8);
+    let t = face(&doc, &top);
+    assert!(t.outer.len() == 4 && has(t, [1.0, 2.0, 0.0]) && has(t, [3.0, 2.0, 0.0]) && has(t, [4.0, 2.0, 3.0]) && has(t, [0.0, 2.0, 3.0]));
+    assert!((net(t) - 9.0).abs() < 1e-9, "(2 + 4) / 2 × 3");
+    assert!(faces(&doc.entities).iter().all(|f| is_planar(&f.outer)));
+    assert!(closed(&doc.entities));
+    // the same edge turned 20° about the vertical through its middle: it keeps its length, the top stays level
+    let mut doc = Document::default();
+    let top = slab(&mut doc);
+    turn(&mut doc, &[], &edge, [2.0, 2.0, 0.0], UP, 20.0);
+    let t = face(&doc, &top);
+    assert!(t.outer.len() == 4 && t.outer.iter().all(|p| (p[1] - 2.0).abs() < 1e-9));
+    assert!(has(t, [4.0, 2.0, 3.0]) && has(t, [0.0, 2.0, 3.0]) && !has(t, [0.0, 2.0, 0.0]) && !has(t, [4.0, 2.0, 0.0]));
+    let moved: Vec<P3> = t.outer.iter().copied().filter(|p| p[2] < 2.9).collect();
+    assert!(moved.len() == 2 && (dist(moved[0], moved[1]) - 4.0).abs() < 1e-9);
+    assert!(faces(&doc.entities).iter().all(|f| is_planar(&f.outer)));
+    assert!(closed(&doc.entities));
+    // a point that is no corner of anything: an error, nothing changes
+    assert!(apply(&mut doc, &Op::Stretch { ids: vec![], points: vec![[9.0, 9.0, 9.0], [8.0, 9.0, 9.0]], delta: None, rotate: Some(plannr_core::ops::Turn { origin: [9.0, 9.0, 9.0], axis: UP, angle: 20.0 }), scale: None, group: None }, &reg()).is_err());
+}
+
+#[test]
 fn whole_shapes_and_grouped_faces_scale_and_turn_too() {
     let mut doc = Document::default();
     slab(&mut doc);

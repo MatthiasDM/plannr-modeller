@@ -4,7 +4,7 @@ import type { Tool, ToolContext, Snap } from './base';
 import { partsRefused, parseNumbers, parseSizes, onSegment, drawSnap, arr, INK, MAGENTA, SELECT, AXIS, AXIS_COLOR, GROUND } from './base';
 import { findEntity, fmt, lengthUnit, type Vec3, type Op, type Entity } from '../model';
 import { text3dDialog, type Text3dSpec } from '../ui/dialog';
-import { stickyOps } from './edit';
+import { stickyOps, edgeAt, markGrab } from './edit';
 
 /** Axis-aligned bounds of the selection from the compiled segments. */
 export function selectionBounds(ctx: ToolContext, ids: Set<string>): THREE.Box3 {
@@ -12,34 +12,54 @@ export function selectionBounds(ctx: ToolContext, ids: Set<string>): THREE.Box3 
 }
 
 /** Scale with SketchUp-style handles: corners scale uniformly, face handles along one axis, edge handles along two. Ctrl scales about the centre.
- *  A drawn face or loose edge is scaled with what is attached to it (the top of a box made smaller tapers the box). */
+ *  A drawn face or loose edge is scaled with what is attached to it (the top of a box made smaller tapers the box).
+ *  With nothing selected, an edge of a drawn face can be taken hold of on its own. */
 export class ScaleTool implements Tool {
-  id = 'scale'; label = 'Scale'; hint = 'Select something, then drag a green handle: corners scale uniformly, side handles along one axis, edge handles along two. Ctrl scales about the centre. Type a factor (or sx;sy;sz), or a size with its unit (2m) to make it that large.'; cursor = 'default'; shortcut = 's';
+  id = 'scale'; label = 'Scale'; hint = 'Select something, then drag a green handle: corners scale uniformly, side handles along one axis, edge handles along two. With nothing selected, click an edge of a drawn shape to scale it on its own, with the faces around it. Ctrl scales about the centre. Type a factor (or sx;sy;sz), or a size with its unit (2m) to make it that large.'; cursor = 'default'; shortcut = 's';
   private ids: string[] = []; private box: THREE.Box3 | null = null; private handles: { p: THREE.Vector3; mask: Vec3; key: string }[] = [];
   private drag: { h: { p: THREE.Vector3; mask: Vec3 }; origin: THREE.Vector3; axis: THREE.Vector3; d0: number; factors: Vec3 } | null = null; private hover = -1;
+  /** The two ends of the edge being scaled, when an edge of a face was taken hold of (else the selection is). */
+  private points: THREE.Vector3[] | null = null; private marked = false;
+  /** How many directions the box has a size in: its corner handles scale along all of them. */
+  private dims = 3;
   busy() { return !!this.drag; }
-  activate(ctx: ToolContext) { this.rebuild(ctx); ctx.setHint(this.hint); ctx.setVCB('', 'Scale'); this.draw(ctx); }
-  deactivate(ctx: ToolContext) { this.drag = null; ctx.preview([]); ctx.scene.clearOverlay(); }
+  activate(ctx: ToolContext) { this.points = null; this.rebuild(ctx); ctx.setHint(this.hint); ctx.setVCB('', 'Scale'); this.draw(ctx); }
+  deactivate(ctx: ToolContext) { this.drag = null; this.points = null; ctx.preview([]); ctx.scene.clearOverlay(); }
   private rebuild(ctx: ToolContext) {
-    this.ids = [...ctx.selection()]; this.box = this.ids.length ? selectionBounds(ctx, new Set(this.ids)) : null; this.handles = [];
+    this.ids = [...ctx.selection()]; if (this.ids.length) this.points = null;
+    this.box = this.points ? new THREE.Box3().setFromPoints(this.points) : this.ids.length ? selectionBounds(ctx, new Set(this.ids)) : null; this.handles = [];
     if (!this.box || this.box.isEmpty()) return; const { min, max } = this.box; const c = this.box.getCenter(new THREE.Vector3());
+    // a side the box has no size along gets no handles of its own: a flat box has eight, a line two
+    const size = this.box.getSize(new THREE.Vector3()); const big = Math.max(size.x, size.y, size.z);
+    const steps = [size.x, size.y, size.z].map(v => (v > Math.max(1e-6, big * 1e-6) ? [-1, 0, 1] : [0])); this.dims = steps.filter(l => l.length > 1).length;
     const at = (fx: number, fy: number, fz: number) => new THREE.Vector3(fx < 0 ? min.x : fx > 0 ? max.x : c.x, fy < 0 ? min.y : fy > 0 ? max.y : c.y, fz < 0 ? min.z : fz > 0 ? max.z : c.z);
-    for (const fx of [-1, 0, 1]) for (const fy of [-1, 0, 1]) for (const fz of [-1, 0, 1]) { const n = Math.abs(fx) + Math.abs(fy) + Math.abs(fz); if (n === 0) continue; this.handles.push({ p: at(fx, fy, fz), mask: [Math.abs(fx), Math.abs(fy), Math.abs(fz)] as Vec3, key: `${fx},${fy},${fz}` }); }
+    for (const fx of steps[0]) for (const fy of steps[1]) for (const fz of steps[2]) { const n = Math.abs(fx) + Math.abs(fy) + Math.abs(fz); if (n === 0) continue; this.handles.push({ p: at(fx, fy, fz), mask: [Math.abs(fx), Math.abs(fy), Math.abs(fz)] as Vec3, key: `${fx},${fy},${fz}` }); }
   }
   private draw(ctx: ToolContext) {
     ctx.scene.clearOverlay(); if (!this.box || this.box.isEmpty()) return;
     const { min, max } = this.box; const P = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
     const c = [P(min.x, min.y, min.z), P(max.x, min.y, min.z), P(max.x, min.y, max.z), P(min.x, min.y, max.z), P(min.x, max.y, min.z), P(max.x, max.y, min.z), P(max.x, max.y, max.z), P(min.x, max.y, max.z)];
     for (const [i, j] of [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]) ctx.scene.addLine([c[i], c[j]], 0x1e8e3e, true);
-    this.handles.forEach((h, i) => ctx.scene.addSquare(h.p, i === this.hover ? 0xd93025 : 0x1e8e3e, h.mask.reduce((a, b) => a + b, 0) === 3 ? 9 : 7));
+    if (this.points) markGrab(ctx, this.points);
+    this.handles.forEach((h, i) => ctx.scene.addSquare(h.p, i === this.hover ? 0xd93025 : 0x1e8e3e, h.mask.reduce((a, b) => a + b, 0) === this.dims ? 9 : 7));
   }
   private scaleOps(ctx: ToolContext, origin: THREE.Vector3, factors: Vec3): Op[] {
     const s = { origin: arr(origin), factors };
+    if (this.points) return [{ op: 'stretch', points: this.points.map(arr), scale: s }];
     return stickyOps(ctx, this.ids, { scale: s }, rest => ({ op: 'scale', ids: rest, ...s }));
   }
+  /** Let go of the edge that was taken hold of. */
+  private release(ctx: ToolContext) { this.points = null; this.rebuild(ctx); this.draw(ctx); ctx.setHint(this.hint); }
   private handleAt(ev: PointerEvent, ctx: ToolContext) { const cur = new THREE.Vector2(ev.clientX - ctx.scene.container.getBoundingClientRect().left, ev.clientY - ctx.scene.container.getBoundingClientRect().top); let best = -1, bd = 12; this.handles.forEach((h, i) => { const d = ctx.scene.screenPoint(h.p).distanceTo(cur); if (d < bd) { bd = d; best = i; } }); return best; }
   onMove(ev: PointerEvent, ctx: ToolContext) {
-    if (!this.drag) { if (!this.handles.length && ctx.selection().size) this.rebuild(ctx); const h = this.handleAt(ev, ctx); if (h !== this.hover) { this.hover = h; this.draw(ctx); } if (h < 0 && !ctx.selection().size) { const p = ctx.scene.pick(ev); ctx.scene.highlight(p ? new Set([ctx.resolve(p.id)]) : new Set(), true); } return; }
+    if (!this.drag) {
+      const free = !ctx.selection().size;
+      if (!free && (this.points || !this.handles.length)) this.rebuild(ctx);
+      const h = this.handleAt(ev, ctx); const g = h < 0 && free ? edgeAt(ev, ctx) : null;
+      if (h !== this.hover || g || this.marked) { this.hover = h; this.draw(ctx); if (g) markGrab(ctx, g.points); this.marked = !!g; }
+      if (h < 0 && free) { const p = g ? null : ctx.scene.pick(ev); ctx.scene.highlight(p ? new Set([ctx.resolve(p.id)]) : new Set(), true); }
+      return;
+    }
     const d = this.drag; const p = ctx.scene.linePoint(ev, d.origin, d.axis); const dist = p.clone().sub(d.origin).dot(d.axis); let f = Math.max(0.01, dist / d.d0);
     if (ctx.options.gridSnap) f = Math.round(f * 100) / 100;
     d.factors = d.h.mask.map(m => (m ? f : 1)) as Vec3;
@@ -50,7 +70,13 @@ export class ScaleTool implements Tool {
     if (ev.button !== 0) return;
     if (this.drag) return this.finish(ctx);
     const hi = this.handleAt(ev, ctx);
-    if (hi < 0) { if (ctx.selection().size) return; /* the selection stays the one being scaled */ const p = ctx.scene.pick(ev); if (p) { ctx.select([ctx.resolve(p.id)]); this.rebuild(ctx); this.draw(ctx); } return; }
+    if (hi < 0) {
+      if (ctx.selection().size) return; // the selection stays the one being scaled
+      const g = edgeAt(ev, ctx);
+      if (g) { ctx.scene.highlight(new Set(), true); this.points = g.points; this.rebuild(ctx); this.draw(ctx); ctx.setHint('Scaling an edge with the faces around it: drag a green handle (Ctrl = about its middle), or type a factor or a length. Esc lets go of it.'); return; }
+      const p = ctx.scene.pick(ev); if (p) ctx.select([ctx.resolve(p.id)]);
+      this.release(ctx); return;
+    }
     if (partsRefused(ctx)) return;
     const h = this.handles[hi]; const centre = this.box!.getCenter(new THREE.Vector3());
     const opposite = centre.clone().multiplyScalar(2).sub(h.p); const origin = ev.ctrlKey || ev.metaKey ? centre : opposite;
@@ -61,11 +87,20 @@ export class ScaleTool implements Tool {
   private async finish(ctx: ToolContext, factors?: Vec3) {
     const d = this.drag; this.drag = null; ctx.preview([]); const f = factors ?? d?.factors; const origin = d?.origin ?? this.box?.getCenter(new THREE.Vector3());
     if (!f || !origin || f.every(x => Math.abs(x - 1) < 1e-6)) { this.draw(ctx); return; }
-    await ctx.ops(this.scaleOps(ctx, origin, f.map(x => +x.toFixed(5)) as Vec3), 'Scale'); this.rebuild(ctx); this.draw(ctx); ctx.setHint(this.hint);
+    const held = this.points; const k = f.map(x => +x.toFixed(5)) as Vec3;
+    const res = await ctx.ops(this.scaleOps(ctx, origin, k), 'Scale');
+    if (held && this.points === held) {
+      // the edge stays in hand where it went, as long as it is still an edge of the shape
+      const to = (p: THREE.Vector3) => new THREE.Vector3(origin.x + (p.x - origin.x) * k[0], origin.y + (p.y - origin.y) * k[1], origin.z + (p.z - origin.z) * k[2]);
+      const [a, b] = res.length ? held.map(to) : held; const near = (p: THREE.Vector3, q: THREE.Vector3) => p.distanceTo(q) < 1e-3;
+      this.points = ctx.scene.segments.some(g => (near(g.a, a) && near(g.b, b)) || (near(g.a, b) && near(g.b, a))) ? [a, b] : null;
+    }
+    this.rebuild(ctx); this.draw(ctx); if (!this.points) ctx.setHint(this.hint);
   }
   /** The factors that bring the selection to the typed sizes: along the axes of the handle being dragged; without one, all three sides, or (one size) its longest side. */
   private toSize(sizes: number[]): Vec3 | null {
     const s = this.box!.getSize(new THREE.Vector3()); const sz = [s.x, s.y, s.z]; const f: Vec3 = [1, 1, 1];
+    if (this.points && !this.drag && sizes.length === 1) { const l = this.points[0].distanceTo(this.points[1]); const k = l > 1e-9 ? sizes[0] / l : 0; return k > 1e-6 ? [k, k, k] : null; } // an edge in hand: the length it gets
     const axes = (this.drag ? [0, 1, 2].filter(i => this.drag!.h.mask[i]) : [0, 1, 2]).filter(i => sz[i] > 1e-9); if (!axes.length) return null;
     if (sizes.length >= axes.length && (this.drag || sizes.length >= 3)) axes.forEach((i, k) => { f[i] = sizes[this.drag ? k : i] / sz[i]; });
     else { const big = this.drag ? axes[0] : axes.reduce((a, b) => (sz[b] > sz[a] ? b : a)); const k = sizes[0] / sz[big]; for (const i of this.drag ? axes : [0, 1, 2]) f[i] = k; }
@@ -73,9 +108,13 @@ export class ScaleTool implements Tool {
   }
   onVCB(v: string, ctx: ToolContext) {
     const sizes = parseSizes(v);
-    if (sizes) { if (!this.ids.length) this.rebuild(ctx); const f = this.box && !this.box.isEmpty() ? this.toSize(sizes) : null; if (f) this.finish(ctx, f); return; }
-    const n = parseNumbers(v); if (!n.length) return; if (!this.ids.length) { this.rebuild(ctx); if (!this.ids.length) return; } this.finish(ctx, n.length >= 3 ? [n[0], n[1], n[2]] : this.drag ? this.drag.h.mask.map(m => (m ? n[0] : 1)) as Vec3 : [n[0], n[0], n[0]]); }
-  onKey(ev: KeyboardEvent, ctx: ToolContext) { if (ev.key === 'Escape' && this.drag) { this.drag = null; ctx.preview([]); this.draw(ctx); return true; } return false; }
+    if (sizes) { if (!this.ids.length && !this.points) this.rebuild(ctx); const f = this.box && !this.box.isEmpty() ? this.toSize(sizes) : null; if (f) this.finish(ctx, f); return; }
+    const n = parseNumbers(v); if (!n.length) return; if (!this.ids.length && !this.points) { this.rebuild(ctx); if (!this.ids.length) return; } this.finish(ctx, n.length >= 3 ? [n[0], n[1], n[2]] : this.drag ? this.drag.h.mask.map(m => (m ? n[0] : 1)) as Vec3 : [n[0], n[0], n[0]]); }
+  onKey(ev: KeyboardEvent, ctx: ToolContext) {
+    if (ev.key === 'Escape' && this.drag) { this.drag = null; ctx.preview([]); this.draw(ctx); return true; }
+    if (ev.key === 'Escape' && this.points) { this.release(ctx); return true; }
+    return false;
+  }
 }
 
 /** Follow Me: click the profile face, then move along the edges it should follow and click. With a path selected first
