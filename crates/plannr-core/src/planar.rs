@@ -14,16 +14,24 @@ const TOL: f64 = VERTEX_TOL;
 /// A plane with in-plane axes: 3D points to (u, v) and back. Counter-clockwise in (u, v) is
 /// counter-clockwise about `n`.
 #[derive(Clone, Copy, Debug)]
-pub struct Frame { pub o: P3, pub n: P3, u: P3, v: P3 }
+pub struct Frame { pub o: P3, pub n: P3, u: P3, v: P3, slack: f64 }
 impl Frame {
-    pub fn new(o: P3, n: P3) -> Frame { let n = normalize(n); let (u, v) = plane_basis(n); Frame { o, n, u, v } }
+    pub fn new(o: P3, n: P3) -> Frame { let n = normalize(n); let (u, v) = plane_basis(n); Frame { o, n, u, v, slack: 0.0 } }
     /// The plane of a loop, facing the way the loop winds.
-    pub fn of(lp: &[P3]) -> Frame { Frame::new(lp[0], normal(lp)) }
+    pub fn of(lp: &[P3]) -> Frame { let mut f = Frame::new(lp[0], normal(lp)); f.slack = flatness(lp); f }
     pub fn to2(&self, p: P3) -> P2 { let d = sub(p, self.o); [dot(d, self.u), dot(d, self.v)] }
     pub fn to3(&self, q: P2) -> P3 { add(self.o, add(scale(self.u, q[0]), scale(self.v, q[1]))) }
     pub fn height(&self, p: P3) -> f64 { dot(sub(p, self.o), self.n) }
-    pub fn holds(&self, p: P3) -> bool { self.height(p).abs() <= PLANE_TOL }
+    /// `p` lies on the plane: within a vertex's width of it, so the two sides of a plate 0.1 mm thick are two
+    /// planes. A little more is allowed far from the origin (a normal that is a millionth off), and as much as
+    /// the loop the frame came from is itself out of flat.
+    pub fn holds(&self, p: P3) -> bool { self.holds_within(p, 0.0) }
+    /// As `holds`, for a corner of a face that is itself `warp` out of flat.
+    pub fn holds_within(&self, p: P3, warp: f64) -> bool { self.height(p).abs() <= VERTEX_TOL + self.slack + warp + 1e-6 * dist(p, self.o) }
 }
+/// How far the corners of a loop are from its own plane: nothing for a face drawn flat, up to `PLANE_TOL` for one
+/// that was given with rounded corners or bent a little.
+pub fn flatness(lp: &[P3]) -> f64 { if lp.len() < 4 { 0.0 } else { plane_deviation(lp, lp[0], normal(lp)) } }
 
 fn sub2(a: P2, b: P2) -> P2 { [a[0] - b[0], a[1] - b[1]] }
 fn dot2(a: P2, b: P2) -> f64 { a[0] * b[0] + a[1] * b[1] }
@@ -119,7 +127,7 @@ pub fn regions_without(segs: &[Seg], drop: &[Seg]) -> Vec<Region> {
         for j in i + 1..segs.len() {
             let (a, b) = (verts[ends[i].0], verts[ends[i].1]); let (c, d) = (verts[ends[j].0], verts[ends[j].1]);
             let (r, s) = (sub2(b, a), sub2(d, c)); let den = cross2(r, s);
-            if den.abs() < 1e-12 { continue; }
+            if den.abs() <= 1e-9 * (dot2(r, r) * dot2(s, s)).sqrt() { continue; } // parallel
             let t = cross2(sub2(c, a), s) / den; let w = cross2(sub2(c, a), r) / den;
             let (et, ew) = (TOL / dot2(r, r).sqrt().max(1e-12), TOL / dot2(s, s).sqrt().max(1e-12));
             if t < -et || t > 1.0 + et || w < -ew || w > 1.0 + ew { continue; }
@@ -205,8 +213,8 @@ pub fn regions_without(segs: &[Seg], drop: &[Seg]) -> Vec<Region> {
     for cyc in &cycles {
         let raw: Vec<P2> = cyc.iter().map(|i| verts[*i]).collect();
         let a = area2(&raw); let c = find(&mut comp, cyc[0]);
-        if a > 1e-10 { regs.push((Region { outer: tidy(cyc), holes: vec![] }, c)); }
-        else if a < -1e-10 { outsides.push((tidy(cyc), c, raw[0])); }
+        if a > AREA_TOL { regs.push((Region { outer: tidy(cyc), holes: vec![] }, c)); }
+        else if a < -AREA_TOL { outsides.push((tidy(cyc), c, raw[0])); }
     }
     for (lp, c, probe) in outsides {
         let best = regs.iter().enumerate().filter(|(_, (r, rc))| *rc != c && inside(probe, &r.outer))

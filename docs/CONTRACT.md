@@ -71,8 +71,10 @@ neighbours the change didn't touch, so fetch the whole scene once idle). Without
 components or plugin settings changed, a section plane changed while the geometry is cut on the server, or
 most of the model did) the client fetches `compile`.
 
-Ops are tagged by `op`. Optional `layer` defaults to the first layer. Points on a face's plane are
-accepted within 1 mm. The draw ops (`draw_line`, `draw_rectangle`, `draw_polygon`, `draw_circle`,
+Ops are tagged by `op`. Optional `layer` defaults to the first layer. A loop is accepted as a
+face when its corners are within 1 mm of one plane. Two points closer than 0.01 mm are one vertex, and a
+point that near a face's plane is on it: small enough for printed parts (a plate 0.2 mm thick, a 0.4 mm
+hole), large enough for points picked in the browser on a building. The draw ops (`draw_line`, `draw_rectangle`, `draw_polygon`, `draw_circle`,
 `draw_arc`) take an optional `group`: the id of a group to draw inside (points stay in world
 coordinates); without it they draw at the top level.
 
@@ -120,7 +122,7 @@ coordinates); without it they draw at the top level.
 | `solid_box` | `min`, `max`, `name?`, `layer?`, `material?` | a closed box solid as its own group (world axes); `created` = the group id (no geometry in the result). |
 | `solid_cylinder` | `center`, `axis`, `radius`, `height`, `segments?: 32`, `name?`, `layer?`, `material?` | a closed cylinder solid as its own group: the base circle at `center` normal to `axis`, extruded `height` along it (negative goes the other way). |
 | `extrude` | `profile: [p…]`, `holes?: [[p…]…]`, `distance?` or `direction?`, `name?`, `layer?`, `material?` | a closed solid as its own group from a planar loop (with hole loops in its plane), swept `distance` along the profile's normal (right-hand rule of the point order) or by the vector `direction`. |
-| `boolean` | `mode: "union"\|"subtract"\|"intersect"\|"split"`, `target`, `tools: [id…]`, `keepTools?: false`, `material?` | solids are groups whose faces close up (faces pointing inward are turned out). `target` keeps its id and becomes the result, in its own coordinates; coplanar pieces of the result merge into faces with holes. Tools are erased unless `keepTools`; tools that don't overlap each other are combined in one pass. Faces a subtract creates take the target's dominant material; `material` paints the whole result. Fails when the target or a tool is not closed, or the result is empty. `split` takes one tool: target and tool each keep what is only theirs, the shared part is a new group in `created` (SketchUp's Split; Trim is `subtract` with `keepTools`). BSP CSG (csg.js), 1 µm plane tolerance. |
+| `boolean` | `mode: "union"\|"subtract"\|"intersect"\|"split"`, `target`, `tools: [id…]`, `keepTools?: false`, `material?` | solids are groups whose faces close up (faces pointing inward are turned out). `target` keeps its id and becomes the result, in its own coordinates; coplanar pieces of the result merge into faces with holes. Tools are erased unless `keepTools`; tools that don't overlap each other are combined in one pass. Faces a subtract creates take the target's dominant material; `material` paints the whole result. Fails when the target or a tool is not closed, or the result is empty. `split` takes one tool: target and tool each keep what is only theirs, the shared part is a new group in `created` (SketchUp's Split; Trim is `subtract` with `keepTools`). BSP CSG (csg.js); the plane tolerance is 2.5 × 10⁻⁷ of how far from the origin the solids reach (1 µm at 4 m, 10 nm on a part of 40 mm), so small parts are best modelled near the origin. |
 | `set_extension` | `plugin`, `data` | stores plugin data. |
 | `custom` | `type`, `data` | routed to the plugin registered for `type`'s prefix; 400 `no plugin for <type>` otherwise. |
 
@@ -132,7 +134,7 @@ normal follows the given winding (for `draw_rectangle` the normal passed). Edge 
 
 The faces and loose edges of one container (the top level, or one group) behave as one connected
 shape where they touch, as in SketchUp. Faces still store their own outlines; what touches is found
-by position (0.1 mm), so documents need no migration.
+by position (0.01 mm), so documents need no migration.
 
 - **Drawing on a face divides it.** A face drawn on faces of its plane is cut into them: each keeps
   its id for the part outside the new outline (`modified`); the parts inside become faces of their

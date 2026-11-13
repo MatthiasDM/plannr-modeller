@@ -24,7 +24,9 @@ fn region_in(fr: &Frame, f: &Face) -> Region {
 }
 /// The face lies in the frame's plane (facing either way).
 fn in_plane(fr: &Frame, f: &Face) -> bool {
-    f.outer.len() >= 3 && dot(normal(&f.outer), fr.n).abs() > 1.0 - 1e-6 && loops(f).all(|l| l.iter().all(|p| fr.holds(*p)))
+    if f.outer.len() < 3 || dot(normal(&f.outer), fr.n).abs() <= 1.0 - 1e-6 { return false; }
+    let warp = flatness(&f.outer);
+    loops(f).all(|l| l.iter().all(|p| fr.holds_within(*p, warp)))
 }
 type Box2 = (P2, P2);
 fn bbox(pts: impl Iterator<Item = P2>) -> Box2 {
@@ -50,7 +52,9 @@ impl Lift {
 }
 
 fn by_area(mut v: Vec<Region>) -> Vec<Region> { v.sort_by(|a, b| b.area().partial_cmp(&a.area()).unwrap()); v }
-fn same_area(a: f64, b: f64) -> bool { (a - b).abs() <= 1e-6 * b.abs().max(1.0) }
+/// Equal but for rounding and for corners that were welded onto each other: to a millionth of the larger and a
+/// strip one vertex wide along it, whatever their size (a hole of 1 mm² is not nothing beside a wall).
+fn same_area(a: f64, b: f64) -> bool { let m = a.abs().max(b.abs()); (a - b).abs() <= 1e-6 * m + VERTEX_TOL * m.sqrt() }
 
 /// The pieces `cutters` divide a face into, in the face's own frame; none when they don't divide it.
 fn split(fr: &Frame, f: &Face, cutters: &[Seg]) -> Vec<Region> {
@@ -342,7 +346,7 @@ pub fn push_pull(list: &mut Vec<Entity>, idx: usize, distance: f64) -> Option<Op
             let Some((li, s)) = loops(&g).enumerate().find_map(|(li, l)| (0..l.len()).find(|&s| within(l[s], l[(s + 1) % l.len()], *a, *b)).map(|s| (li, s))) else { continue };
             let old = if li == 0 { g.outer.clone() } else { g.holes[li - 1].clone() };
             let new = step_edge(&old, s, *a, *b, d);
-            if new.len() < 3 || area(&new) < 1e-8 {
+            if new.len() < 3 || area(&new) < AREA_TOL {
                 // squeezed to nothing
                 if li == 0 { gone.push(g.id.clone()); } else { g.holes.remove(li - 1); list[j] = Entity::Face(g.clone()); if !r.modified.contains(&g.id) { r.modified.push(g.id.clone()); } }
                 stretched = true; break;
@@ -500,9 +504,9 @@ pub fn stretch(list: &mut Vec<Entity>, ids: &[String], points: &[P3], m: &Mat4, 
                 }
                 let tidy = |l: &Vec<P3>| { let mut o: Vec<P3> = vec![]; for p in l { if o.last().map_or(true, |q| !same_point(*q, *p)) { o.push(*p); } } while o.len() > 1 && same_point(o[0], *o.last().unwrap()) { o.pop(); } o };
                 let flat_outer = tidy(&new_outer);
-                if flat_outer.len() < 3 || area(&flat_outer) < 1e-8 { gone.push(f.id.clone()); continue; }
+                if flat_outer.len() < 3 || area(&flat_outer) < AREA_TOL { gone.push(f.id.clone()); continue; }
                 let n = normal(&flat_outer);
-                let flat_holes: Vec<Vec<P3>> = new_holes.iter().map(tidy).filter(|h| h.len() >= 3 && area(h) > 1e-8).collect();
+                let flat_holes: Vec<Vec<P3>> = new_holes.iter().map(tidy).filter(|h| h.len() >= 3 && area(h) > AREA_TOL).collect();
                 if is_planar(&flat_outer) && flat_holes.iter().all(|h| plane_deviation(h, flat_outer[0], n) <= PLANE_TOL) {
                     list[i] = Entity::Face(Face { outer: flat_outer, holes: flat_holes, ..f.clone() });
                     r.modified.push(f.id.clone());

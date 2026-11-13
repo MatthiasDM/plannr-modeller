@@ -10,8 +10,23 @@ use std::collections::HashMap;
 use crate::geom::*;
 use crate::model::*;
 
-/// Plane classification tolerance (metres): 1 µm.
-const EPS: f64 = 1e-6;
+/// How exactly a set of polygons is taken. Both tolerances grow with how far from the origin the polygons reach:
+/// points picked on screen are good to some seven digits (the browser's scene is in single precision), which is
+/// a micron at 4 m and a hundredth of one on a print of 40 mm, so letters a few millimetres high on a small
+/// part are cut as cleanly as a window in a wall. Small parts are best modelled near the origin.
+#[derive(Debug, Clone, Copy)]
+struct Tol {
+    /// A point this near a plane is on it, when solids are cut along each other.
+    plane: f64,
+    /// Corners of the result this near each other are one corner.
+    weld: f64,
+}
+impl Tol {
+    fn of<'a>(polys: impl Iterator<Item = &'a Poly>) -> Tol {
+        let reach = polys.flat_map(|p| p.pts.iter()).flat_map(|p| p.iter()).fold(0.0f64, |m, x| m.max(x.abs()));
+        Tol { plane: (2.5e-7 * reach).max(1e-10), weld: (1e-6 * reach).max(1e-8) }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Plane { n: P3, w: f64 }
@@ -24,7 +39,7 @@ pub struct Poly { pts: Vec<P3>, plane: Plane, mat: Option<String> }
 impl Poly {
     pub(crate) fn new(pts: Vec<P3>, mat: Option<String>) -> Option<Poly> {
         // a robust plane: Newell normal through the centroid
-        let n = normalize(newell(&pts));
+        let n = normal(&pts);
         if len(n) < 0.5 { return None; }
         let c = scale(pts.iter().fold([0.0; 3], |a, p| add(a, *p)), 1.0 / pts.len() as f64);
         Some(Poly { plane: Plane { n, w: dot(n, c) }, pts, mat })
@@ -38,11 +53,11 @@ impl Poly {
 const COPLANAR: u8 = 0; const FRONT: u8 = 1; const BACK: u8 = 2; const SPANNING: u8 = 3;
 
 /// Split a convex polygon by a plane into the four lists (csg.js `splitPolygon`).
-fn split(pl: &Plane, p: Poly, cf: &mut Vec<Poly>, cb: &mut Vec<Poly>, f: &mut Vec<Poly>, b: &mut Vec<Poly>) {
+fn split(pl: &Plane, eps: f64, p: Poly, cf: &mut Vec<Poly>, cb: &mut Vec<Poly>, f: &mut Vec<Poly>, b: &mut Vec<Poly>) {
     let mut kind = 0u8; let mut types = Vec::with_capacity(p.pts.len());
     for v in &p.pts {
         let t = dot(pl.n, *v) - pl.w;
-        let ty = if t < -EPS { BACK } else if t > EPS { FRONT } else { COPLANAR };
+        let ty = if t < -eps { BACK } else if t > eps { FRONT } else { COPLANAR };
         kind |= ty; types.push(ty);
     }
     match kind {
@@ -69,20 +84,19 @@ fn split(pl: &Plane, p: Poly, cf: &mut Vec<Poly>, cb: &mut Vec<Poly>, f: &mut Ve
 }
 
 /// A BSP tree in an arena (no recursion, so deep trees can't overflow the stack).
-#[derive(Default)]
-struct Bsp { nodes: Vec<Node> }
+struct Bsp { nodes: Vec<Node>, eps: f64 }
 #[derive(Default)]
 struct Node { plane: Option<Plane>, front: Option<usize>, back: Option<usize>, polys: Vec<Poly> }
 
 impl Bsp {
-    fn new(polys: Vec<Poly>) -> Bsp { let mut t = Bsp { nodes: vec![Node::default()] }; t.build(0, polys); t }
+    fn new(polys: Vec<Poly>, eps: f64) -> Bsp { let mut t = Bsp { nodes: vec![Node::default()], eps }; t.build(0, polys); t }
     fn build(&mut self, root: usize, polys: Vec<Poly>) {
         let mut work = vec![(root, polys)];
         while let Some((i, polys)) = work.pop() {
             if polys.is_empty() { continue; }
             let pl = *self.nodes[i].plane.get_or_insert(polys[0].plane);
             let (mut cf, mut cb, mut f, mut b) = (vec![], vec![], vec![], vec![]);
-            for p in polys { split(&pl, p, &mut cf, &mut cb, &mut f, &mut b); }
+            for p in polys { split(&pl, self.eps, p, &mut cf, &mut cb, &mut f, &mut b); }
             self.nodes[i].polys.extend(cf); self.nodes[i].polys.extend(cb);
             if !f.is_empty() {
                 let c = match self.nodes[i].front { Some(c) => c, None => { self.nodes.push(Node::default()); let c = self.nodes.len() - 1; self.nodes[i].front = Some(c); c } };
@@ -109,7 +123,7 @@ impl Bsp {
             let n = &self.nodes[i];
             let Some(pl) = n.plane else { out.extend(polys); continue };
             let (mut f, mut b) = (vec![], vec![]);
-            for p in polys { let (mut cf, mut cb) = (vec![], vec![]); split(&pl, p, &mut cf, &mut cb, &mut f, &mut b); f.extend(cf); b.extend(cb); }
+            for p in polys { let (mut cf, mut cb) = (vec![], vec![]); split(&pl, self.eps, p, &mut cf, &mut cb, &mut f, &mut b); f.extend(cf); b.extend(cb); }
             match n.front { Some(c) => work.push((c, f)), None => out.extend(f) }
             if let Some(c) = n.back { work.push((c, b)); } // no back child: inside, dropped
         }
@@ -125,7 +139,8 @@ impl Bsp {
 pub enum BoolMode { Union, Subtract, Intersect }
 
 pub fn csg(a: Vec<Poly>, b: Vec<Poly>, mode: BoolMode) -> Vec<Poly> {
-    let (mut a, mut b) = (Bsp::new(a), Bsp::new(b));
+    let eps = Tol::of(a.iter().chain(b.iter())).plane;
+    let (mut a, mut b) = (Bsp::new(a, eps), Bsp::new(b, eps));
     match mode {
         BoolMode::Union => { a.clip_to(&b); b.clip_to(&a); b.invert(); b.clip_to(&a); b.invert(); let bp = b.all(); a.build(0, bp); a.all() }
         BoolMode::Subtract => { a.invert(); a.clip_to(&b); b.clip_to(&a); b.invert(); b.clip_to(&a); b.invert(); let bp = b.all(); a.build(0, bp); a.invert(); a.all() }
@@ -163,30 +178,34 @@ pub fn volume(polys: &[Poly]) -> f64 {
     polys.iter().map(|p| (1..p.pts.len() - 1).map(|i| dot(p.pts[0], cross(p.pts[i], p.pts[i + 1])) / 6.0).sum::<f64>()).sum()
 }
 
-type Key = (i64, i64, i64);
-const Q: f64 = 1e7; // 0.1 µm grid for welding
-fn qkey(p: P3) -> Key { ((p[0] * Q).round() as i64, (p[1] * Q).round() as i64, (p[2] * Q).round() as i64) }
-
 /// Merge coplanar polygons (same plane, same side, same material) into faces with holes. Polygons whose
 /// boundary can't be traced cleanly are kept as they are.
 pub fn merge_faces(polys: Vec<Poly>, layer: &str) -> Vec<Face> {
-    // weld every vertex to its first representative on a fine grid
-    let mut rep: HashMap<Key, P3> = HashMap::new();
-    let polys: Vec<Poly> = polys.into_iter().map(|mut p| { for v in p.pts.iter_mut() { *v = *rep.entry(qkey(*v)).or_insert(*v); } p }).collect();
+    let tol = Tol::of(polys.iter());
+    // corners that are one corner become the first of them, so pieces meet to the last digit
+    let mut weld = Weld::new(tol.weld);
+    let polys: Vec<(Poly, Vec<usize>)> = polys.into_iter().filter_map(|mut p| {
+        let mut ids: Vec<usize> = vec![];
+        for v in &p.pts { let i = weld.id(*v); if ids.last() != Some(&i) { ids.push(i); } }
+        while ids.len() > 1 && ids[0] == ids[ids.len() - 1] { ids.pop(); }
+        if ids.len() < 3 { return None; } // a sliver thinner than a corner is wide
+        p.pts = ids.iter().map(|i| weld.points[*i]).collect();
+        Some((p, ids))
+    }).collect();
     // group by plane (normal and offset, quantised) and material
-    let mut groups: HashMap<(i64, i64, i64, i64, Option<String>), Vec<Poly>> = HashMap::new();
+    let mut groups: HashMap<(i64, i64, i64, i64, Option<String>), Vec<(Poly, Vec<usize>)>> = HashMap::new();
     for p in polys {
-        let n = p.plane.n;
-        let k = ((n[0] * 1e5).round() as i64, (n[1] * 1e5).round() as i64, (n[2] * 1e5).round() as i64, (p.plane.w * 1e6).round() as i64, p.mat.clone());
+        let n = p.0.plane.n;
+        let k = ((n[0] * 1e5).round() as i64, (n[1] * 1e5).round() as i64, (n[2] * 1e5).round() as i64, (p.0.plane.w * 1e6).round() as i64, p.0.mat.clone());
         groups.entry(k).or_default().push(p);
     }
     let mut keys: Vec<_> = groups.keys().cloned().collect(); keys.sort();
     let mut faces = vec![];
     for k in keys {
         let ps = groups.remove(&k).unwrap();
-        match merge_plane(&ps) {
-            Some(loops) => for (outer, holes) in loops { faces.push(face(outer, holes, ps[0].mat.clone(), layer)); },
-            None => for p in ps { faces.push(face(p.pts, vec![], p.mat, layer)); },
+        match merge_plane(&ps, &weld.points, tol.weld) {
+            Some(loops) => for (outer, holes) in loops { faces.push(face(outer, holes, ps[0].0.mat.clone(), layer)); },
+            None => for (p, _) in ps { faces.push(face(p.pts, vec![], p.mat, layer)); },
         }
     }
     faces
@@ -195,32 +214,33 @@ fn face(outer: Vec<P3>, holes: Vec<Vec<P3>>, mat: Option<String>, layer: &str) -
     Face { id: new_id(), layer: layer.into(), outer, holes, material: mat, back_material: None, extra: Default::default() }
 }
 
-/// The boundary of a set of coplanar polygons as outer loops with their holes.
-fn merge_plane(ps: &[Poly]) -> Option<Vec<(Vec<P3>, Vec<Vec<P3>>)>> {
-    let n = ps[0].plane.n;
+/// The boundary of a set of coplanar polygons as outer loops with their holes. Each polygon comes with the
+/// numbers of its corners in `pt`.
+fn merge_plane(ps: &[(Poly, Vec<usize>)], pt: &[P3], weld: f64) -> Option<Vec<(Vec<P3>, Vec<Vec<P3>>)>> {
+    type Key = usize;
+    let n = ps[0].0.plane.n;
     let (u, v) = plane_basis(n);
     let to2 = |p: P3| (dot(p, u), dot(p, v));
     // all vertices of the plane: a vertex lying on another polygon's edge splits that edge (T-junctions)
-    let mut verts: Vec<P3> = vec![]; let mut seen = std::collections::HashSet::new();
-    for p in ps { for q in &p.pts { if seen.insert(qkey(*q)) { verts.push(*q); } } }
+    let mut verts: Vec<Key> = ps.iter().flat_map(|p| p.1.iter().copied()).collect(); verts.sort(); verts.dedup();
     let mut edges: HashMap<(Key, Key), usize> = HashMap::new();
-    let mut pt: HashMap<Key, P3> = HashMap::new();
-    for p in ps {
-        let m = p.pts.len();
+    for (_, ids) in ps {
+        let m = ids.len();
         for i in 0..m {
-            let (a, b) = (p.pts[i], p.pts[(i + 1) % m]);
-            let ab = sub(b, a); let l2 = dot(ab, ab); if l2 < 1e-18 { continue; }
-            let mut on: Vec<(f64, P3)> = verts.iter().filter_map(|&x| {
-                let t = dot(sub(x, a), ab) / l2;
-                if t <= 1e-9 || t >= 1.0 - 1e-9 { return None; }
-                if dist(lerp(a, b, t), x) > EPS * 0.5 { return None; }
+            let (ka, kb) = (ids[i], ids[(i + 1) % m]);
+            let (a, b) = (pt[ka], pt[kb]);
+            let ab = sub(b, a); let l2 = dot(ab, ab); if l2 < 1e-24 { continue; }
+            let mut on: Vec<(f64, Key)> = verts.iter().filter_map(|&x| {
+                if x == ka || x == kb { return None; }
+                let t = dot(sub(pt[x], a), ab) / l2;
+                if t <= 0.0 || t >= 1.0 { return None; }
+                if dist(lerp(a, b, t), pt[x]) > weld * 0.5 { return None; }
                 Some((t, x))
             }).collect();
             on.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
-            let mut chain = vec![a]; chain.extend(on.into_iter().map(|x| x.1)); chain.push(b);
+            let mut chain = vec![ka]; chain.extend(on.into_iter().map(|x| x.1)); chain.push(kb);
             for w in chain.windows(2) {
-                let (ka, kb) = (qkey(w[0]), qkey(w[1])); if ka == kb { continue; }
-                pt.insert(ka, w[0]); pt.insert(kb, w[1]);
+                let (ka, kb) = (w[0], w[1]); if ka == kb { continue; }
                 // an edge and its reverse cancel: inside the merged region
                 if let Some(c) = edges.get_mut(&(kb, ka)) { *c -= 1; if *c == 0 { edges.remove(&(kb, ka)); } }
                 else { *edges.entry((ka, kb)).or_insert(0) += 1; }
@@ -245,16 +265,16 @@ fn merge_plane(ps: &[Poly]) -> Option<Vec<(Vec<P3>, Vec<Vec<P3>>)>> {
             let cands: Vec<Key> = out_of.get(&cur)?.iter().filter(|nx| !used.contains(&(cur, **nx))).cloned().collect();
             if cands.is_empty() { return None; }
             let next = if cands.len() == 1 { cands[0] } else {
-                let (px, py) = to2(pt[&prev]); let (cx, cy) = to2(pt[&cur]); let din = (cx - px, cy - py);
+                let (px, py) = to2(pt[prev]); let (cx, cy) = to2(pt[cur]); let din = (cx - px, cy - py);
                 *cands.iter().min_by(|a, b| {
-                    let ang = |k: &Key| { let (x, y) = to2(pt[k]); let d = (x - cx, y - cy); (din.0 * d.1 - din.1 * d.0).atan2(din.0 * d.0 + din.1 * d.1) };
+                    let ang = |k: &Key| { let (x, y) = to2(pt[*k]); let d = (x - cx, y - cy); (din.0 * d.1 - din.1 * d.0).atan2(din.0 * d.0 + din.1 * d.1) };
                     ang(a).partial_cmp(&ang(b)).unwrap()
                 }).unwrap()
             };
             used.insert((cur, next)); prev = cur; cur = next;
         }
         // drop vertices in the middle of straight runs
-        let pts: Vec<P3> = lp.iter().map(|k| pt[k]).collect();
+        let pts: Vec<P3> = lp.iter().map(|k| pt[*k]).collect();
         let m = pts.len(); let mut clean = vec![];
         for i in 0..m {
             let (a, b, c) = (pts[(i + m - 1) % m], pts[i], pts[(i + 1) % m]);
@@ -279,7 +299,8 @@ fn merge_plane(ps: &[Poly]) -> Option<Vec<(Vec<P3>, Vec<Vec<P3>>)>> {
         let (a, b) = (to2(h[0]), to2(h[1])); let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
         let d = (b.0 - a.0, b.1 - a.1); let l = (d.0 * d.0 + d.1 * d.1).sqrt().max(1e-12);
         // the hole winds clockwise: its inside is on the right of its edges
-        let probe = (mid.0 + d.1 / l * 1e-6, mid.1 - d.0 / l * 1e-6);
+        let nudge = (l * 1e-3).min(1e-6);
+        let probe = (mid.0 + d.1 / l * nudge, mid.1 - d.0 / l * nudge);
         let best = res.iter().enumerate().filter(|(_, (o, _))| inside(probe, o)).min_by(|x, y| signed(&x.1 .0).partial_cmp(&signed(&y.1 .0)).unwrap()).map(|(i, _)| i);
         match best { Some(i) => res[i].1.push(h), None => return None }
     }

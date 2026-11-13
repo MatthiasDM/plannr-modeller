@@ -775,7 +775,7 @@ fn make_face(doc: &Document, outer: Vec<P3>, holes: Vec<Vec<P3>>, layer: Option<
     let outer = dedupe_loop(&outer);
     if outer.len() < 3 { return err("a face needs at least 3 distinct points"); }
     if !is_planar(&outer) { return err("face points are not coplanar (within 1 mm)"); }
-    if area(&outer) < 1e-8 { return err("face is degenerate (zero area)"); }
+    if area(&outer) < AREA_TOL { return err("face is degenerate (zero area)"); }
     let n = normal(&outer);
     let holes: Vec<Vec<P3>> = holes
         .into_iter()
@@ -797,9 +797,12 @@ fn make_face(doc: &Document, outer: Vec<P3>, holes: Vec<Vec<P3>>, layer: Option<
 
 // ---- draw_line with face-from-loop -------------------------------------------------
 
-fn key(p: P3) -> (i64, i64, i64) {
-    let q = |v: f64| (v / VERTEX_TOL).round() as i64;
-    (q(p[0]), q(p[1]), q(p[2]))
+/// The corners of a container by position: ends of loose edges first, so a loop is followed through ends that
+/// are the same vertex however they were rounded.
+fn corners(list: &[Entity]) -> Weld {
+    let mut w = Weld::new(VERTEX_TOL);
+    for e in list { if let Entity::Edge(e) = e { w.id(e.a); w.id(e.b); } }
+    w
 }
 
 fn draw_line(doc: &mut Document, points: &[P3], close: bool, layer: Option<&str>, group: Option<&str>) -> OpResult2<OpResult> {
@@ -824,10 +827,11 @@ fn draw_line(doc: &mut Document, points: &[P3], close: bool, layer: Option<&str>
     let segs: Vec<(P3, P3)> = new_edges.iter().map(|e| (e.a, e.b)).collect();
     crate::sticky::imprint_edges(list, &segs, &mut r);
     // face from loop: for each new edge, look for the shortest cycle through it among the loose edges of the container
-    let mut have: HashSet<Vec<(i64, i64, i64)>> = list.iter().filter_map(|e| if let Entity::Face(f) = e { Some(face_key(&f.outer)) } else { None }).collect();
+    let mut weld = corners(list);
+    let mut have: HashSet<Vec<usize>> = list.iter().filter_map(|e| if let Entity::Face(f) = e { Some(face_key(&mut weld, &f.outer)) } else { None }).collect();
     for ne in &new_edges {
-        if let Some(cycle) = find_loop(list, ne) {
-            let k = face_key(&cycle);
+        if let Some(cycle) = find_loop(list, ne, &mut weld) {
+            let k = face_key(&mut weld, &cycle);
             if have.contains(&k) || crate::sticky::covered(list, &cycle) { continue; }
             let n = normal(&cycle);
             // prefer faces that look up / toward the viewer
@@ -842,16 +846,17 @@ fn draw_line(doc: &mut Document, points: &[P3], close: bool, layer: Option<&str>
     Ok(r)
 }
 
-fn face_key(pts: &[P3]) -> Vec<(i64, i64, i64)> {
-    let mut k: Vec<_> = pts.iter().map(|p| key(*p)).collect();
+fn face_key(weld: &mut Weld, pts: &[P3]) -> Vec<usize> {
+    let mut k: Vec<usize> = pts.iter().map(|p| weld.id(*p)).collect();
     k.sort();
     k
 }
 
 /// Shortest cycle through `edge` over the loose edges of `list`, returned as an ordered point loop if coplanar.
-fn find_loop(list: &[Entity], edge: &Edge) -> Option<Vec<P3>> {
+fn find_loop(list: &[Entity], edge: &Edge, weld: &mut Weld) -> Option<Vec<P3>> {
     let edges: Vec<&Edge> = list.iter().filter_map(|e| if let Entity::Edge(e) = e { Some(e) } else { None }).collect();
-    let mut adj: HashMap<(i64, i64, i64), Vec<((i64, i64, i64), P3, String)>> = HashMap::new();
+    let mut key = |p: P3| weld.id(p);
+    let mut adj: HashMap<usize, Vec<(usize, P3, String)>> = HashMap::new();
     for e in &edges {
         if e.id == edge.id { continue; }
         adj.entry(key(e.a)).or_default().push((key(e.b), e.b, e.id.clone()));
@@ -860,11 +865,11 @@ fn find_loop(list: &[Entity], edge: &Edge) -> Option<Vec<P3>> {
     let start = key(edge.b);
     let goal = key(edge.a);
     // BFS from edge.b to edge.a over the other edges
-    let mut points: HashMap<(i64, i64, i64), P3> = HashMap::new();
+    let mut points: HashMap<usize, P3> = HashMap::new();
     points.insert(start, edge.b);
     points.insert(goal, edge.a);
-    let mut prev: HashMap<(i64, i64, i64), (i64, i64, i64)> = HashMap::new();
-    let mut seen: HashSet<(i64, i64, i64)> = HashSet::new();
+    let mut prev: HashMap<usize, usize> = HashMap::new();
+    let mut seen: HashSet<usize> = HashSet::new();
     let mut q = VecDeque::new();
     seen.insert(start);
     q.push_back(start);
@@ -893,7 +898,7 @@ fn find_loop(list: &[Entity], edge: &Edge) -> Option<Vec<P3>> {
     // path: a → ... → b ; cycle closes with the new edge b→a
     path.reverse();
     let cycle = dedupe_loop(&path);
-    if cycle.len() < 3 || !is_planar(&cycle) || area(&cycle) < 1e-8 { return None; }
+    if cycle.len() < 3 || !is_planar(&cycle) || area(&cycle) < AREA_TOL { return None; }
     Some(cycle)
 }
 
@@ -981,8 +986,8 @@ fn offset(doc: &mut Document, face_id: &str, distance: f64) -> OpResult2<OpResul
     let (list, _) = doc.container_mut(face_id).ok_or_else(|| OpError(format!("no entity {face_id}")))?;
     let Some(Entity::Face(orig)) = list.iter().find(|e| e.id() == face_id).cloned() else { return err(format!("{face_id} is not a face")) };
     let outer = offset_polygon(&orig.outer, distance);
-    if !is_planar(&outer) || area(&outer) < 1e-8 { return err("offset collapses the face"); }
-    let holes: Vec<Vec<P3>> = orig.holes.iter().map(|h| offset_polygon(h, -distance)).filter(|h| area(h) > 1e-8).collect();
+    if !is_planar(&outer) || area(&outer) < AREA_TOL { return err("offset collapses the face"); }
+    let holes: Vec<Vec<P3>> = orig.holes.iter().map(|h| offset_polygon(h, -distance)).filter(|h| area(h) > AREA_TOL).collect();
     let f = Face { id: new_id(), layer: orig.layer.clone(), outer, holes, material: orig.material.clone(), back_material: orig.back_material.clone(), extra: Default::default() };
     // cut into the face it was offset from: inward leaves a border around a new inner face, outward a border around the face
     let mut r = OpResult::default();
@@ -1227,7 +1232,7 @@ fn update_entity(doc: &mut Document, id: &str, patch: &Value) -> OpResult2<OpRes
     let mut updated: Entity = serde_json::from_value(v).map_err(|x| OpError(format!("invalid patch: {x}")))?;
     if let Entity::Face(f) = &mut updated {
         f.outer = dedupe_loop(&f.outer);
-        if f.outer.len() < 3 || !is_planar(&f.outer) || area(&f.outer) < 1e-8 { return err("patched face is not a valid planar polygon"); }
+        if f.outer.len() < 3 || !is_planar(&f.outer) || area(&f.outer) < AREA_TOL { return err("patched face is not a valid planar polygon"); }
     }
     if let Entity::Section(s) = &mut updated { s.normal = normalize(s.normal); if len(s.normal) < 0.5 { return err("normal must be non-zero"); } }
     *e = updated.clone();

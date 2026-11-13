@@ -560,7 +560,7 @@ mod tests {
         assert!((v - want).abs() < 1e-12, "{v} vs {want}");
         // no face lies inside the groove's footprint on the old wall plane z = 0.002 (it is open to the cavity)
         let Entity::Group(g) = &e else { panic!() };
-        let stray = g.entities.iter().filter(|x| matches!(x, Entity::Face(f) if f.outer.iter().all(|p| (p[2] - 0.0014).abs() < 1e-9 || (p[2] - 0.002).abs() < 1e-9) && f.outer.iter().all(|p| p[0] >= 0.01 - 1e-9 && p[0] <= 0.03 + 1e-9 && p[1] >= 0.01 - 1e-9 && p[1] <= 0.012 + 1e-9) && (f.outer[0][2] - 0.002).abs() < 1e-9)).count();
+        let stray = g.entities.iter().filter(|x| matches!(x, Entity::Face(f) if f.outer.iter().all(|p| (p[2] - 0.002).abs() < 1e-9) && f.outer.iter().all(|p| p[0] >= 0.01 - 1e-9 && p[0] <= 0.03 + 1e-9 && p[1] >= 0.01 - 1e-9 && p[1] <= 0.012 + 1e-9))).count();
         assert_eq!(stray, 0, "the groove is closed off by a leftover face");
     }
 }

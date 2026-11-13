@@ -5,10 +5,15 @@ pub type P3 = [f64; 3];
 pub type Mat4 = [f64; 16];
 
 pub const EPS: f64 = 1e-9;
-/// Points within this distance of a plane are "on" it (1 mm).
+/// A loop is a flat face when its corners are within this distance of its plane (1 mm): what is taken as a face.
+/// (Whether a point lies on a face is a tighter question: see `planar::Frame::holds`.)
 pub const PLANE_TOL: f64 = 1e-3;
-/// Two points closer than this are the same vertex.
-pub const VERTEX_TOL: f64 = 1e-4;
+/// Two points closer than this are the same vertex (0.01 mm). Small enough for printed parts (a 0.4 mm hole
+/// with 64 sides has sides of 0.02 mm), large enough for the rounding of points picked in the browser, whose
+/// scene is in single precision (2 µm at 20 m from the origin).
+pub const VERTEX_TOL: f64 = 1e-5;
+/// A loop with less area than this is no face (0.01 mm × 0.01 mm).
+pub const AREA_TOL: f64 = VERTEX_TOL * VERTEX_TOL;
 
 pub fn add(a: P3, b: P3) -> P3 { [a[0] + b[0], a[1] + b[1], a[2] + b[2]] }
 pub fn sub(a: P3, b: P3) -> P3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
@@ -33,7 +38,14 @@ pub fn newell(poly: &[P3]) -> P3 {
     }
     n
 }
-pub fn normal(poly: &[P3]) -> P3 { normalize(newell(poly)) }
+/// Unit normal of a polygon; zero when it has no area to speak of beside the length of its outline (so a
+/// triangle of a hundredth of a square millimetre has a normal, and three points in a line have none).
+pub fn normal(poly: &[P3]) -> P3 {
+    let n = newell(poly);
+    let l = len(n);
+    let sides: f64 = (0..poly.len()).map(|i| { let d = sub(poly[(i + 1) % poly.len()], poly[i]); dot(d, d) }).sum();
+    if l <= 1e-9 * sides || l == 0.0 { [0.0, 0.0, 0.0] } else { scale(n, 1.0 / l) }
+}
 pub fn area(poly: &[P3]) -> f64 { len(newell(poly)) / 2.0 }
 
 /// Max distance of any point from the plane through `origin` with `normal`.
@@ -255,6 +267,33 @@ pub fn clip_segment(a: P3, b: P3, origin: P3, n: P3) -> Option<(P3, P3)> {
     let t = da / (da - db);
     let m = lerp(a, b, t);
     if da <= 0.0 { Some((a, m)) } else { Some((m, b)) }
+}
+
+/// Points found again by position: a point within `tol` of an earlier one is that one.
+pub struct Weld { tol: f64, cells: std::collections::HashMap<(i64, i64, i64), Vec<usize>>, pub points: Vec<P3> }
+impl Weld {
+    pub fn new(tol: f64) -> Weld { Weld { tol, cells: Default::default(), points: vec![] } }
+    fn cell(&self, p: P3) -> (i64, i64, i64) { ((p[0] / self.tol).floor() as i64, (p[1] / self.tol).floor() as i64, (p[2] / self.tol).floor() as i64) }
+    /// The number of the point at `p`, if there is one.
+    pub fn find(&self, p: P3) -> Option<usize> {
+        let c = self.cell(p);
+        let mut best: Option<(f64, usize)> = None;
+        for dx in -1..=1 { for dy in -1..=1 { for dz in -1..=1 {
+            for &i in self.cells.get(&(c.0 + dx, c.1 + dy, c.2 + dz)).map(|v| v.as_slice()).unwrap_or(&[]) {
+                let d = dist(self.points[i], p);
+                if d < self.tol && best.map_or(true, |b| d < b.0) { best = Some((d, i)); }
+            }
+        } } }
+        best.map(|b| b.1)
+    }
+    /// The number of the point at `p`: the one already there, or `p` itself from now on.
+    pub fn id(&mut self, p: P3) -> usize {
+        if let Some(i) = self.find(p) { return i; }
+        self.points.push(p);
+        let c = self.cell(p);
+        self.cells.entry(c).or_default().push(self.points.len() - 1);
+        self.points.len() - 1
+    }
 }
 
 pub fn hex_to_rgb(hex: &str) -> [f32; 3] {
