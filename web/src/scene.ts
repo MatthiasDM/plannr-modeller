@@ -30,10 +30,15 @@ export interface SnapTarget { point: THREE.Vector3; kind: 'vertex' | 'midpoint' 
 export const COLOR = { select: 0x2f6fde, hover: 0x5a93f0, ink: 0x1b1b1b, red: 0xd93025, green: 0x1e8e3e, blue: 0x1a73e8, magenta: 0xc8169a, cyan: 0x18a0b8 };
 export type ViewName = 'iso' | 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right';
 
-/** SketchUp-style camera: middle-drag orbits, shift+middle pans, wheel zooms toward the cursor. */
+/** SketchUp-style camera: middle-drag orbits, shift+middle pans, wheel zooms toward the cursor.
+ *  The camera looks at `target`, a point on the centre line of the view. Left to itself that point is only ever
+ *  moved sideways (pan) and scaled towards the cursor (zoom), so it can come to lie far behind or beside what
+ *  is being looked at: a drag therefore takes hold of the point of the model under the cursor (`grab`). */
 export class ViewCamera {
   camera: THREE.PerspectiveCamera;
   target = new THREE.Vector3(0, 0.5, 0);
+  /** What orbiting turns about while a drag lasts: the point that was under the cursor when it began. */
+  private pivot: THREE.Vector3 | null = null;
   up = new THREE.Vector3(0, 1, 0);
   private sph = new THREE.Spherical(16, Math.PI / 3.1, Math.PI / 4);
   private anim: { from: [THREE.Vector3, THREE.Vector3, THREE.Vector3]; to: [THREE.Vector3, THREE.Vector3, THREE.Vector3]; t: number } | null = null;
@@ -42,9 +47,28 @@ export class ViewCamera {
     this.camera.position.setFromSpherical(this.sph).add(this.target);
     this.camera.up.copy(this.up); this.camera.lookAt(this.target);
   }
+  /** A drag begins on `p`, a point in view (none: the view's own centre point). Orbiting turns about it, so it
+   *  stays where it is on screen; and the centre point comes to stand as far away as `p`, so that panning
+   *  carries `p` along with the cursor and zooming stops at `p`, not somewhere behind it. The picture doesn't change. */
+  grab(p: THREE.Vector3 | null) { this.anim = null; this.pivot = p ? p.clone() : null; if (p) this.focus(p); }
+  release() { this.pivot = null; }
+  /** Slide the centre point along the line of sight to the depth of `p`. */
+  private focus(p: THREE.Vector3) {
+    const dir = this.target.clone().sub(this.camera.position); const r = dir.length(); if (r < 1e-9) return; dir.divideScalar(r);
+    const d = p.clone().sub(this.camera.position).dot(dir);
+    if (!isFinite(d) || d < 0.02 * this.reach) return; // behind the lens, or nearer than the view can come
+    this.target.copy(this.camera.position).addScaledVector(dir, d); this.sph.radius = d;
+  }
   orbit(dx: number, dy: number) {
-    this.anim = null; this.sph.theta -= dx * 0.006; this.sph.phi -= dy * 0.006;
-    this.sph.phi = Math.max(0.02, Math.min(Math.PI - 0.02, this.sph.phi)); this.up.set(0, 1, 0); this.apply();
+    this.anim = null;
+    const theta = this.sph.theta - dx * 0.006, phi = Math.max(0.02, Math.min(Math.PI - 0.02, this.sph.phi - dy * 0.006));
+    if (this.pivot) {
+      // the same turn about the pivot: up or down about the camera's level axis, then around the vertical
+      const level = new THREE.Vector3(Math.cos(this.sph.theta), 0, -Math.sin(this.sph.theta));
+      const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), theta - this.sph.theta).multiply(new THREE.Quaternion().setFromAxisAngle(level, phi - this.sph.phi));
+      this.target.sub(this.pivot).applyQuaternion(q).add(this.pivot);
+    }
+    this.sph.theta = theta; this.sph.phi = phi; this.up.set(0, 1, 0); this.apply();
   }
   pan(dx: number, dy: number, viewportH: number) {
     this.anim = null;
@@ -52,10 +76,12 @@ export class ViewCamera {
     const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0), upv = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 1);
     this.target.addScaledVector(right, -dx * scale).addScaledVector(upv, dy * scale); this.apply();
   }
-  dolly(factor: number, towards?: THREE.Vector3) {
+  /** Come closer (`factor` < 1) or stand back, towards a point of the model (default: what the drag holds, else the
+   *  centre point). The distance is then counted to that point: the view can come within 2 cm of it. */
+  dolly(factor: number, towards: THREE.Vector3 | undefined = this.pivot ?? undefined) {
     this.anim = null;
-    if (towards) this.target.addScaledVector(towards.clone().sub(this.target), 1 - factor);
-    this.sph.radius = Math.max(0.2 * this.reach, Math.min(1500 * this.reach, this.sph.radius * factor)); this.apply();
+    if (towards) { this.focus(towards); this.target.addScaledVector(towards.clone().sub(this.target), 1 - factor); }
+    this.sph.radius = Math.max(0.02 * this.reach, Math.min(1500 * this.reach, this.sph.radius * factor)); this.apply();
   }
   /** How much further away than the standard 35° lens this lens stands for the same picture. */
   private get reach() { return Math.tan((35 * Math.PI) / 360) / Math.tan((this.camera.fov * Math.PI) / 360); }
@@ -641,6 +667,28 @@ export class Viewport {
     const out = new THREE.Vector3(); return rc.ray.intersectPlane(plane, out) ? out : null;
   }
   groundPoint(ev: { clientX: number; clientY: number }, y = 0) { return this.planePoint(ev, new THREE.Vector3(0, y, 0), new THREE.Vector3(0, 1, 0)); }
+  /** The point the cursor is on, for turning, moving and zooming the view: the model there, else the ground there
+   *  unless that is far off (towards the horizon the ground is hundreds of metres away: nothing to zoom to). */
+  aimPoint(ev: { clientX: number; clientY: number }): THREE.Vector3 | null {
+    const hit = this.pick(ev)?.point; if (hit) return hit.clone();
+    const g = this.groundPoint(ev); if (!g) return null;
+    const eye = this.cam.camera.position; const b = this.bounds;
+    if (!b) return g.distanceTo(eye) <= 4 * this.cam.distance ? g : null;
+    const c = new THREE.Vector3((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2);
+    const r = Math.max(Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2, 1.2);
+    return g.distanceTo(c) <= 2 * r || g.distanceTo(eye) <= 2 * r ? g : null;
+  }
+  /** What a drag that turns or moves the view takes hold of: the point the cursor is on; with nothing there, what is
+   *  in the middle of the view; with nothing there either, the middle of the view at the model's distance. */
+  grabPoint(ev: { clientX: number; clientY: number }): THREE.Vector3 | null {
+    const at = this.aimPoint(ev); if (at) return at;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const mid = this.pick({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }, { facesOnly: true })?.point; if (mid) return mid.clone();
+    const b = this.bounds; if (!b) return null;
+    const eye = this.cam.camera.position; const dir = this.cam.target.clone().sub(eye).normalize();
+    const d = new THREE.Vector3((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2).sub(eye).dot(dir);
+    return d > 0 ? eye.clone().addScaledVector(dir, d) : null;
+  }
   /** Closest point on a 3D line (through origin along dir) to the pointer ray — for axis-locked moves. */
   linePoint(ev: { clientX: number; clientY: number }, origin: THREE.Vector3, dir: THREE.Vector3): THREE.Vector3 {
     const rc = this.ray(ev); const r0 = rc.ray.origin, r1 = rc.ray.direction; const d = dir.clone().normalize();

@@ -1040,14 +1040,15 @@ export class App {
           // navigation: a first finger still held back never reaches the tool; a point it placed a moment ago is taken back
           if (pending) { clearTimeout(pending.timer); pending = null; }
           else if (stroke?.started && !stroke.moved) this.tool.onKey?.(new KeyboardEvent('keydown', { key: 'Escape' }), this.ctx);
-          stroke = null; gesture = centroid(); this.scene.setSnapMarker(null); this.updateTouchBar(); return;
+          stroke = null; gesture = centroid(); this.scene.cam.grab(this.scene.grabPoint({ clientX: gesture.cx, clientY: gesture.cy }));
+          this.scene.setSnapMarker(null); this.updateTouchBar(); return;
         }
         if (ignoring) return;
         pending = { ev: e, timer: setTimeout(flush, 110) };
         return;
       }
       if (this.camCtl?.onPointerDown?.(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic */ } e.preventDefault(); return; }
-      if (e.button === 1 || e.button === 2) { mid = { x: e.clientX, y: e.clientY, pan: e.shiftKey, x0: e.clientX, y0: e.clientY }; canvas.setPointerCapture(e.pointerId); e.preventDefault(); return; }
+      if (e.button === 1 || e.button === 2) { mid = { x: e.clientX, y: e.clientY, pan: e.shiftKey, x0: e.clientX, y0: e.clientY }; this.scene.cam.grab(this.scene.grabPoint(e)); canvas.setPointerCapture(e.pointerId); e.preventDefault(); return; }
       this.tool.onDown?.(e, this.ctx); this.rememberClick();
     });
     canvas.addEventListener('pointermove', e => {
@@ -1072,7 +1073,7 @@ export class App {
     canvas.addEventListener('pointerup', e => {
       if (e.pointerType === 'touch') {
         touches.delete(e.pointerId);
-        if (gesture) { if (touches.size < 2) { gesture = null; this.sendState(); this.rememberViewSoon(); } if (touches.size > 0) ignoring = true; this.pointerDown = touches.size > 0; return; }
+        if (gesture) { if (touches.size < 2) { gesture = null; this.scene.cam.release(); this.sendState(); this.rememberViewSoon(); } if (touches.size > 0) ignoring = true; this.pointerDown = touches.size > 0; return; }
         if (ignoring) { if (touches.size === 0) { ignoring = false; this.pointerDown = false; } return; }
         flush(); // a quick tap
         this.pointerDown = false;
@@ -1086,7 +1087,7 @@ export class App {
       this.pointerDown = false;
       if (this.camCtl?.onPointerUp?.(e)) return; if (mid && (e.button === 1 || e.button === 2)) {
         // the right button without a drag: the context menu (a drag orbits)
-        const still = e.button === 2 && Math.hypot(e.clientX - mid.x0, e.clientY - mid.y0) < 4; mid = null;
+        const still = e.button === 2 && Math.hypot(e.clientX - mid.x0, e.clientY - mid.y0) < 4; mid = null; this.scene.cam.release();
         if (still) this.contextMenu(e); else { this.sendState(); this.rememberViewSoon(); }
         return;
       }
@@ -1095,12 +1096,13 @@ export class App {
       this.pointerDown = false; touches.delete(e.pointerId);
       if (pending) { clearTimeout(pending.timer); pending = null; }
       if (touches.size < 2) gesture = null; if (touches.size === 0) { ignoring = false; stroke = null; }
+      mid = null; this.scene.cam.release();
     });
     // narrow screens: the tray becomes an overlay toggled from the menu bar
     const narrow = () => document.getElementById('app')!.classList.toggle('narrow', window.innerWidth < 980);
     window.addEventListener('resize', narrow); narrow();
     canvas.addEventListener('dblclick', e => this.tool.onDblClick?.(e, this.ctx));
-    canvas.addEventListener('wheel', e => { e.preventDefault(); if (this.camCtl?.onWheel?.(e)) return; this.rememberViewSoon(); const towards = this.scene.pick(e, { facesOnly: true })?.point ?? this.scene.groundPoint(e) ?? undefined; this.scene.cam.dolly(Math.pow(1.0015, e.deltaY), towards); }, { passive: false });
+    canvas.addEventListener('wheel', e => { e.preventDefault(); if (this.camCtl?.onWheel?.(e)) return; this.rememberViewSoon(); this.scene.cam.dolly(Math.pow(1.0015, e.deltaY), this.scene.aimPoint(e) ?? undefined); }, { passive: false });
     const vcb = this.els.statusbar.querySelector<HTMLInputElement>('.vcb input')!;
     vcb.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { this.tool.onVCB?.(typedLength(vcb.value.trim(), this.els.statusbar.querySelector('.vcb label')?.textContent ?? ''), this.ctx); vcb.blur(); canvas.focus(); } if (e.key === 'Escape') { vcb.blur(); canvas.focus(); } });
     window.addEventListener('keydown', e => {
